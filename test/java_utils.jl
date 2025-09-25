@@ -261,7 +261,14 @@ function compare_java_julia(cfgdir::AbstractString, config::AbstractString; metr
         rel[col] = abs(diff) / denom
     end
 
-    return (java=java_totals, julia=julia_totals, diff=diffs, rel=rel)
+    return (
+        java=java_totals,
+        julia=julia_totals,
+        diff=diffs,
+        rel=rel,
+        java_rows=rows_java,
+        julia_rows=rows_julia,
+    )
 end
 
 """

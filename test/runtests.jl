@@ -117,6 +117,7 @@ end
         if rel_v > warn_threshold
             @warn "Large relative difference between Java and Julia for metric" col rel = rel_v diff = diff_v java = java_v julia = julia_v
         end
+        @test_broken isapprox(diff_v, 0.0; atol=1e-6, rtol=1e-6)
     end
 end
 
@@ -135,6 +136,7 @@ end
     cmp = compare_java_julia(cfgdir, "config.yml")
     for col in JavaTestUtils.DEFAULT_METRICS
         @test isfinite(cmp.rel[col])
+        @test isapprox(cmp.diff[col], 0.0; atol=1e-6, rtol=1e-6)
     end
 end
 
