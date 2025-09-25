@@ -4,6 +4,7 @@ struct Component
     name::String
     mesh::SimpleMesh3
     group::String
+    ctype::String
 end
 
 mutable struct Scene
@@ -27,8 +28,9 @@ function _update_bbox(scene::Scene)
     scene.bbox = boundingbox(getfield.(scene.components, :mesh))
 end
 
-function add_component(scene::Scene, name::String, mesh::SimpleMesh3; group::String="default")
-    push!(scene.components, Component(name, mesh, group))
+function add_component(scene::Scene, name::String, mesh::SimpleMesh3; group::String="default", ctype::Union{Nothing,String}=nothing)
+    ctype_str = ctype === nothing ? name : ctype
+    push!(scene.components, Component(name, mesh, group, ctype_str))
     _update_bbox(scene)
     return scene
 end
