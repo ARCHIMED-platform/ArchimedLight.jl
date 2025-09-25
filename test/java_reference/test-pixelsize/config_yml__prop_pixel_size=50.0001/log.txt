@@ -1,0 +1,24 @@
+2025-09-25 21:42:22.349 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:22.350 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:22.350 - parsing options
+2025-09-25 21:42:22.356 - executing Application
+2025-09-25 21:42:22.357 - loading constants from 'const.yml'
+2025-09-25 21:42:22.357 - loading configuration from 'const.yml'
+2025-09-25 21:42:22.357 - constants file not found, using default values
+2025-09-25 21:42:22.360 - loading configuration from 'config.yml'
+2025-09-25 21:42:22.464 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:22.499 - loading configuration from 'model_simple.yml'
+2025-09-25 21:42:22.512 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:22.519 - loading scene from scene/simple.ops
+2025-09-25 21:42:22.521 - error during execution : invalid pixel size/plot dimensions : pixel (0.500001 cm) is greater than plot X dimension (0.5 m)
+2025-09-25 21:42:22.522 - 
+
+java.lang.Exception: invalid pixel size/plot dimensions : pixel (0.500001 cm) is greater than plot X dimension (0.5 m)
+	at fr.amap.archimed.scene.PlotBox.setPixelCount(PlotBox.java:151) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.scene.PlotBox.<init>(PlotBox.java:91) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.scene.PlotBox.<init>(PlotBox.java:59) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.scene.ArchimedScene.loadOPS(ArchimedScene.java:98) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.DefaultApplication.initExecution(DefaultApplication.java:134) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.Application.execute(Application.java:64) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.run(ArchimedMain.java:106) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.main(ArchimedMain.java:44) [archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]

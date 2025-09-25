@@ -1,0 +1,85 @@
+2025-09-25 21:42:15.753 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:15.755 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:15.755 - parsing options
+2025-09-25 21:42:15.761 - executing Application
+2025-09-25 21:42:15.762 - loading constants from 'const.yml'
+2025-09-25 21:42:15.762 - loading configuration from 'const.yml'
+2025-09-25 21:42:15.763 - constants file not found, using default values
+2025-09-25 21:42:15.766 - loading configuration from 'config3.yml'
+2025-09-25 21:42:15.804 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:15.891 - loading configuration from 'model_pave.yml'
+2025-09-25 21:42:15.915 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:15.921 - loading scene from scene.ops
+2025-09-25 21:42:15.924 - plot dimensions 10,000000x10,000000 m
+2025-09-25 21:42:15.924 - plot area 100,000000 m2
+2025-09-25 21:42:15.924 - pixel table dimensions 33x33 pixels
+2025-09-25 21:42:15.924 - effective pixel count : 1089
+2025-09-25 21:42:15.925 - pixel area 918,273646 cm2
+2025-09-25 21:42:15.925 - pixel dimensions 30,303031x30,303031 cm
+2025-09-25 21:42:16.170 - setting reduced_table to true
+2025-09-25 21:42:16.173 - setting upper_hit_table to true
+2025-09-25 21:42:16.178 - generating plot box pavement with 100 cobblestones
+2025-09-25 21:42:16.184 - creating output/000001 output directory
+2025-09-25 21:42:16.185 - outputting results to output/000001
+2025-09-25 21:42:16.195 - Timestep : 2016/164/6/30 -> 2016/164/7/0	1
+2025-09-25 21:42:16.200 - MIR Simulation...
+2025-09-25 21:42:16.226 - Projection from direction 1 computed (3.821371E-15, 4.371139E-8, 1.0)
+2025-09-25 21:42:16.236 - Projection from direction 2 computed (1.5637987E-7, 0.89438856, 0.44729084)
+2025-09-25 21:42:16.249 - Projection from direction 3 computed (0.85061413, 0.27638108, 0.44729084)
+2025-09-25 21:42:16.253 - Projection from direction 4 computed (0.5257086, -0.7235755, 0.4472909)
+2025-09-25 21:42:16.262 - Projection from direction 5 computed (-0.5257085, -0.7235755, 0.44729084)
+2025-09-25 21:42:16.270 - Projection from direction 6 computed (-0.85061413, 0.2763814, 0.4472909)
+2025-09-25 21:42:16.270 - Projection computation time :0.059s0.0ms
+2025-09-25 21:42:16.270 - Direction 1 treated
+2025-09-25 21:42:16.270 - Direction 2 treated
+2025-09-25 21:42:16.270 - Direction 3 treated
+2025-09-25 21:42:16.270 - Direction 4 treated
+2025-09-25 21:42:16.271 - Direction 5 treated
+2025-09-25 21:42:16.271 - Direction 6 treated
+2025-09-25 21:42:16.271 - Interception time 0.001s0.0ms
+2025-09-25 21:42:16.290 - exporting scene as OPS to output/000001/scene-step00001.ops
+2025-09-25 21:42:16.294 - exporting object as GWA to output/000001/pave1x1-1-step00001.gwa
+2025-09-25 21:42:16.299 - exporting object as GWA to output/000001/pavement-1-step00001.gwa
+2025-09-25 21:42:16.315 - Timestep : 2016/164/7/0 -> 2016/164/7/30	2
+2025-09-25 21:42:16.315 - MIR Simulation...
+2025-09-25 21:42:16.316 - Projection computation time :0.0ms
+2025-09-25 21:42:16.316 - Direction 1 treated
+2025-09-25 21:42:16.316 - Direction 2 treated
+2025-09-25 21:42:16.316 - Direction 3 treated
+2025-09-25 21:42:16.316 - Direction 4 treated
+2025-09-25 21:42:16.316 - Direction 5 treated
+2025-09-25 21:42:16.316 - Direction 6 treated
+2025-09-25 21:42:16.316 - Interception time 0.0ms
+2025-09-25 21:42:16.320 - exporting scene as OPS to output/000001/scene-step00002.ops
+2025-09-25 21:42:16.324 - exporting object as GWA to output/000001/pave1x1-1-step00002.gwa
+2025-09-25 21:42:16.328 - exporting object as GWA to output/000001/pavement-1-step00002.gwa
+2025-09-25 21:42:16.337 - Timestep : 2016/164/7/30 -> 2016/164/8/0	3
+2025-09-25 21:42:16.338 - MIR Simulation...
+2025-09-25 21:42:16.339 - Projection computation time :0.0ms
+2025-09-25 21:42:16.339 - Direction 1 treated
+2025-09-25 21:42:16.339 - Direction 2 treated
+2025-09-25 21:42:16.339 - Direction 3 treated
+2025-09-25 21:42:16.339 - Direction 4 treated
+2025-09-25 21:42:16.339 - Direction 5 treated
+2025-09-25 21:42:16.339 - Direction 6 treated
+2025-09-25 21:42:16.339 - Interception time 0.0ms
+2025-09-25 21:42:16.344 - exporting scene as OPS to output/000001/scene-step00003.ops
+2025-09-25 21:42:16.348 - exporting object as GWA to output/000001/pave1x1-1-step00003.gwa
+2025-09-25 21:42:16.367 - exporting object as GWA to output/000001/pavement-1-step00003.gwa
+2025-09-25 21:42:16.378 - Timestep : 2016/164/8/0 -> 2016/164/8/30	4
+2025-09-25 21:42:16.379 - MIR Simulation...
+2025-09-25 21:42:16.380 - Projection computation time :0.0ms
+2025-09-25 21:42:16.380 - Direction 1 treated
+2025-09-25 21:42:16.380 - Direction 2 treated
+2025-09-25 21:42:16.380 - Direction 3 treated
+2025-09-25 21:42:16.380 - Direction 4 treated
+2025-09-25 21:42:16.380 - Direction 5 treated
+2025-09-25 21:42:16.380 - Direction 6 treated
+2025-09-25 21:42:16.381 - Interception time 0.0ms
+2025-09-25 21:42:16.385 - exporting scene as OPS to output/000001/scene-step00004.ops
+2025-09-25 21:42:16.391 - exporting object as GWA to output/000001/pave1x1-1-step00004.gwa
+2025-09-25 21:42:16.400 - exporting object as GWA to output/000001/pavement-1-step00004.gwa
+2025-09-25 21:42:16.434 - total face count in scene 202
+2025-09-25 21:42:16.436 - Simulation time 0.679s0.0ms
+2025-09-25 21:42:16.436 - maximum memory usage  81,43 MB
+2025-09-25 21:42:16.436 - END

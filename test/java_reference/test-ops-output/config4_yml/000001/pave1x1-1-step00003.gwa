@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<gwa version="1.0">
+<attributes>
+<attribute name="component_id" class="Double"/>
+<attribute name="item_id" class="Double"/>
+<attribute name="Color" class="Color"/>
+
+</attributes>
+	<mesh id="2" label="carre">
+		<points>
+			0.0	0.0	0.0	1.0	0.0	0.0	1.0	1.0	0.0	0.0	1.0	0.0	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>2.0</component_id>
+<item_id>1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+</gwa>

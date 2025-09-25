@@ -1,0 +1,65 @@
+2025-09-25 21:42:08.784 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:08.786 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:08.786 - parsing options
+2025-09-25 21:42:08.793 - executing Application
+2025-09-25 21:42:08.794 - loading constants from 'const.yml'
+2025-09-25 21:42:08.794 - loading configuration from 'const.yml'
+2025-09-25 21:42:08.795 - constants file not found, using default values
+2025-09-25 21:42:08.798 - loading configuration from 'config2.yml'
+2025-09-25 21:42:08.840 - loading meteo data from 'meteo2.csv'
+2025-09-25 21:42:08.927 - loading configuration from 'model_pave.yml'
+2025-09-25 21:42:08.951 - loading configuration from 'model_pave2.yml'
+2025-09-25 21:42:08.957 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:08.960 - loading scene from scene/two-plates.ops
+2025-09-25 21:42:08.964 - plot dimensions 1,000000x1,000000 m
+2025-09-25 21:42:08.964 - plot area 1,000000 m2
+2025-09-25 21:42:08.964 - pixel table dimensions 333x333 pixels
+2025-09-25 21:42:08.964 - effective pixel count : 110889
+2025-09-25 21:42:08.965 - pixel area 0,090180 cm2
+2025-09-25 21:42:08.965 - pixel dimensions 0,300300x0,300300 cm
+2025-09-25 21:42:09.218 - setting reduced_table to true
+2025-09-25 21:42:09.221 - light emitter(s) detected, setting upper_hit_table to false
+2025-09-25 21:42:09.222 - computing NIR for light interception due to requested Ri_NIR_0_f output variable (among others)
+2025-09-25 21:42:09.224 - generating plot box pavement with 1 cobblestones
+2025-09-25 21:42:09.227 - creating output2/000001 output directory
+2025-09-25 21:42:09.227 - outputting results to output2/000001
+2025-09-25 21:42:09.244 - Timestep : 2016/164/11/0 -> 2016/164/11/30	1
+2025-09-25 21:42:09.244 - MIR Simulation...
+2025-09-25 21:42:09.746 - Projection from direction 1 computed (3.821371E-15, 4.371139E-8, 1.0)
+2025-09-25 21:42:09.973 - Projection from direction 2 computed (1.5637987E-7, 0.89438856, 0.44729084)
+2025-09-25 21:42:10.221 - Projection from direction 3 computed (0.85061413, 0.27638108, 0.44729084)
+2025-09-25 21:42:10.418 - Projection from direction 4 computed (0.5257086, -0.7235755, 0.4472909)
+2025-09-25 21:42:10.599 - Projection from direction 5 computed (-0.5257085, -0.7235755, 0.44729084)
+2025-09-25 21:42:10.747 - Projection from direction 6 computed (-0.85061413, 0.2763814, 0.4472909)
+2025-09-25 21:42:10.922 - Projection from direction 7 computed (-4.0595705E-8, -0.9822395, 0.18763158)
+2025-09-25 21:42:11.052 - Projection from direction 8 computed (2.5001444E-8, -0.6070141, 0.7946911)
+2025-09-25 21:42:11.190 - Projection from direction 9 computed (0.35679406, 0.4910847, 0.794691)
+2025-09-25 21:42:11.352 - Projection from direction 10 computed (0.57730484, -0.18757768, 0.7946909)
+2025-09-25 21:42:11.488 - Projection from direction 11 computed (0.577346, 0.79464835, 0.18763156)
+2025-09-25 21:42:11.629 - Projection from direction 12 computed (-0.5773048, -0.18757758, 0.79469097)
+2025-09-25 21:42:11.779 - Projection from direction 13 computed (-0.35679388, 0.49108484, 0.794691)
+2025-09-25 21:42:11.918 - Projection from direction 14 computed (-0.57734585, 0.7946484, 0.18763156)
+2025-09-25 21:42:12.053 - Projection from direction 15 computed (-0.9341653, -0.30352855, 0.18763156)
+2025-09-25 21:42:12.178 - Projection from direction 16 computed (0.93416524, -0.30352876, 0.18763155)
+2025-09-25 21:42:12.178 - Projection computation time :2.918s0.0ms
+2025-09-25 21:42:12.179 - Direction 1 treated
+2025-09-25 21:42:12.179 - Direction 2 treated
+2025-09-25 21:42:12.179 - Direction 3 treated
+2025-09-25 21:42:12.179 - Direction 4 treated
+2025-09-25 21:42:12.179 - Direction 5 treated
+2025-09-25 21:42:12.179 - Direction 6 treated
+2025-09-25 21:42:12.179 - Direction 7 treated
+2025-09-25 21:42:12.179 - Direction 8 treated
+2025-09-25 21:42:12.179 - Direction 9 treated
+2025-09-25 21:42:12.179 - Direction 10 treated
+2025-09-25 21:42:12.179 - Direction 11 treated
+2025-09-25 21:42:12.179 - Direction 12 treated
+2025-09-25 21:42:12.179 - Direction 13 treated
+2025-09-25 21:42:12.179 - Direction 14 treated
+2025-09-25 21:42:12.179 - Direction 15 treated
+2025-09-25 21:42:12.179 - Direction 16 treated
+2025-09-25 21:42:12.179 - Interception time 0.0ms
+2025-09-25 21:42:12.355 - total face count in scene 6
+2025-09-25 21:42:12.356 - Simulation time 3.57s0.0ms
+2025-09-25 21:42:12.357 - maximum memory usage 403,55 MB
+2025-09-25 21:42:12.357 - END

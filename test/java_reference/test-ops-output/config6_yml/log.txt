@@ -1,0 +1,26 @@
+2025-09-25 21:42:19.276 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:19.277 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:19.277 - parsing options
+2025-09-25 21:42:19.283 - executing Application
+2025-09-25 21:42:19.284 - loading constants from 'const.yml'
+2025-09-25 21:42:19.284 - loading configuration from 'const.yml'
+2025-09-25 21:42:19.284 - constants file not found, using default values
+2025-09-25 21:42:19.288 - loading configuration from 'config6.yml'
+2025-09-25 21:42:19.329 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:19.416 - error during execution : invalid export_ops=blabla parameter. Should be either 'false', 'true', 'all' or 1 <= integer <= meteo count
+2025-09-25 21:42:19.416 - 
+
+java.lang.Exception: invalid export_ops=blabla parameter. Should be either 'false', 'true', 'all' or 1 <= integer <= meteo count
+	at fr.amap.archimed.parameters.input.MirOutputParameters.parseOPSExport(MirOutputParameters.java:170) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.MirOutputParameters.parse(MirOutputParameters.java:93) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.InputParameters.<init>(InputParameters.java:13) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.OutputParameters.<init>(OutputParameters.java:19) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.MirOutputParameters.<init>(MirOutputParameters.java:83) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.MainParameters.parse(MainParameters.java:126) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.InputParameters.<init>(InputParameters.java:13) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.ApplicationParameters.<init>(ApplicationParameters.java:42) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.MainParameters.<init>(MainParameters.java:101) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.DefaultApplication.initExecution(DefaultApplication.java:124) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.Application.execute(Application.java:64) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.run(ArchimedMain.java:106) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.main(ArchimedMain.java:44) [archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]

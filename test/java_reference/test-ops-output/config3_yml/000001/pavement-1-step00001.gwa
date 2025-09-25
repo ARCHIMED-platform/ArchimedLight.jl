@@ -1,0 +1,2009 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<gwa version="1.0">
+<attributes>
+<attribute name="component_id" class="Double"/>
+<attribute name="item_id" class="Double"/>
+<attribute name="Color" class="Color"/>
+
+</attributes>
+	<mesh id="2" label="Cobblestone">
+		<points>
+			0.0	0.0	0.5	100.0	0.0	0.5	100.0	100.0	0.5	0.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>2.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="3" label="Cobblestone">
+		<points>
+			0.0	100.0	0.5	100.0	100.0	0.5	100.0	200.0	0.5	0.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>3.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="4" label="Cobblestone">
+		<points>
+			0.0	200.0	0.5	100.0	200.0	0.5	100.0	300.0	0.5	0.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>4.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="5" label="Cobblestone">
+		<points>
+			0.0	300.0	0.5	100.0	300.0	0.5	100.0	400.0	0.5	0.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>5.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="6" label="Cobblestone">
+		<points>
+			0.0	400.0	0.5	100.0	400.0	0.5	100.0	500.0	0.5	0.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>6.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="7" label="Cobblestone">
+		<points>
+			0.0	500.0	0.5	100.0	500.0	0.5	100.0	600.0	0.5	0.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>7.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="8" label="Cobblestone">
+		<points>
+			0.0	600.0	0.5	100.0	600.0	0.5	100.0	700.0	0.5	0.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>8.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="9" label="Cobblestone">
+		<points>
+			0.0	700.0	0.5	100.0	700.0	0.5	100.0	800.0	0.5	0.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>9.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="10" label="Cobblestone">
+		<points>
+			0.0	800.0	0.5	100.0	800.0	0.5	100.0	900.0	0.5	0.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>10.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="11" label="Cobblestone">
+		<points>
+			0.0	900.0	0.5	100.0	900.0	0.5	100.0	1000.0	0.5	0.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>11.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="12" label="Cobblestone">
+		<points>
+			100.0	0.0	0.5	200.0	0.0	0.5	200.0	100.0	0.5	100.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>12.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="13" label="Cobblestone">
+		<points>
+			100.0	100.0	0.5	200.0	100.0	0.5	200.0	200.0	0.5	100.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>13.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="14" label="Cobblestone">
+		<points>
+			100.0	200.0	0.5	200.0	200.0	0.5	200.0	300.0	0.5	100.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>14.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="15" label="Cobblestone">
+		<points>
+			100.0	300.0	0.5	200.0	300.0	0.5	200.0	400.0	0.5	100.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>15.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="16" label="Cobblestone">
+		<points>
+			100.0	400.0	0.5	200.0	400.0	0.5	200.0	500.0	0.5	100.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>16.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="17" label="Cobblestone">
+		<points>
+			100.0	500.0	0.5	200.0	500.0	0.5	200.0	600.0	0.5	100.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>17.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="18" label="Cobblestone">
+		<points>
+			100.0	600.0	0.5	200.0	600.0	0.5	200.0	700.0	0.5	100.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>18.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="19" label="Cobblestone">
+		<points>
+			100.0	700.0	0.5	200.0	700.0	0.5	200.0	800.0	0.5	100.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>19.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="20" label="Cobblestone">
+		<points>
+			100.0	800.0	0.5	200.0	800.0	0.5	200.0	900.0	0.5	100.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>20.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="21" label="Cobblestone">
+		<points>
+			100.0	900.0	0.5	200.0	900.0	0.5	200.0	1000.0	0.5	100.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>21.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="22" label="Cobblestone">
+		<points>
+			200.0	0.0	0.5	300.0	0.0	0.5	300.0	100.0	0.5	200.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>22.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="23" label="Cobblestone">
+		<points>
+			200.0	100.0	0.5	300.0	100.0	0.5	300.0	200.0	0.5	200.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>23.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="24" label="Cobblestone">
+		<points>
+			200.0	200.0	0.5	300.0	200.0	0.5	300.0	300.0	0.5	200.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>24.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="25" label="Cobblestone">
+		<points>
+			200.0	300.0	0.5	300.0	300.0	0.5	300.0	400.0	0.5	200.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>25.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="26" label="Cobblestone">
+		<points>
+			200.0	400.0	0.5	300.0	400.0	0.5	300.0	500.0	0.5	200.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>26.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="27" label="Cobblestone">
+		<points>
+			200.0	500.0	0.5	300.0	500.0	0.5	300.0	600.0	0.5	200.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>27.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="28" label="Cobblestone">
+		<points>
+			200.0	600.0	0.5	300.0	600.0	0.5	300.0	700.0	0.5	200.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>28.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="29" label="Cobblestone">
+		<points>
+			200.0	700.0	0.5	300.0	700.0	0.5	300.0	800.0	0.5	200.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>29.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="30" label="Cobblestone">
+		<points>
+			200.0	800.0	0.5	300.0	800.0	0.5	300.0	900.0	0.5	200.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>30.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="31" label="Cobblestone">
+		<points>
+			200.0	900.0	0.5	300.0	900.0	0.5	300.0	1000.0	0.5	200.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>31.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="32" label="Cobblestone">
+		<points>
+			300.0	0.0	0.5	400.0	0.0	0.5	400.0	100.0	0.5	300.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>32.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="33" label="Cobblestone">
+		<points>
+			300.0	100.0	0.5	400.0	100.0	0.5	400.0	200.0	0.5	300.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>33.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="34" label="Cobblestone">
+		<points>
+			300.0	200.0	0.5	400.0	200.0	0.5	400.0	300.0	0.5	300.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>34.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="35" label="Cobblestone">
+		<points>
+			300.0	300.0	0.5	400.0	300.0	0.5	400.0	400.0	0.5	300.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>35.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="36" label="Cobblestone">
+		<points>
+			300.0	400.0	0.5	400.0	400.0	0.5	400.0	500.0	0.5	300.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>36.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="37" label="Cobblestone">
+		<points>
+			300.0	500.0	0.5	400.0	500.0	0.5	400.0	600.0	0.5	300.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>37.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="38" label="Cobblestone">
+		<points>
+			300.0	600.0	0.5	400.0	600.0	0.5	400.0	700.0	0.5	300.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>38.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="39" label="Cobblestone">
+		<points>
+			300.0	700.0	0.5	400.0	700.0	0.5	400.0	800.0	0.5	300.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>39.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="40" label="Cobblestone">
+		<points>
+			300.0	800.0	0.5	400.0	800.0	0.5	400.0	900.0	0.5	300.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>40.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="41" label="Cobblestone">
+		<points>
+			300.0	900.0	0.5	400.0	900.0	0.5	400.0	1000.0	0.5	300.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>41.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="42" label="Cobblestone">
+		<points>
+			400.0	0.0	0.5	500.0	0.0	0.5	500.0	100.0	0.5	400.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>42.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="43" label="Cobblestone">
+		<points>
+			400.0	100.0	0.5	500.0	100.0	0.5	500.0	200.0	0.5	400.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>43.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="44" label="Cobblestone">
+		<points>
+			400.0	200.0	0.5	500.0	200.0	0.5	500.0	300.0	0.5	400.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>44.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="45" label="Cobblestone">
+		<points>
+			400.0	300.0	0.5	500.0	300.0	0.5	500.0	400.0	0.5	400.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>45.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="46" label="Cobblestone">
+		<points>
+			400.0	400.0	0.5	500.0	400.0	0.5	500.0	500.0	0.5	400.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>46.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="47" label="Cobblestone">
+		<points>
+			400.0	500.0	0.5	500.0	500.0	0.5	500.0	600.0	0.5	400.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>47.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="48" label="Cobblestone">
+		<points>
+			400.0	600.0	0.5	500.0	600.0	0.5	500.0	700.0	0.5	400.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>48.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="49" label="Cobblestone">
+		<points>
+			400.0	700.0	0.5	500.0	700.0	0.5	500.0	800.0	0.5	400.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>49.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="50" label="Cobblestone">
+		<points>
+			400.0	800.0	0.5	500.0	800.0	0.5	500.0	900.0	0.5	400.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>50.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="51" label="Cobblestone">
+		<points>
+			400.0	900.0	0.5	500.0	900.0	0.5	500.0	1000.0	0.5	400.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>51.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="52" label="Cobblestone">
+		<points>
+			500.0	0.0	0.5	600.0	0.0	0.5	600.0	100.0	0.5	500.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>52.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="53" label="Cobblestone">
+		<points>
+			500.0	100.0	0.5	600.0	100.0	0.5	600.0	200.0	0.5	500.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>53.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="54" label="Cobblestone">
+		<points>
+			500.0	200.0	0.5	600.0	200.0	0.5	600.0	300.0	0.5	500.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>54.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="55" label="Cobblestone">
+		<points>
+			500.0	300.0	0.5	600.0	300.0	0.5	600.0	400.0	0.5	500.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>55.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="56" label="Cobblestone">
+		<points>
+			500.0	400.0	0.5	600.0	400.0	0.5	600.0	500.0	0.5	500.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>56.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="57" label="Cobblestone">
+		<points>
+			500.0	500.0	0.5	600.0	500.0	0.5	600.0	600.0	0.5	500.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>57.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="58" label="Cobblestone">
+		<points>
+			500.0	600.0	0.5	600.0	600.0	0.5	600.0	700.0	0.5	500.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>58.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="59" label="Cobblestone">
+		<points>
+			500.0	700.0	0.5	600.0	700.0	0.5	600.0	800.0	0.5	500.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>59.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="60" label="Cobblestone">
+		<points>
+			500.0	800.0	0.5	600.0	800.0	0.5	600.0	900.0	0.5	500.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>60.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="61" label="Cobblestone">
+		<points>
+			500.0	900.0	0.5	600.0	900.0	0.5	600.0	1000.0	0.5	500.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>61.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="62" label="Cobblestone">
+		<points>
+			600.0	0.0	0.5	700.0	0.0	0.5	700.0	100.0	0.5	600.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>62.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="63" label="Cobblestone">
+		<points>
+			600.0	100.0	0.5	700.0	100.0	0.5	700.0	200.0	0.5	600.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>63.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="64" label="Cobblestone">
+		<points>
+			600.0	200.0	0.5	700.0	200.0	0.5	700.0	300.0	0.5	600.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>64.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="65" label="Cobblestone">
+		<points>
+			600.0	300.0	0.5	700.0	300.0	0.5	700.0	400.0	0.5	600.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>65.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="66" label="Cobblestone">
+		<points>
+			600.0	400.0	0.5	700.0	400.0	0.5	700.0	500.0	0.5	600.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>66.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="67" label="Cobblestone">
+		<points>
+			600.0	500.0	0.5	700.0	500.0	0.5	700.0	600.0	0.5	600.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>67.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="68" label="Cobblestone">
+		<points>
+			600.0	600.0	0.5	700.0	600.0	0.5	700.0	700.0	0.5	600.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>68.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="69" label="Cobblestone">
+		<points>
+			600.0	700.0	0.5	700.0	700.0	0.5	700.0	800.0	0.5	600.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>69.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="70" label="Cobblestone">
+		<points>
+			600.0	800.0	0.5	700.0	800.0	0.5	700.0	900.0	0.5	600.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>70.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="71" label="Cobblestone">
+		<points>
+			600.0	900.0	0.5	700.0	900.0	0.5	700.0	1000.0	0.5	600.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>71.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="72" label="Cobblestone">
+		<points>
+			700.0	0.0	0.5	800.0	0.0	0.5	800.0	100.0	0.5	700.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>72.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="73" label="Cobblestone">
+		<points>
+			700.0	100.0	0.5	800.0	100.0	0.5	800.0	200.0	0.5	700.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>73.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="74" label="Cobblestone">
+		<points>
+			700.0	200.0	0.5	800.0	200.0	0.5	800.0	300.0	0.5	700.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>74.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="75" label="Cobblestone">
+		<points>
+			700.0	300.0	0.5	800.0	300.0	0.5	800.0	400.0	0.5	700.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>75.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="76" label="Cobblestone">
+		<points>
+			700.0	400.0	0.5	800.0	400.0	0.5	800.0	500.0	0.5	700.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>76.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="77" label="Cobblestone">
+		<points>
+			700.0	500.0	0.5	800.0	500.0	0.5	800.0	600.0	0.5	700.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>77.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="78" label="Cobblestone">
+		<points>
+			700.0	600.0	0.5	800.0	600.0	0.5	800.0	700.0	0.5	700.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>78.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="79" label="Cobblestone">
+		<points>
+			700.0	700.0	0.5	800.0	700.0	0.5	800.0	800.0	0.5	700.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>79.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="80" label="Cobblestone">
+		<points>
+			700.0	800.0	0.5	800.0	800.0	0.5	800.0	900.0	0.5	700.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>80.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="81" label="Cobblestone">
+		<points>
+			700.0	900.0	0.5	800.0	900.0	0.5	800.0	1000.0	0.5	700.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>81.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="82" label="Cobblestone">
+		<points>
+			800.0	0.0	0.5	900.0	0.0	0.5	900.0	100.0	0.5	800.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>82.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="83" label="Cobblestone">
+		<points>
+			800.0	100.0	0.5	900.0	100.0	0.5	900.0	200.0	0.5	800.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>83.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="84" label="Cobblestone">
+		<points>
+			800.0	200.0	0.5	900.0	200.0	0.5	900.0	300.0	0.5	800.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>84.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="85" label="Cobblestone">
+		<points>
+			800.0	300.0	0.5	900.0	300.0	0.5	900.0	400.0	0.5	800.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>85.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="86" label="Cobblestone">
+		<points>
+			800.0	400.0	0.5	900.0	400.0	0.5	900.0	500.0	0.5	800.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>86.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="87" label="Cobblestone">
+		<points>
+			800.0	500.0	0.5	900.0	500.0	0.5	900.0	600.0	0.5	800.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>87.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="88" label="Cobblestone">
+		<points>
+			800.0	600.0	0.5	900.0	600.0	0.5	900.0	700.0	0.5	800.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>88.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="89" label="Cobblestone">
+		<points>
+			800.0	700.0	0.5	900.0	700.0	0.5	900.0	800.0	0.5	800.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>89.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="90" label="Cobblestone">
+		<points>
+			800.0	800.0	0.5	900.0	800.0	0.5	900.0	900.0	0.5	800.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>90.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="91" label="Cobblestone">
+		<points>
+			800.0	900.0	0.5	900.0	900.0	0.5	900.0	1000.0	0.5	800.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>91.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="92" label="Cobblestone">
+		<points>
+			900.0	0.0	0.5	1000.0	0.0	0.5	1000.0	100.0	0.5	900.0	100.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>92.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="93" label="Cobblestone">
+		<points>
+			900.0	100.0	0.5	1000.0	100.0	0.5	1000.0	200.0	0.5	900.0	200.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>93.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="94" label="Cobblestone">
+		<points>
+			900.0	200.0	0.5	1000.0	200.0	0.5	1000.0	300.0	0.5	900.0	300.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>94.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="95" label="Cobblestone">
+		<points>
+			900.0	300.0	0.5	1000.0	300.0	0.5	1000.0	400.0	0.5	900.0	400.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>95.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="96" label="Cobblestone">
+		<points>
+			900.0	400.0	0.5	1000.0	400.0	0.5	1000.0	500.0	0.5	900.0	500.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>96.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="97" label="Cobblestone">
+		<points>
+			900.0	500.0	0.5	1000.0	500.0	0.5	1000.0	600.0	0.5	900.0	600.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>97.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="98" label="Cobblestone">
+		<points>
+			900.0	600.0	0.5	1000.0	600.0	0.5	1000.0	700.0	0.5	900.0	700.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>98.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="99" label="Cobblestone">
+		<points>
+			900.0	700.0	0.5	1000.0	700.0	0.5	1000.0	800.0	0.5	900.0	800.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>99.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="100" label="Cobblestone">
+		<points>
+			900.0	800.0	0.5	1000.0	800.0	0.5	1000.0	900.0	0.5	900.0	900.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>100.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+	<mesh id="101" label="Cobblestone">
+		<points>
+			900.0	900.0	0.5	1000.0	900.0	0.5	1000.0	1000.0	0.5	900.0	1000.0	0.5	
+		</points>
+		<normals>
+			0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	0.0	0.0	1.0	
+		</normals>
+		<faces>
+			<face Id="0">
+				0	1	2	
+			</face>
+			<face Id="1">
+				0	2	3	
+			</face>
+
+		</faces>
+<component_id>101.0</component_id>
+<item_id>-1.0</item_id>
+<Color>Color 120 100 50</Color>
+	</mesh>
+</gwa>

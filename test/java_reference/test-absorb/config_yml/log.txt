@@ -1,0 +1,46 @@
+2025-09-25 21:42:01.730 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:01.732 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:01.733 - parsing options
+2025-09-25 21:42:01.739 - executing Application
+2025-09-25 21:42:01.740 - loading constants from 'const.yml'
+2025-09-25 21:42:01.741 - loading configuration from 'const.yml'
+2025-09-25 21:42:01.741 - constants file not found, using default values
+2025-09-25 21:42:01.744 - loading configuration from 'config.yml'
+2025-09-25 21:42:01.788 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:01.880 - loading configuration from 'model_coffee.yml'
+2025-09-25 21:42:01.908 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:01.916 - loading scene from scene/coffee.ops
+2025-09-25 21:42:01.921 - plot dimensions 15,934868x9,600000 m
+2025-09-25 21:42:01.921 - plot area 152,974738 m2
+2025-09-25 21:42:01.921 - pixel table dimensions 576x347 pixels
+2025-09-25 21:42:01.921 - effective pixel count : 199872
+2025-09-25 21:42:01.921 - pixel area 7,653635 cm2
+2025-09-25 21:42:01.921 - pixel dimensions 2,766470x2,766571 cm
+2025-09-25 21:42:03.096 - setting reduced_table to true
+2025-09-25 21:42:03.115 - setting upper_hit_table to true
+2025-09-25 21:42:03.115 - computing NIR for light interception due to requested Ri_NIR_0_f output variable (among others)
+2025-09-25 21:42:03.119 - generating plot box pavement with 80 cobblestones
+2025-09-25 21:42:03.131 - creating output/000001 output directory
+2025-09-25 21:42:03.131 - outputting results to output/000001
+2025-09-25 21:42:03.144 - Timestep : 2016/164/12/0 -> 2016/164/12/30	1
+2025-09-25 21:42:03.149 - MIR Simulation...
+2025-09-25 21:42:03.574 - Projection from direction 1 computed (3.821371E-15, 4.371139E-8, 1.0)
+2025-09-25 21:42:03.719 - Projection from direction 2 computed (1.5637987E-7, 0.89438856, 0.44729084)
+2025-09-25 21:42:03.805 - Projection from direction 3 computed (0.85061413, 0.27638108, 0.44729084)
+2025-09-25 21:42:03.888 - Projection from direction 4 computed (0.5257086, -0.7235755, 0.4472909)
+2025-09-25 21:42:03.949 - Projection from direction 5 computed (-0.5257085, -0.7235755, 0.44729084)
+2025-09-25 21:42:04.026 - Projection from direction 6 computed (-0.85061413, 0.2763814, 0.4472909)
+2025-09-25 21:42:04.092 - Projection from direct direction 7 computed (-0.060943216, 0.14349158, 0.9877733)
+2025-09-25 21:42:04.093 - Projection computation time :0.888s0.0ms
+2025-09-25 21:42:04.093 - Direction 1 treated
+2025-09-25 21:42:04.094 - Direction 2 treated
+2025-09-25 21:42:04.094 - Direction 3 treated
+2025-09-25 21:42:04.095 - Direction 4 treated
+2025-09-25 21:42:04.095 - Direction 5 treated
+2025-09-25 21:42:04.096 - Direction 6 treated
+2025-09-25 21:42:04.096 - Direction 7 treated
+2025-09-25 21:42:04.097 - Interception time 0.004s0.0ms
+2025-09-25 21:42:04.350 - total face count in scene 118930
+2025-09-25 21:42:04.351 - Simulation time 2.618s0.0ms
+2025-09-25 21:42:04.352 - maximum memory usage 348,86 MB
+2025-09-25 21:42:04.352 - END

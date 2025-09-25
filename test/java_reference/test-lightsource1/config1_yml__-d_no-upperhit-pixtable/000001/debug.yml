@@ -1,0 +1,28 @@
+plot pixel X count: 333
+cmdlineopt.no-meteo-overlap-check: false
+energy balance: false
+pixel Y dimension cm: 0.30030030757188797
+cmdlineopt.parallel: false
+pixel X dimension cm: 0.30030030757188797
+pixel count: 110889
+NIR interception: true
+reduced table: true
+NIR scattering: false
+plot Y dimension m: 1.0
+photosynthesis: false
+cmdlineopt.no-upperhit-pixtable: true
+plot X dimension m: 1.0
+cached radiation: false
+cmdlineopt.meteo-substep-v1: false
+cmdlineopt.meteo-sunpos-v1: false
+plot pixel Y count: 333
+cmdlineopt.scattering-end-method: SceneScatteredWaveBandPercentage
+upper hit table: false
+pixel area cm2: 0.09018027036045055
+wavebands: PAR NIR
+cmdlineopt.no-area-ratio: false
+cmdlineopt.exclude-objectid-output: 0
+configuration file path: config1.yml
+plot area m2: 1.0
+cmdlineopt.no-reduced-pixtable: false
+cmdlineopt.prop: none

@@ -1,0 +1,73 @@
+2025-09-25 21:42:14.442 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:14.444 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:14.444 - parsing options
+2025-09-25 21:42:14.452 - executing Application
+2025-09-25 21:42:14.453 - loading constants from 'const.yml'
+2025-09-25 21:42:14.453 - loading configuration from 'const.yml'
+2025-09-25 21:42:14.453 - constants file not found, using default values
+2025-09-25 21:42:14.456 - loading configuration from 'config2.yml'
+2025-09-25 21:42:14.496 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:14.586 - loading configuration from 'model_pave.yml'
+2025-09-25 21:42:14.610 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:14.614 - loading scene from scene.ops
+2025-09-25 21:42:14.617 - plot dimensions 10,000000x10,000000 m
+2025-09-25 21:42:14.617 - plot area 100,000000 m2
+2025-09-25 21:42:14.618 - pixel table dimensions 33x33 pixels
+2025-09-25 21:42:14.618 - effective pixel count : 1089
+2025-09-25 21:42:14.618 - pixel area 918,273646 cm2
+2025-09-25 21:42:14.618 - pixel dimensions 30,303031x30,303031 cm
+2025-09-25 21:42:14.862 - setting reduced_table to true
+2025-09-25 21:42:14.867 - setting upper_hit_table to true
+2025-09-25 21:42:14.872 - generating plot box pavement with 100 cobblestones
+2025-09-25 21:42:14.878 - creating output/000001 output directory
+2025-09-25 21:42:14.878 - outputting results to output/000001
+2025-09-25 21:42:14.889 - Timestep : 2016/164/6/30 -> 2016/164/7/0	1
+2025-09-25 21:42:14.893 - MIR Simulation...
+2025-09-25 21:42:14.914 - Projection from direction 1 computed (3.821371E-15, 4.371139E-8, 1.0)
+2025-09-25 21:42:14.927 - Projection from direction 2 computed (1.5637987E-7, 0.89438856, 0.44729084)
+2025-09-25 21:42:14.939 - Projection from direction 3 computed (0.85061413, 0.27638108, 0.44729084)
+2025-09-25 21:42:14.944 - Projection from direction 4 computed (0.5257086, -0.7235755, 0.4472909)
+2025-09-25 21:42:14.953 - Projection from direction 5 computed (-0.5257085, -0.7235755, 0.44729084)
+2025-09-25 21:42:14.961 - Projection from direction 6 computed (-0.85061413, 0.2763814, 0.4472909)
+2025-09-25 21:42:14.961 - Projection computation time :0.06s0.0ms
+2025-09-25 21:42:14.962 - Direction 1 treated
+2025-09-25 21:42:14.962 - Direction 2 treated
+2025-09-25 21:42:14.962 - Direction 3 treated
+2025-09-25 21:42:14.962 - Direction 4 treated
+2025-09-25 21:42:14.962 - Direction 5 treated
+2025-09-25 21:42:14.962 - Direction 6 treated
+2025-09-25 21:42:14.962 - Interception time 0.001s0.0ms
+2025-09-25 21:42:14.981 - Timestep : 2016/164/7/0 -> 2016/164/7/30	2
+2025-09-25 21:42:14.981 - MIR Simulation...
+2025-09-25 21:42:14.982 - Projection computation time :0.0ms
+2025-09-25 21:42:14.982 - Direction 1 treated
+2025-09-25 21:42:14.982 - Direction 2 treated
+2025-09-25 21:42:14.982 - Direction 3 treated
+2025-09-25 21:42:14.982 - Direction 4 treated
+2025-09-25 21:42:14.982 - Direction 5 treated
+2025-09-25 21:42:14.982 - Direction 6 treated
+2025-09-25 21:42:14.982 - Interception time 0.0ms
+2025-09-25 21:42:14.985 - Timestep : 2016/164/7/30 -> 2016/164/8/0	3
+2025-09-25 21:42:14.986 - MIR Simulation...
+2025-09-25 21:42:14.986 - Projection computation time :0.0ms
+2025-09-25 21:42:14.987 - Direction 1 treated
+2025-09-25 21:42:14.987 - Direction 2 treated
+2025-09-25 21:42:14.987 - Direction 3 treated
+2025-09-25 21:42:14.987 - Direction 4 treated
+2025-09-25 21:42:14.987 - Direction 5 treated
+2025-09-25 21:42:14.987 - Direction 6 treated
+2025-09-25 21:42:14.987 - Interception time 0.0ms
+2025-09-25 21:42:14.995 - Timestep : 2016/164/8/0 -> 2016/164/8/30	4
+2025-09-25 21:42:14.995 - MIR Simulation...
+2025-09-25 21:42:14.996 - Projection computation time :0.0ms
+2025-09-25 21:42:14.996 - Direction 1 treated
+2025-09-25 21:42:14.996 - Direction 2 treated
+2025-09-25 21:42:14.996 - Direction 3 treated
+2025-09-25 21:42:14.996 - Direction 4 treated
+2025-09-25 21:42:14.996 - Direction 5 treated
+2025-09-25 21:42:14.997 - Direction 6 treated
+2025-09-25 21:42:14.997 - Interception time 0.001s0.0ms
+2025-09-25 21:42:15.010 - total face count in scene 202
+2025-09-25 21:42:15.011 - Simulation time 0.567s0.0ms
+2025-09-25 21:42:15.012 - maximum memory usage  74,60 MB
+2025-09-25 21:42:15.012 - END

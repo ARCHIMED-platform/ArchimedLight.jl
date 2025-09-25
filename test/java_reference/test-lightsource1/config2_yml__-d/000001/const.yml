@@ -1,0 +1,16 @@
+Stefan_Boltzmann_sigma: 5.67477E-8
+sun_irradiance_to_photons: 4.57
+atmospheric_CO2_concentration: 400.0
+co2_to_water_conductance: 1.57
+celsius_to_kelvin: 273.15
+atmospheric_O2_concentration: 210.0
+dry_air_gaz_constant: 287.0586
+universal_gas_constant: 8.314
+water_mol_to_kg: 0.018
+gravitational_acceleration: 9.81
+co2_to_heat_boundary_layer_conductance: 1.32
+water_vapour_to_dry_air_molecular_weight_ratio: 0.622
+forced_heat_BL_conductance_proportionality_factor: 333.3333333333333
+air_specific_heat_constant_pressure: 1013.0
+ref_atmospheric_pressure_sea_level: 101.325
+heat_to_water_boundary_layer_conductance: 1.075

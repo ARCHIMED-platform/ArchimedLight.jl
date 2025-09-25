@@ -1,0 +1,6 @@
+case = "test-lightsource1"
+config = "config1.yml"
+extra_args = ["-d", "--no-upperhit-pixtable"]
+success = true
+runs = ["000001"]
+generated_at = "2025-09-25T21:42:08.152"

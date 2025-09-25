@@ -1,0 +1,2 @@
+step_number;date;hour_start;hour_end;temperature;relativeHumidity;clearness;wind;step_duration;sun_elevation;sun_azimut;atmosphereCO2_ppm
+0;2016/06/12;11:00:00;11:30:00;14.0;70.0;0.0;10.0;1800.0;76.62062371188472;50.46280398512487;400.0

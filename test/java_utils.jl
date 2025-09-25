@@ -2,7 +2,8 @@ module JavaTestUtils
 
 using ArchimedLight
 
-export locate_java_jar, with_java_case, read_semicolon_table, read_table, parse_float, filter_rows, sum_columns, compare_java_julia
+export locate_java_jar, with_java_case, read_semicolon_table, read_table, parse_float, filter_rows, sum_columns, compare_java_julia,
+       reference_tag, load_reference_case, load_reference_table
 
 """Locate the Archimed 2018 reference JAR used as oracle for integration tests."""
 function locate_java_jar()
@@ -123,6 +124,94 @@ parse_float(row::Dict{String,String}, key::String) = parse(Float64, row[key])
 
 filter_rows(rows::Vector{Dict{String,String}}, key::String, value::AbstractString) = [row for row in rows if get(row, key, nothing) == value]
 
+const REFERENCE_ROOT = joinpath(@__DIR__, "java_reference")
+
+struct ReferenceCase
+    case::String
+    config::String
+    tag::String
+    path::String
+    meta::Dict{String,Any}
+    log::String
+    run_paths::Vector{String}
+end
+
+reference_tag(config::AbstractString, extra_args::Vector{String}=String[]) = begin
+    base = replace(config, r"[^A-Za-z0-9]+" => "_")
+    if isempty(extra_args)
+        return base
+    end
+    extra = join(extra_args, "_")
+    extra = replace(extra, r"[^A-Za-z0-9=.-]+" => "_")
+    extra = replace(extra, "--" => "")
+    extra = replace(extra, "__" => "_")
+    extra = strip(extra, '_')
+    isempty(extra) ? base : string(base, "__", extra)
+end
+
+function _read_metadata(path::AbstractString)
+    meta = Dict{String,Any}()
+    for line in eachline(path)
+        stripped = strip(line)
+        isempty(stripped) && continue
+        startswith(stripped, "#") && continue
+        parts = split(stripped, "=", limit=2)
+        length(parts) == 2 || continue
+        key = strip(parts[1])
+        valstr = strip(parts[2])
+        if startswith(valstr, "\"") && endswith(valstr, "\"")
+            meta[key] = replace(valstr[2:end-1], "\\\"" => "\"")
+        elseif valstr == "true" || valstr == "false"
+            meta[key] = valstr == "true"
+        elseif startswith(valstr, "[") && endswith(valstr, "]")
+            inner = strip(valstr[2:end-1])
+            if isempty(inner)
+                meta[key] = String[]
+            else
+                items = split(inner, ",")
+                arr = String[]
+                for item in items
+                    item = strip(item)
+                    if startswith(item, "\"") && endswith(item, "\"")
+                        push!(arr, replace(item[2:end-1], "\\\"" => "\""))
+                    else
+                        push!(arr, item)
+                    end
+                end
+                meta[key] = arr
+            end
+        else
+            meta[key] = valstr
+        end
+    end
+    return meta
+end
+
+function load_reference_case(case::AbstractString, config::AbstractString; extra_args::Vector{String}=String[])
+    tag = reference_tag(config, extra_args)
+    case_dir = joinpath(REFERENCE_ROOT, case, tag)
+    isdir(case_dir) || error("Reference artefacts missing for $case/$tag. Run scripts/update_java_references.jl")
+    meta_path = joinpath(case_dir, "metadata.toml")
+    isfile(meta_path) || error("Missing metadata for $case/$tag")
+    meta = _read_metadata(meta_path)
+    runs = String[]
+    for entry in get(meta, "runs", String[])
+        push!(runs, joinpath(case_dir, String(entry)))
+    end
+    log_path = joinpath(case_dir, "log.txt")
+    log_text = isfile(log_path) ? read(log_path, String) : ""
+    return ReferenceCase(String(case), String(config), tag, case_dir, meta, log_text, runs)
+end
+
+function load_reference_table(case::AbstractString, config::AbstractString, filename::AbstractString; extra_args::Vector{String}=String[], delim::AbstractString=";")
+    ref = load_reference_case(case, config; extra_args=extra_args)
+    isempty(ref.run_paths) && error("No run outputs stored for $(ref.case)/$(ref.tag)")
+    table_path = joinpath(ref.run_paths[1], filename)
+    isfile(table_path) || error("File $(filename) missing in reference run $(ref.case)/$(ref.tag)")
+    header, rows = read_table(table_path; delim=delim)
+    return header, rows, ref
+end
+
 function sum_columns(rows::Vector{Dict{String,String}}, cols::Vector{String})
     totals = Dict{String,Float64}()
     for col in cols
@@ -148,28 +237,15 @@ const DEFAULT_METRICS = [
     "Ra_PAR_0_q", "Ra_NIR_0_q"
 ]
 
-function compare_java_julia(cfgdir::AbstractString, config::AbstractString; jar::AbstractString, metrics::Vector{String}=DEFAULT_METRICS, java_args::Vector{String}=String[], julia_outdir::Union{Nothing,String}=nothing)
-    java_success = Ref(false)
-    java_rows = Ref(Vector{Dict{String,String}}())
-    with_java_case(cfgdir, config; jar=jar, extra_args=java_args) do success, _log, run_dirs
-        java_success[] = success
-        if success && !isempty(run_dirs)
-            csv_path = joinpath(run_dirs[1], "component_values.csv")
-            _, rows = read_table(csv_path; delim=";")
-            java_rows[] = rows
-        else
-            java_rows[] = Dict{String,String}[]
-        end
-        return nothing
-    end
-
-    java_success[] || error("Java simulation failed for $config")
-    rows_java = java_rows[]
+function compare_java_julia(cfgdir::AbstractString, config::AbstractString; metrics::Vector{String}=DEFAULT_METRICS, java_args::Vector{String}=String[], julia_outdir::Union{Nothing,String}=nothing, jar::Union{Nothing,AbstractString}=nothing)
+    case = basename(cfgdir)
+    _, rows_java, ref = load_reference_table(case, config, "component_values.csv"; extra_args=java_args)
+    get(ref.meta, "success", true) || error("Reference run for $(case)/$(ref.tag) is marked as failure")
     java_totals = sum_columns(rows_java, metrics)
 
     cfgpath = joinpath(cfgdir, config)
     outdir = isnothing(julia_outdir) ? mktempdir() : julia_outdir
-    res = ArchimedLight.Runner.run_from_config(cfgpath; outdir=outdir)
+    ArchimedLight.Runner.run_from_config(cfgpath; outdir=outdir)
     julia_csv = joinpath(outdir, "components.csv")
     _, rows_julia = read_table(julia_csv; delim=",")
     julia_totals = sum_columns(rows_julia, metrics)
@@ -186,6 +262,28 @@ function compare_java_julia(cfgdir::AbstractString, config::AbstractString; jar:
     end
 
     return (java=java_totals, julia=julia_totals, diff=diffs, rel=rel)
+end
+
+"""
+    compare_and_report(cfgdir, config; metrics=DEFAULT_METRICS, tol=1e-3, strict=false)
+
+Uses stored Java reference outputs and the Julia runner to compute aggregate metrics.
+Returns the same tuple as `compare_java_julia`.
+"""
+function compare_and_report(cfgdir::AbstractString, config::AbstractString; metrics::Vector{String}=DEFAULT_METRICS, tol::Float64=1e-3, strict::Bool=false, java_args::Vector{String}=String[], julia_outdir::Union{Nothing,String}=nothing, jar::Union{Nothing,AbstractString}=nothing)
+    cmp = compare_java_julia(cfgdir, config; metrics=metrics, java_args=java_args, julia_outdir=julia_outdir, jar=jar)
+    @info "Java vs Julia comparison" cmp
+    for col in metrics
+        jv = get(cmp.java, col, 0.0)
+        lv = get(cmp.julia, col, 0.0)
+        dv = get(cmp.diff, col, 0.0)
+        rv = get(cmp.rel, col, 0.0)
+        @info "metric" col "java" jv "julia" lv "diff" dv "rel" rv
+        if strict && rv > tol
+            error("Relative difference for metric $col is $rv > $tol (java=$jv julia=$lv diff=$dv)")
+        end
+    end
+    return cmp
 end
 
 end # module

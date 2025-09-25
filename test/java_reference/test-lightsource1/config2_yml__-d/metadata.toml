@@ -1,0 +1,6 @@
+case = "test-lightsource1"
+config = "config2.yml"
+extra_args = ["-d"]
+success = true
+runs = ["000001"]
+generated_at = "2025-09-25T21:42:12.484"

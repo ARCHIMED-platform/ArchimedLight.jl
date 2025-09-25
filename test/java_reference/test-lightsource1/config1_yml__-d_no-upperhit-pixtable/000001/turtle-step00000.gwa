@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<gwa version="1.0">
+<attributes>
+<attribute name="Color" class="Color"/>
+
+</attributes>
+	<mesh id="2" label="SectorDir1">
+		<points>
+			50.5	50.0	10.0	50.5	50.0	20.0	49.75	50.433014	10.0	49.75	50.433014	20.0	49.75	49.566986	10.0	49.75	49.56699	20.0	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="3" label="SectorDir2">
+		<points>
+			50.5	58.943886	4.4729085	50.500004	67.88777	8.945817	49.75	59.13757	4.085627	49.750004	68.08145	8.558536	49.75	58.750202	4.86019	49.750004	67.69409	9.333098	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="4" label="SectorDir3">
+		<points>
+			58.660652	52.28828	4.4729085	67.166794	55.052094	8.945817	58.61309	53.061424	4.085627	67.11923	55.825237	8.558536	58.244682	52.941723	4.86019	66.750824	55.705536	9.333098	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="5" label="SectorDir4">
+		<points>
+			54.852577	42.470352	4.4729085	60.10966	35.234596	8.945817	55.573185	42.7545	4.085627	60.83027	35.518745	8.558536	55.345497	43.067886	4.86019	60.60258	35.83213	9.333098	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="6" label="SectorDir5">
+		<points>
+			44.338406	43.058136	4.4729085	39.08132	35.822384	8.945817	44.831326	42.460606	4.085627	39.57424	35.224854	8.558536	45.059013	42.77399	4.86019	39.801926	35.538235	9.333098	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="7" label="SectorDir6">
+		<points>
+			41.64837	53.23934	4.4729085	33.142227	56.003155	8.945817	41.232403	52.5859	4.085627	32.726265	55.349716	8.558536	41.600807	52.466198	4.86019	33.094666	55.23001	9.333098	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="8" label="SectorDir7">
+		<points>
+			49.5	40.177605	1.8763158	49.5	30.35521	3.7526317	50.25	40.09636	1.4509937	50.25	30.273962	3.3273096	50.25	40.25885	2.3016381	50.25	30.436457	4.1779537	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="9" label="SectorDir8">
+		<points>
+			49.5	43.92986	7.946911	49.5	37.85972	15.893822	50.25	43.585747	7.684066	50.25	37.515606	15.630977	50.25	44.27397	8.209756	50.25	38.203827	16.156666	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="10" label="SectorDir9">
+		<points>
+			53.97245	54.616955	7.9469104	57.54039	59.5278	15.893821	53.56795	55.336185	7.6840653	57.13589	60.247032	15.630976	53.16342	54.7794	8.209755	56.73136	59.690247	16.156666	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="11" label="SectorDir10">
+		<points>
+			55.618538	47.648697	7.94691	61.391586	45.77292	15.89382	56.177574	48.25565	7.684065	61.950623	46.379875	15.630975	55.523033	48.468323	8.209755	61.29608	46.59255	16.156664	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="12" label="SectorDir11">
+		<points>
+			56.17797	57.65259	1.8763158	61.95143	65.599075	3.7526317	55.61896	58.15916	1.4509937	61.392426	66.105644	3.3273096	55.52345	58.0277	2.3016381	61.296913	65.97418	4.1779537	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="13" label="SectorDir12">
+		<points>
+			44.072445	48.599754	7.94691	38.299393	46.72398	15.89382	43.976936	47.780125	7.684065	38.203888	45.90435	15.630975	44.631477	47.992798	8.209755	38.85843	46.117023	16.156664	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="14" label="SectorDir13">
+		<points>
+			46.83657	55.204742	7.9469104	43.268635	60.115593	15.893821	46.027546	55.042294	7.6840653	42.459606	59.953144	15.630976	46.43207	54.48551	8.209755	42.864136	59.39636	16.156666	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="15" label="SectorDir14">
+		<points>
+			44.63105	58.240376	1.8763158	38.85759	66.18686	3.7526317	43.976532	57.86527	1.4509937	38.20307	65.81175	3.3273096	44.07204	57.733807	2.3016381	38.298584	65.68029	4.1779537	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="16" label="SectorDir15">
+		<points>
+			40.503838	47.440247	1.8763158	31.162184	44.40496	3.7526317	40.65833	46.701847	1.4509937	31.316675	43.66656	3.3273096	40.81287	46.75206	2.3016381	31.471216	43.716774	4.1779537	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+	<mesh id="17" label="SectorDir16">
+		<points>
+			59.187145	46.489185	1.8763158	68.52879	43.453896	3.7526317	59.496178	47.17737	1.4509937	68.83783	44.142082	3.3273096	59.341637	47.227585	2.3016381	68.68329	44.192295	4.1779537	
+		</points>
+		<faces>
+			<face Id="0">
+				0	2	3	
+			</face>
+			<face Id="1">
+				3	1	0	
+			</face>
+			<face Id="2">
+				2	4	5	
+			</face>
+			<face Id="3">
+				5	3	2	
+			</face>
+			<face Id="4">
+				4	0	1	
+			</face>
+			<face Id="5">
+				4	1	5	
+			</face>
+
+		</faces>
+<Color>Color 255 0 0</Color>
+	</mesh>
+</gwa>

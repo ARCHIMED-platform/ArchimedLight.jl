@@ -1,0 +1,21 @@
+2025-09-25 21:42:18.513 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:18.515 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:18.515 - parsing options
+2025-09-25 21:42:18.520 - executing Application
+2025-09-25 21:42:18.522 - loading constants from 'const.yml'
+2025-09-25 21:42:18.522 - loading configuration from 'const.yml'
+2025-09-25 21:42:18.522 - constants file not found, using default values
+2025-09-25 21:42:18.526 - loading configuration from 'config5.yml'
+2025-09-25 21:42:18.564 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:18.651 - error during execution : invalid export_ops=5 parameter. Should be either 'false', 'true', 'all' or 1 <= integer <= meteo step count
+2025-09-25 21:42:18.652 - 
+
+java.lang.Exception: invalid export_ops=5 parameter. Should be either 'false', 'true', 'all' or 1 <= integer <= meteo step count
+	at fr.amap.archimed.parameters.input.MainParameters.parse(MainParameters.java:133) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.InputParameters.<init>(InputParameters.java:13) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.ApplicationParameters.<init>(ApplicationParameters.java:42) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.parameters.input.MainParameters.<init>(MainParameters.java:101) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.DefaultApplication.initExecution(DefaultApplication.java:124) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.application.Application.execute(Application.java:64) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.run(ArchimedMain.java:106) ~[archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]
+	at fr.amap.archimed.ArchimedMain.main(ArchimedMain.java:44) [archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar:?]

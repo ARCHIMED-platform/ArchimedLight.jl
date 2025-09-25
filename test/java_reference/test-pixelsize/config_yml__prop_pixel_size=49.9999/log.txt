@@ -1,0 +1,33 @@
+2025-09-25 21:42:21.210 - build time 2020-09-28T13:52:36+0200
+2025-09-25 21:42:21.212 - commit 43b23dc41a3d1ad9e3be1200944e837558174b5d on branch dev
+2025-09-25 21:42:21.212 - parsing options
+2025-09-25 21:42:21.218 - executing Application
+2025-09-25 21:42:21.219 - loading constants from 'const.yml'
+2025-09-25 21:42:21.219 - loading configuration from 'const.yml'
+2025-09-25 21:42:21.219 - constants file not found, using default values
+2025-09-25 21:42:21.222 - loading configuration from 'config.yml'
+2025-09-25 21:42:21.331 - loading meteo data from 'meteo.csv'
+2025-09-25 21:42:21.366 - loading configuration from 'model_simple.yml'
+2025-09-25 21:42:21.377 - loading configuration from 'model_soil.yml'
+2025-09-25 21:42:21.382 - loading scene from scene/simple.ops
+2025-09-25 21:42:21.386 - plot dimensions 0,500000x0,500000 m
+2025-09-25 21:42:21.387 - plot area 0,250000 m2
+2025-09-25 21:42:21.387 - pixel table dimensions 1x1 pixels
+2025-09-25 21:42:21.387 - effective pixel count : 1
+2025-09-25 21:42:21.387 - pixel area 2500,000000 cm2
+2025-09-25 21:42:21.387 - pixel dimensions 50,000000x50,000000 cm
+2025-09-25 21:42:21.659 - setting reduced_table to true
+2025-09-25 21:42:21.663 - setting upper_hit_table to true
+2025-09-25 21:42:21.667 - generating plot box pavement with 80 cobblestones
+2025-09-25 21:42:21.674 - creating output/000001 output directory
+2025-09-25 21:42:21.674 - outputting results to output/000001
+2025-09-25 21:42:21.680 - Timestep : 2016/164/8/0 -> 2016/164/8/30	1
+2025-09-25 21:42:21.686 - MIR Simulation...
+2025-09-25 21:42:21.713 - Projection from direction 1 computed (0.0, 0.0, 1.0)
+2025-09-25 21:42:21.713 - Projection computation time :0.019s0.0ms
+2025-09-25 21:42:21.713 - Direction 1 treated
+2025-09-25 21:42:21.713 - Interception time 0.0ms
+2025-09-25 21:42:21.741 - total face count in scene 196
+2025-09-25 21:42:21.744 - Simulation time 0.532s0.0ms
+2025-09-25 21:42:21.744 - maximum memory usage  72,59 MB
+2025-09-25 21:42:21.745 - END
