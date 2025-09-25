@@ -21,15 +21,43 @@ function parse_model(path::AbstractString)
     for (typename, info) in types
         interception = get(info, "Interception", Dict())
         transparency = Float64(get(interception, "transparency", 0.0))
-        rho = Dict{Band,Float64}(PAR=>0.1, NIR=>0.4, TIR=>0.0)
-        tau = Dict{Band,Float64}(PAR=>0.05, NIR=>0.4, TIR=>0.0)
+        rho = Dict{Band,Float64}(PAR => 0.1, NIR => 0.4, TIR => 0.0)
+        tau = Dict{Band,Float64}(PAR => 0.05, NIR => 0.4, TIR => 0.0)
         optics = get(interception, "optical_properties", Dict())
+        # per-band scattering factors parsed from optical_properties when scalar values present
+        local_scats = Dict{Band,Float64}()
         for (bandname, value) in optics
             band = band_from_string(String(bandname))
-            rho[band] = Float64(value)
-            tau[band] = get(tau, band, 0.0)
+            # value in existing test YAMLs is a single number interpreted as scattering factor
+            # but historically we used optical_properties to store rho; interpret as scattering per Java OpticalPropertiesModel
+            # If value is a scalar, set scattering factor for this band; if it's a dict, fallback to rho/tau parsing
+            if isa(value, Number)
+                # interpret scalar as scattering factor σ = ρ + τ, with ρ = τ = σ/2 (Archimed convention)
+                σ = Float64(value)
+                rho[band] = σ / 2.0
+                tau[band] = σ / 2.0
+                local_scats[band] = σ
+            else
+                # fallback: parse nested rho/tau structure
+                for (k, v) in value
+                    b = band_from_string(String(k))
+                    rho[b] = Float64(v)
+                end
+            end
         end
-        specs[(group, String(typename))] = OpticalProps(rho, tau, transparency)
+        op = OpticalProps(transparency=transparency)
+        # copy rho/tau into op
+        for b in (PAR, NIR, TIR)
+            op.rho[b] = rho[b]
+            op.tau[b] = tau[b]
+        end
+        # assign scattering if parsed
+        if !isempty(local_scats)
+            for (b, sf) in local_scats
+                op.scattering[b] = sf
+            end
+        end
+        specs[(group, String(typename))] = op
     end
     return specs
 end
@@ -112,12 +140,12 @@ function load_config(path::AbstractString)
     nsectors = Int(get(data, "sky_sectors", 16))
     sectors = sky_sectors_for(nsectors)
     # simple irradiance defaults; can be extended to per-band in config later
-    sky = SkyConfig(sectors, Dict(PAR=>400.0, NIR=>400.0, TIR=>0.0))
+    sky = SkyConfig(sectors, Dict(PAR => 400.0, NIR => 400.0, TIR => 0.0))
 
     px = Float64(get(data, "pixel_size", 0.25))
     sca = Bool(get(data, "scattering", false))
     ait = Bool(get(data, "all_in_turtle", false))
-    rt  = Float64(get(data, "radiation_timestep", 0.0))
+    rt = Float64(get(data, "radiation_timestep", 0.0))
     cfg = InterceptionConfig(pixel_size=px, scattering=sca, all_in_turtle=ait, radiation_timestep=rt)
 
     model_specs = Dict{Tuple{String,String},OpticalProps}()
@@ -138,7 +166,7 @@ function load_config(path::AbstractString)
         if isfile(meteo_path)
             info = parse_meteo(meteo_path)
             if info !== nothing
-                sky = SkyConfig(sectors, Dict(PAR=>info.par, NIR=>info.nir, TIR=>0.0))
+                sky = SkyConfig(sectors, Dict(PAR => info.par, NIR => info.nir, TIR => 0.0))
                 cfg = InterceptionConfig(pixel_size=px, scattering=sca, all_in_turtle=ait, radiation_timestep=info.duration)
             end
         end
