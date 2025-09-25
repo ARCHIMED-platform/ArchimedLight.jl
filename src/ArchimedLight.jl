@@ -2,6 +2,7 @@ module ArchimedLight
 
 export Component, Scene,
        Band, OpticalProps, SkyConfig, InterceptionConfig,
+       InterceptionResult,
        add_component, set_optics!, compute_interception
 
 using Meshes

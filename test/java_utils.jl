@@ -1,6 +1,8 @@
 module JavaTestUtils
 
-export locate_java_jar, with_java_case, read_semicolon_table, parse_float, filter_rows
+using ArchimedLight
+
+export locate_java_jar, with_java_case, read_semicolon_table, read_table, parse_float, filter_rows, sum_columns, compare_java_julia
 
 """Locate the Archimed 2018 reference JAR used as oracle for integration tests."""
 function locate_java_jar()
@@ -96,16 +98,15 @@ function with_java_case(f::Function, cfgdir::AbstractString, config::AbstractStr
     end
 end
 
-"""Read a semi-colon delimited file into a vector of dictionaries keyed by header."""
-function read_semicolon_table(path::AbstractString)
+function read_table(path::AbstractString; delim::AbstractString=";")
     lines = readlines(path)
     isempty(lines) && return String[], Dict{String,String}[]
-    header = split(strip(lines[1]), ';')
+    header = split(strip(lines[1]), delim)
     rows = Dict{String,String}[]
     for line in lines[2:end]
         stripped = strip(line)
         isempty(stripped) && continue
-        values = split(stripped, ';')
+        values = split(stripped, delim)
         row = Dict{String,String}()
         for (col, val) in zip(header, values)
             row[col] = val
@@ -115,8 +116,76 @@ function read_semicolon_table(path::AbstractString)
     return header, rows
 end
 
+"""Read a semi-colon delimited file into a vector of dictionaries keyed by header."""
+read_semicolon_table(path::AbstractString) = read_table(path; delim=";")
+
 parse_float(row::Dict{String,String}, key::String) = parse(Float64, row[key])
 
 filter_rows(rows::Vector{Dict{String,String}}, key::String, value::AbstractString) = [row for row in rows if get(row, key, nothing) == value]
+
+function sum_columns(rows::Vector{Dict{String,String}}, cols::Vector{String})
+    totals = Dict{String,Float64}()
+    for col in cols
+        accumulator = 0.0
+        for row in rows
+            if haskey(row, col)
+                try
+                    accumulator += parse(Float64, row[col])
+                catch
+                    # ignore unparsable values
+                end
+            end
+        end
+        totals[col] = accumulator
+    end
+    return totals
+end
+
+const DEFAULT_METRICS = [
+    "Ri_PAR_0_f", "Ri_NIR_0_f",
+    "Ra_PAR_0_f", "Ra_NIR_0_f",
+    "Ri_PAR_0_q", "Ri_NIR_0_q",
+    "Ra_PAR_0_q", "Ra_NIR_0_q"
+]
+
+function compare_java_julia(cfgdir::AbstractString, config::AbstractString; jar::AbstractString, metrics::Vector{String}=DEFAULT_METRICS, java_args::Vector{String}=String[], julia_outdir::Union{Nothing,String}=nothing)
+    java_success = Ref(false)
+    java_rows = Ref(Vector{Dict{String,String}}())
+    with_java_case(cfgdir, config; jar=jar, extra_args=java_args) do success, _log, run_dirs
+        java_success[] = success
+        if success && !isempty(run_dirs)
+            csv_path = joinpath(run_dirs[1], "component_values.csv")
+            _, rows = read_table(csv_path; delim=";")
+            java_rows[] = rows
+        else
+            java_rows[] = Dict{String,String}[]
+        end
+        return nothing
+    end
+
+    java_success[] || error("Java simulation failed for $config")
+    rows_java = java_rows[]
+    java_totals = sum_columns(rows_java, metrics)
+
+    cfgpath = joinpath(cfgdir, config)
+    outdir = isnothing(julia_outdir) ? mktempdir() : julia_outdir
+    res = ArchimedLight.Runner.run_from_config(cfgpath; outdir=outdir)
+    julia_csv = joinpath(outdir, "components.csv")
+    _, rows_julia = read_table(julia_csv; delim=",")
+    julia_totals = sum_columns(rows_julia, metrics)
+
+    diffs = Dict{String,Float64}()
+    rel = Dict{String,Float64}()
+    for col in metrics
+        jv = get(java_totals, col, 0.0)
+        lv = get(julia_totals, col, 0.0)
+        diff = lv - jv
+        diffs[col] = diff
+        denom = max(abs(jv), 1e-9)
+        rel[col] = abs(diff) / denom
+    end
+
+    return (java=java_totals, julia=julia_totals, diff=diffs, rel=rel)
+end
 
 end # module

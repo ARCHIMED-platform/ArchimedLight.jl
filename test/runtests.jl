@@ -94,6 +94,16 @@ end
             maxdiff = maximum(abs.(ratios .- ref))
             @test maxdiff < 1e-6
         end
+
+        cmp = compare_java_julia(cfgdir, "config.yml"; jar=jar)
+        for col in JavaTestUtils.DEFAULT_METRICS
+            @test haskey(cmp.java, col)
+            @test haskey(cmp.julia, col)
+            @test haskey(cmp.diff, col)
+            @test haskey(cmp.rel, col)
+            @test isfinite(cmp.rel[col])
+        end
+        @info "Julia vs Java totals (test-absorb)" cmp
     end
 end
 
@@ -114,6 +124,11 @@ end
             return log_text
         end
         @test occursin("invalid pixel size", failure_log) || occursin("greater than plot", failure_log)
+
+        cmp = compare_java_julia(cfgdir, "config.yml"; jar=jar)
+        for col in JavaTestUtils.DEFAULT_METRICS
+            @test isfinite(cmp.rel[col])
+        end
     end
 end
 
