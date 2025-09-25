@@ -1,7 +1,34 @@
-# ArchimedLight
+# ArchimedLight.jl (prototype)
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/stable/)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/dev/)
-[![Build Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/CI.yml?query=branch%3Amain)
-[![Code Style: Blue](https://img.shields.io/badge/code%20style-blue-4495d1.svg)](https://github.com/invenia/BlueStyle)
-[![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
+A minimal Julia reimplementation of ARCHIMED's light interception core.
+
+Status: prototype for first-order (no multiple scattering) diffuse sky interception over a triangle mesh scene.
+
+Quick start
+
+```julia
+using Pkg
+Pkg.activate(".")
+Pkg.develop(path=".") # if testing in place
+using ArchimedLight
+
+# Build a single square component
+scene = Scene()
+mesh = Mesh([Triangle(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0)),
+             Triangle(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0), Vec3(-0.5, 0.5, 0.0))])
+add_component(scene, "leaf", mesh)
+set_optics!("leaf", OpticalProps())
+
+sky = SkyConfig(count=16, PAR_Wm2=400.0, NIR_Wm2=400.0)
+cfg = InterceptionConfig(pixel_size=0.25, scattering=false)
+res = compute_interception(scene, sky, cfg)
+println(res)
+```
+
+Roadmap
+- Multiple scattering (order-N) with reflectance/transmittance.
+- Sky discretizations matching 1/6/16/46/136/406 sector sets.
+- Solar position + direct beam handling.
+- Scene/format IO (OPS/OPF or a neutral format).
+- Acceleration structures (BVH) and threading.
+
