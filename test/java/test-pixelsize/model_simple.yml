@@ -1,0 +1,18 @@
+---
+Group: simple_plant
+Type:
+  Internode:
+      Interception:
+          model: Translucent
+          transparency: 0
+          optical_properties:
+              PAR: 0.15
+              NIR: 0.9
+  Leaf:
+      Interception:
+          model: Translucent
+          transparency: 0
+          optical_properties:
+              PAR: 0.15
+              NIR: 0.9
+...

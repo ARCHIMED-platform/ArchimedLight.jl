@@ -15,4 +15,9 @@ include("intercept.jl")
 # Optional IO layer backed by PlantGeom + MultiScaleTreeGraph
 include("io/opf.jl")
 
+# Config loader and runner
+include("skysets.jl")
+include("config.jl")
+include("runner.jl")
+
 end # module

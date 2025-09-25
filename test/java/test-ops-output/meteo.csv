@@ -1,0 +1,7 @@
+#' latitude: 15.0  # in degrees
+#' altitude: 100.0 # in degrees
+date;hour_start;hour_end;temperature;relativeHumidity;clearness;wind
+2016/06/12;06:30:00;07:00:00;14;70;0.67;10
+2016/06/12;07:00:00;07:30:00;14;70;0.67;10
+2016/06/12;07:30:00;08:00:00;14;70;0.67;10
+2016/06/12;08:00:00;08:30:00;14;70;0.67;10

@@ -1,5 +1,4 @@
 using Meshes
-include("geometry.jl")
 
 struct Component
     name::String

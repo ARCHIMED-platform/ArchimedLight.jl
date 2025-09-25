@@ -1,10 +1,6 @@
 using Meshes
 import Unitful
 using Unitful: oneunit
-include("geometry.jl")
-include("scene.jl")
-include("optics.jl")
-include("sky.jl")
 
 """
     compute_interception(scene, sky::SkyConfig, cfg::InterceptionConfig)

@@ -1,0 +1,7 @@
+2 scenes :
+ - ground + 1 horizontal plate + Sun
+ - ground + 2 horizontal plates + no Sun, the top plate is a light source
+
+no scattering.
+check irradiation equality of plate in first scene versus bottom plate in second scene.
+check irradiation equality of ground in both scenes.

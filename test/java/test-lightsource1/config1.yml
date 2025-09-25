@@ -1,0 +1,34 @@
+---
+
+scene: scene/one-plate.ops  # Path to a scene, i.e. ops, opf or gwa file.
+models:
+  - model_pave.yml
+  - model_soil.yml
+meteo: meteo1.csv         # Path to the meteo file
+scene_rotation: 0        # Rotation of the scene from the North axe (degrees)
+photosynthesis: false    # compute photosynthesis and energy balance ?
+sky_sectors: 16           # Must be either 1, 6, 16, 46, 136 or 406
+all_in_turtle: true      # false: direct radiation is computed using the true sun position; true: direct radiation is computed using sky sectors
+radiation_timestep: 15   # [minutes] frequency for the computation of the sun's radiation within each timestep
+scattering: false         # true: compute multiple scattering
+pixel_size: 0.3           # Size of the side of the pixel, relates to the number of rays sent in the scene for each direction (cm pixels-1). Decrease value for increased resolution.
+cache_pixel_table: false # true: pixel tables are cached on disc instead of kept in memory (slower but use less memory + allow to reuse them).
+toricity: true           # Make the scene toric (if false, increase the plot boundaries so all components are sampled)
+cache_radiation : false  # true : precomputed intercepted/scattered radiation to speed up simulation
+
+# OUTPUTS
+output_directory: output1 # Path to the output directory (the folder is created if not already existing)
+write_summary: false     # If true export the simulation summary in a csv file
+
+# List of columns in the component_values.csv file:
+component_variables: &outvars
+  step_number: true    # Index of the step
+  item_id: true        # Item id (as given as plant_id in the OPS)
+  component_id: true   # Component unique ID in the item (as read in the OPF)
+  area: true           # Component area (i.e. mesh area, m2)
+  # Incident light:
+  Ri_PAR_0_f: true    # Order 0 (without scattering) irradiance (incident light) for PAR (W m[component]-2)
+  Ri_NIR_0_f: true    # Order 0 (without scattering) irradiance (incident light) for NIR (W m[component]-2)
+#  Ri_PAR_f: true      # Order n (with scattering) irradiance for PAR (W m[component]-2)
+#  Ri_NIR_f: true      # Order n (with scattering) irradiance for PAR (W m[component]-2)
+...

@@ -1,0 +1,40 @@
+---
+
+scene: scene/coffee.ops  # Path to a scene, i.e. ops, opf or gwa file.
+models:
+  - model_coffee.yml
+  - model_soil.yml
+meteo: meteo.csv         # Path to the meteo file
+scene_rotation: 0        # Rotation of the scene from the North axe (degrees)
+photosynthesis: false    # compute photosynthesis and energy balance ?
+sky_sectors: 6           # Must be either 1, 6, 16, 46, 136 or 406
+all_in_turtle: false     # false: direct radiation is computed using the true sun position; true: direct radiation is computed using sky sectors
+radiation_timestep: 15   # [minutes] frequency for the computation of the sun's radiation within each timestep
+scattering: false        # true: compute multiple scattering
+pixel_size: 2.7656          # Size of the side of the pixel, relates to the number of rays sent in the scene for each direction (cm pixels-1). Decrease value for increased resolution.
+cache_pixel_table: false # true: pixel tables are cached on disc instead of kept in memory (slower but use less memory + allow to reuse them).
+toricity: true           # Make the scene toric (if false, increase the plot boundaries so all components are sampled)
+cache_radiation : false  # true : precomputed intercepted/scattered radiation to speed up simulation
+
+# OUTPUTS
+output_directory: output # Path to the output directory (the folder is created if not already existing)
+write_summary: false     # If true export the simulation summary in a csv file
+
+# List of columns in the component_values.csv file:
+component_variables: &outvars
+  step_number: true    # Index of the step
+  step_duration: true  # Step duration in seconds
+  item_id: true        # Item id (as given as plant_id in the OPS)
+  component_id: true   # Component unique ID in the item (as read in the OPF)
+  group: true          # Functional group (as given by the Group field in the plant.yml file)
+  type: true           # Component type (as given by the Type names in the plant.yml files)
+  area: true           # Component area (i.e. mesh area, m2)
+  # Incident light:
+  Ri_PAR_0_f: true    # Order 0 (without scattering) irradiance (incident light) for PAR (W m[component]-2)
+  Ri_NIR_0_f: true    # Order 0 (without scattering) irradiance (incident light) for NIR (W m[component]-2)
+  # Absorbed light
+  Ra_PAR_0_f: true    # Order 0 absorbed PAR (W m[component]-2)
+  Ra_NIR_0_f: true    # Order 0 absorbed NIR (W m[component]-2)
+  Ra_PAR_0_q: true    # Order 0 absorbed PAR (J component-1 timestep-1)
+  Ra_NIR_0_q: true    # Order 0 absorbed NIR (J component-1 timestep-1)
+...

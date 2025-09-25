@@ -1,0 +1,17 @@
+# T xOrigin yOrigin zOrigin xSize ySize flat
+T 0 0 0 0.5 0.5 flat
+
+# Part 1: one line per plant in the scene
+
+# Archimed metadata format :
+# start comment with "[Archimed]" stuck to # sign
+# field 1 : functional group name
+
+#[Archimed] simple_plant
+
+#sceneId plantId plantFileName x y z scale inclinationAzimut inclinationAngle stemTwist
+1	1	opf/simple_OPF_shapes.opf	0		0		0	0	0	0	0
+
+# [Optional] Part 2, chaining: only if scenario or project, one line per sceneId in part1
+#motherId sceneId date
+-1	1	1

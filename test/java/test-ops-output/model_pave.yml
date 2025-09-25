@@ -1,0 +1,13 @@
+---
+Group: group1
+Type:
+  carre:
+      Interception:
+          use: Translucent_1
+          Translucent_1:
+            model: Translucent
+            transparency: 0.1
+            optical_properties:
+                PAR: 0
+                NIR: 0
+...

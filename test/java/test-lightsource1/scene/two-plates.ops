@@ -1,0 +1,15 @@
+# T xOrigin yOrigin zOrigin xSize ySize flat
+T 0 0 0 1 1 flat
+# Part 1: one line per plant in the scene
+
+#[Archimed] plate1
+
+#sceneId plantId plantFileName x y z scale inclinationAzimut inclinationAngle stemTwist
+1	1	pave100x100.gwa	0		0		1	0	0	0	0
+
+#[Archimed] plate2
+1	2	pave100x100.gwa	0		0		2	0	0	0	0
+
+# [Optional] Part 2, chaining: only if scenario or project, one line per sceneId in part1
+#motherId sceneId date
+-1	1	1

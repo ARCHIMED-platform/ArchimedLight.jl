@@ -1,0 +1,4 @@
+scene: "$(joinpath(dirname(dirname(pathof(PlantGeom))), "test", "files", "simple_plant.opf"))"
+sky_sectors: 16
+pixel_size: 0.25
+scattering: false

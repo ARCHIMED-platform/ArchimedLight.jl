@@ -1,0 +1,28 @@
+---
+
+scene: scene.ops  # Path to a scene, i.e. ops, opf or gwa file.
+models:
+  - model_pave.yml
+  - model_soil.yml
+meteo: meteo.csv         # Path to the meteo file
+scene_rotation: 0        # Rotation of the scene from the North axe (degrees)
+photosynthesis: false    # compute photosynthesis and energy balance ?
+sky_sectors: 6           # Must be either 1, 6, 16, 46, 136 or 406
+all_in_turtle: true      # false: direct radiation is computed using the true sun position; true: direct radiation is computed using sky sectors
+radiation_timestep: 15   # [minutes] frequency for the computation of the sun's radiation within each timestep
+scattering: false        # true: compute multiple scattering
+pixel_size: 30           # Size of the side of the pixel, relates to the number of rays sent in the scene for each direction (cm pixels-1). Decrease value for increased resolution.
+cache_pixel_table: false # true: pixel tables are cached on disc instead of kept in memory (slower but use less memory + allow to reuse them).
+toricity: true           # Make the scene toric (if false, increase the plot boundaries so all components are sampled)
+cache_radiation : false  # true : precomputed intercepted/scattered radiation to speed up simulation
+
+# OUTPUTS
+output_directory: output # Path to the output directory (the folder is created if not already existing)
+write_summary: false     # If true export the simulation summary in a csv file
+export_ops: true         # If true export the scene in a ops and opf files (false : no output, true : last step, all : every step, <n> : at step n)
+
+# List of columns in the OPF files output from ARCHIMED:
+opf_variables: &outvars
+  item_id: true        # Item id (as given as plant_id in the OPS)
+  component_id: true   # Component unique ID in the item (as read in the OPF)
+...

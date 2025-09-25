@@ -1,6 +1,5 @@
 using Meshes
 using LinearAlgebra: norm
-include("geometry.jl")
 
 struct Sector
     dir::Vec3      # unit direction (toward scene)
@@ -41,6 +40,8 @@ end
 struct InterceptionConfig
     pixel_size::Float64
     scattering::Bool
+    all_in_turtle::Bool
+    radiation_timestep::Float64
 end
 
-InterceptionConfig(; pixel_size::Float64=0.1, scattering::Bool=false) = InterceptionConfig(pixel_size, scattering)
+InterceptionConfig(; pixel_size::Float64=0.1, scattering::Bool=false, all_in_turtle::Bool=false, radiation_timestep::Float64=0.0) = InterceptionConfig(pixel_size, scattering, all_in_turtle, radiation_timestep)
