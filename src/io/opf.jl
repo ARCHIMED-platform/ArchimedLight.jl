@@ -56,28 +56,43 @@ end
 function _ops_entries(scene_path::AbstractString)
     data = PlantGeom.read_ops_file(scene_path)
     entries = data.object_table
+    dims = data.scene_dimensions
     if !isempty(entries)
-        return entries
+        return entries, dims
     end
     sanitized = _sanitize_ops(scene_path)
     parent = dirname(scene_path)
     entries = mktemp(parent) do tmp_path, tmp_io
         write(tmp_io, sanitized)
         close(tmp_io)
-        PlantGeom.read_ops_file(tmp_path).object_table
+        info = PlantGeom.read_ops_file(tmp_path)
+        info.object_table
     end
     if !isempty(entries)
-        return entries
+        return entries, dims
     end
-    return _parse_ops_fallback(sanitized, scene_path)
+    return _parse_ops_fallback(sanitized, dims)
 end
 
-function _parse_ops_fallback(contents::AbstractString, scene_path::AbstractString)
+function _parse_ops_fallback(contents::AbstractString, default_dims)
     entries = NamedTuple[]
     functional_group = "scene"
+    scene_dims = default_dims
     for raw in split(contents, '\n')
         stripped = strip(raw)
         isempty(stripped) && continue
+        if startswith(stripped, "T ")
+            parts = split(stripped)
+            if length(parts) >= 6
+                x0 = parse(Float64, parts[2])
+                y0 = parse(Float64, parts[3])
+                z0 = parse(Float64, parts[4])
+                x1 = parse(Float64, parts[5])
+                y1 = parse(Float64, parts[6])
+                scene_dims = (Meshes.Point(x0, y0, z0), Meshes.Point(x1, y1, z0))
+            end
+            continue
+        end
         if startswith(stripped, "#[Archimed]")
             functional_group = strip(replace(stripped, "#[Archimed]" => ""))
             continue
@@ -111,7 +126,7 @@ function _parse_ops_fallback(contents::AbstractString, scene_path::AbstractStrin
         pos = Meshes.Point(x*Unitful.u"m", y*Unitful.u"m", z*Unitful.u"m")
         push!(entries, (; sceneID=scene_id, plantID=plant_id, filePath=file_path, pos, scale, inclinationAzimut=az, inclinationAngle=angle, rotation, functional_group))
     end
-    return entries
+    return entries, scene_dims
 end
 
 struct OpsEntry
@@ -159,8 +174,49 @@ function _entry_from_row(scene_path::AbstractString, row)
 end
 
 function _prepare_entries(scene_path::AbstractString)
-    rows = _ops_entries(scene_path)
-    return OpsEntry[_entry_from_row(scene_path, row) for row in rows]
+    rows, dims = _ops_entries(scene_path)
+    return OpsEntry[_entry_from_row(scene_path, row) for row in rows], dims
+end
+
+function _generate_paving!(scene::Scene, dims, paving_specs::Dict{Tuple{String,String},Int})
+    isempty(paving_specs) && return
+    origin = dims[1]
+    maxp = dims[2]
+    o = (strip_length(to(origin)[1]), strip_length(to(origin)[2]), strip_length(to(origin)[3]))
+    span = (strip_length(to(maxp)[1] - to(origin)[1]), strip_length(to(maxp)[2] - to(origin)[2]))
+    total_area = span[1] * span[2]
+    for ((group, ctype), cells) in paving_specs
+        cells <= 0 && continue
+        target_cell_area = total_area / cells
+        cell_side = sqrt(target_cell_area)
+        nx = max(1, floor(Int, span[1] / cell_side))
+        ny = max(1, floor(Int, span[2] / cell_side))
+        nx = max(nx, 1)
+        ny = max(ny, 1)
+        cell_w = span[1] / nx
+        cell_h = span[2] / ny
+        z = o[3]
+        name_idx = 1
+        for ix in 0:nx-1
+            x0 = o[1] + ix * cell_w
+            x1 = x0 + cell_w
+            for iy in 0:ny-1
+                y0 = o[2] + iy * cell_h
+                y1 = y0 + cell_h
+                pts = [
+                    Point(x0 * Unitful.u"m", y0 * Unitful.u"m", z * Unitful.u"m"),
+                    Point(x1 * Unitful.u"m", y0 * Unitful.u"m", z * Unitful.u"m"),
+                    Point(x1 * Unitful.u"m", y1 * Unitful.u"m", z * Unitful.u"m"),
+                    Point(x0 * Unitful.u"m", y1 * Unitful.u"m", z * Unitful.u"m")
+                ]
+                connec = connect.([(1, 2, 3), (1, 3, 4)])
+                mesh = SimpleMesh(pts, connec)
+                name = "paving_$(ctype)_$(ix)_$(iy)_$(name_idx)"
+                add_component(scene, name, mesh; group=group, ctype=ctype)
+                name_idx += 1
+            end
+        end
+    end
 end
 
 function _transform_mesh(mesh::SimpleMesh, entry::OpsEntry)
@@ -244,13 +300,15 @@ function load_opf_scene(file::AbstractString; group::String="plant")
 end
 
 """
-    load_ops_scene(file::AbstractString)
+    load_ops_scene(file::AbstractString; paving_specs=Dict{Tuple{String,String},Int}())
 
-Load an OPS scene: reads all OPF instances with their scene transforms applied,
-and returns an ArchimedLight Scene aggregating all component meshes.
+Load an OPS scene: reads all OPF/GWA instances with their scene transforms applied,
+and returns an ArchimedLight Scene aggregating all component meshes. When
+`paving_specs` defines `plot_paving` counts for a `(group, type)` pair, the scene
+rectangle is tessellated accordingly to create background paving components.
 """
-function load_ops_scene(file::AbstractString)
-    entries = _prepare_entries(file)
+function load_ops_scene(file::AbstractString; paving_specs::Dict{Tuple{String,String},Int}=Dict{Tuple{String,String},Int}())
+    entries, scene_dims = _prepare_entries(file)
     scene = Scene()
     opf_cache = Dict{Tuple{String,String},Vector{Component}}()
     for entry in entries
@@ -277,6 +335,7 @@ function load_ops_scene(file::AbstractString)
             @warn "Unsupported OPS asset" entry.file_path
         end
     end
+    _generate_paving!(scene, scene_dims, paving_specs)
     return scene
 end
 
