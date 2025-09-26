@@ -9,6 +9,7 @@ using ..ArchimedLight: SkyConfig, InterceptionConfig, set_optics!, OpticalProps,
 using Meshes: Vec
 using ..SkySets: sky_sectors_for
 using Dates
+using Unitful
 
 const DEFAULT_PAR_FRACTION = 0.45
 const SOLAR_PAR_FRACTION = 0.48
@@ -92,6 +93,20 @@ function parse_metadata(lines::Vector{String})
         end
     end
     return meta
+end
+
+# Local helper to strip Unitful quantities to plain Float64 for angular/vector math
+function strip_number(x)
+    # Prefer Unitful.ustrip when available to remove units; fallback to Float64
+    try
+        return Unitful.ustrip(x)
+    catch
+        try
+            return Float64(x)
+        catch
+            return x
+        end
+    end
 end
 
 function global_from_clearness(clearness::Float64, latitude_deg::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
@@ -322,15 +337,39 @@ function load_config(path::AbstractString)
                     sx = sin(zen) * cos(az)
                     sy = sin(zen) * sin(az)
                     sz = cos(zen)
+                    # DEBUG: types/values for sx, sy, sz
+                    @info "sun angles types" t_sx = typeof(sx) t_sy = typeof(sy) t_sz = typeof(sz)
+                    @info "sun angles values" v_sx = sx v_sy = sy v_sz = sz
                     sun_dir = Vec(sx, sy, sz)
                 end
 
+                # Build a fresh unitless sun direction Vec from the computed angles (avoid Unitful leaks)
+                if zen >= π / 2
+                    sun_dir = Vec(0.0, 0.0, -1.0)
+                else
+                    sun_dir = Vec(Float64(sx), Float64(sy), Float64(sz))
+                end
+
                 # split global into direct/diffuse using DeJong-like Kt estimate per band
+                # Note: `info.par` and `info.nir` are in W/m^2 (instantaneous). `extraterrestrial_hourly`
+                # returns energy over the period in MJ/m^2. Convert global W/m^2 -> MJ/m^2 over the period
+                # before forming the clearness index Kt = (global_energy / extraterrestrial_energy).
+                duration_hours = info.end_hour - info.start_hour
+                duration_hours = max(duration_hours, 0.0)
                 for (band, bandval) in ((PAR, info.par), (NIR, info.nir))
                     global_flux = bandval
                     et = extraterrestrial_hourly(get(meta, "latitude", 0.0), doy, info.start_hour, info.end_hour)
-                    kt = et == 0.0 ? 0.0 : (global_flux / et)
-                    kd = ArchimedLight.dejong_kd_hourly(kt, _declination(doy))
+                    # convert instantaneous W/m^2 to MJ/m^2 over the timestep
+                    global_mj = (global_flux * (duration_hours * 3600.0)) / 1.0e6
+                    kt = et == 0.0 ? 0.0 : (global_mj / et)
+                    # compute sun elevation (radians) from sun_dir z-component (sun_dir[3] == sin(elevation))
+                    # Inspect sun_dir z-component before/after stripping
+                    s3_raw = sun_dir[3]
+                    @info "sun_dir[3] before strip" t = typeof(s3_raw) v = s3_raw
+                    s3_stripped = strip_number(s3_raw)
+                    @info "sun_dir[3] after strip" t = typeof(s3_stripped) v = s3_stripped
+                    sun_elev = asin(clamp(s3_stripped, -1.0, 1.0))
+                    kd = ArchimedLight.dejong_kd_hourly(kt, sun_elev)
                     diffuse = kd * global_flux
                     direct = max(0.0, global_flux - diffuse)
                     ArchimedLight.populate_sector_fluxes!(sky, band, global_flux, direct, diffuse, sun_dir, ait)

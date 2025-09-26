@@ -106,26 +106,101 @@ function direct_in_turtle(direct::Float64, sun_dir::Vec, sectors::Vector{Sector}
         directions_sector_radius = acos(clamp((n - 1) / Float64(n), -1.0, 1.0))
         sun_halo_radius = directions_sector_radius / 2.0
 
+        # compute exact spherical-cap intersection areas between sector caps and sun halo
         total = 0.0
+        # sector angular radius (approx) and sun halo angular radius
+        sector_radius = directions_sector_radius
+        halo_radius = sun_halo_radius
+
+        # Helper: area of a spherical cap of angular radius r on unit sphere
+        cap_area(r) = 2π * (1.0 - cos(r))
+
+        # intersection area of two spherical caps with angular radii a,b whose centers are separated by angle g
+        function spherical_cap_intersection_area(a::Float64, b::Float64, g::Float64)
+            # trivial cases
+            if g >= a + b
+                return 0.0
+            end
+            if g <= abs(a - b)
+                # smaller cap inside larger
+                return cap_area(min(a, b))
+            end
+
+            # integrand for θ in [0, a]: at colatitude θ around cap1 center, ring of points has azimuthal extent 2*acos(q(θ)) where
+            # q(θ) = (cos b - cos θ cos g) / (sin θ sin g)
+            # intersection area = ∫_{θ=0}^{a} 2 * acos(clamp(q, -1,1)) * sin θ dθ
+
+            # handle potential numerical issues when sin g ~ 0
+            if sin(g) == 0.0
+                # centers aligned or opposite handled above; fallback to smaller cap
+                return cap_area(min(a, b))
+            end
+
+            # adaptive Simpson integration
+            f(θ) = begin
+                sθ = sin(θ)
+                denom = sθ * sin(g)
+                if denom == 0.0
+                    q = 1.0
+                else
+                    q = (cos(b) - cos(θ) * cos(g)) / denom
+                end
+                if q <= -1.0
+                    phi = π
+                elseif q >= 1.0
+                    phi = 0.0
+                else
+                    phi = acos(q)
+                end
+                return 2.0 * phi * sθ
+            end
+
+            # Simpson's rule recursive
+            function simpson(f, aθ, bθ)
+                c = (aθ + bθ) / 2.0
+                return (f(aθ) + 4.0 * f(c) + f(bθ)) * (bθ - aθ) / 6.0
+            end
+
+            function adaptive_simpson(f, aθ, bθ, eps, maxrec, whole)
+                c = (aθ + bθ) / 2.0
+                left = simpson(f, aθ, c)
+                right = simpson(f, c, bθ)
+                if maxrec <= 0 || abs(left + right - whole) < 15.0 * eps
+                    return left + right + (left + right - whole) / 15.0
+                end
+                return adaptive_simpson(f, aθ, c, eps / 2.0, maxrec - 1, left) + adaptive_simpson(f, c, bθ, eps / 2.0, maxrec - 1, right)
+            end
+
+            aθ = 0.0
+            bθ = a
+            whole = simpson(f, aθ, bθ)
+            area = adaptive_simpson(f, aθ, bθ, 1e-8, 20, whole)
+            return area
+        end
+
         for (i, s) in enumerate(sectors)
-            # ensure s.dir and sun_dir are unitless numerics for angle calc
+            # compute center separation angle
             d1 = stripq(s.dir)
+            if d1 isa AbstractVector
+                d1v = Vec(d1...)
+            else
+                d1v = d1
+            end
             d2 = stripq(sun_dir)
-            # if returned as scalars, wrap into Vec
-            if !(d1 isa AbstractVector)
-                d1 = Vec(d1...)
+            if d2 isa AbstractVector
+                d2v = Vec(d2...)
+            else
+                d2v = d2
             end
-            if !(d2 isa AbstractVector)
-                d2 = Vec(d2...)
-            end
-            angle = acos(clamp(dot(d1, d2), -1.0, 1.0))
-            # use simple circular cap area approximation: lumenArea(angle, sectorRadius, haloRadius)
-            # approximate by cap intersection area weight via exp decay for simplicity
-            w = max(0.0, exp(-(angle / (sun_halo_radius + 1e-6))^2))
-            weights[i] = w
-            total += w
+            g = acos(clamp(dot(d1v, d2v), -1.0, 1.0))
+            a = sector_radius
+            b = halo_radius
+            inter = spherical_cap_intersection_area(a, b, g)
+            weights[i] = max(0.0, inter)
+            total += weights[i]
         end
         if total > 0
+            # distribute direct proportional to area intersection
             weights .*= (direct / total)
         end
     end
@@ -135,7 +210,10 @@ end
 # Populate per-sector fluxes for a SkyConfig given global/direct/diffuse partition and sun direction
 function populate_sector_fluxes!(sky::SkyConfig, band::Band, global_flux::Float64, direct::Float64, diffuse::Float64, sun_dir::Vec, all_in_turtle::Bool)
     n = length(sky.sectors)
-    sky.sector_fluxes = [Dict{Band,Float64}() for _ in 1:n]
+    # initialize per-sector flux dicts only if not present or if sector count changed
+    if isempty(sky.sector_fluxes) || length(sky.sector_fluxes) != n
+        sky.sector_fluxes = [Dict{Band,Float64}() for _ in 1:n]
+    end
 
     # compute per-sector diffuse weighting using brightness_norm
     diffuse_weights = zeros(Float64, n)
@@ -163,6 +241,14 @@ function populate_sector_fluxes!(sky::SkyConfig, band::Band, global_flux::Float6
         diffuse_weights .*= (diffuse / total_diff)
     end
 
+    # Debug: when computing PAR, log per-sector diffuse weights for analysis
+    if band == PAR
+        @info "PAR diffuse weights" total_diff = total_diff diffuse = diffuse global_flux = global_flux
+        for (i, w) in enumerate(diffuse_weights)
+            @debug "PAR diffuse sector" idx = i weight = w
+        end
+    end
+
     # direct allocation
     # direct allocation: pass unitless sun_dir and converted sectors
     # create a temporary sectors list with unitless dirs
@@ -178,8 +264,20 @@ function populate_sector_fluxes!(sky::SkyConfig, band::Band, global_flux::Float6
     end
     direct_weights = direct_in_turtle(direct, sdv, tmp_sectors, all_in_turtle)
 
+    if band == PAR
+        @info "PAR direct weights sum" sum_direct = sum(direct_weights) direct = direct
+        for (i, w) in enumerate(direct_weights)
+            @debug "PAR direct sector" idx = i weight = w
+        end
+    end
     for i in 1:n
-        sky.sector_fluxes[i][band] = diffuse_weights[i] + direct_weights[i]
+        # accumulate band flux into the per-sector dict (preserve other bands)
+        prev = get(sky.sector_fluxes[i], band, 0.0)
+        val = prev + diffuse_weights[i] + direct_weights[i]
+        sky.sector_fluxes[i][band] = val
+        if band == PAR
+            @debug "PAR sector final flux" idx = i val = val
+        end
     end
 end
 
