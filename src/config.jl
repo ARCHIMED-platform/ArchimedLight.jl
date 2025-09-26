@@ -6,6 +6,7 @@ using YAML
 using ..ArchimedLight
 using ..ArchimedLight.ArchimedIO
 using ..ArchimedLight: SkyConfig, InterceptionConfig, set_optics!, OpticalProps, PAR, NIR, TIR
+using Meshes: Vec
 using ..SkySets: sky_sectors_for
 using Dates
 
@@ -226,7 +227,17 @@ function parse_meteo(path::AbstractString)
     if nir === nothing
         nir = 400.0
     end
-    return (par=par, nir=nir, duration=duration)
+    # compute doy if possible from metadata/date
+    doy = try
+        if haskey(dict, "date")
+            Dates.dayofyear(Date(dict["date"], dateformat"yyyy/mm/dd"))
+        else
+            1
+        end
+    catch
+        1
+    end
+    return (par=par, nir=nir, duration=duration, metadata=metadata, start_hour=start_hour, end_hour=end_hour, doy=doy)
 end
 
 """
@@ -291,8 +302,39 @@ function load_config(path::AbstractString)
         if isfile(meteo_path)
             info = parse_meteo(meteo_path)
             if info !== nothing
+                # create base SkyConfig using meteo totals
                 sky = SkyConfig(sectors, Dict(PAR => info.par, NIR => info.nir, TIR => 0.0))
                 cfg = InterceptionConfig(pixel_size=px, scattering=sca, all_in_turtle=ait, radiation_timestep=info.duration)
+
+                # approximate sun direction for the time window (midpoint)
+                meta = info.metadata
+                doy = get(info, :doy, info.doy)
+                mid_hour = (info.start_hour + info.end_hour) / 2.0
+                lat_rad = deg2rad(get(meta, "latitude", 0.0))
+                decl = _declination(doy)
+                hour_ang = _hour_angle(mid_hour + _equation_of_time(doy))
+                # sun vector in local coords (using standard spherical conversion)
+                zen = acos(sin(lat_rad) * sin(decl) + cos(lat_rad) * cos(decl) * cos(hour_ang))
+                if zen >= π / 2
+                    sun_dir = Vec(0.0, 0.0, -1.0)
+                else
+                    az = atan((cos(decl) * sin(hour_ang)), (cos(lat_rad) * sin(decl) - sin(lat_rad) * cos(decl) * cos(hour_ang)))
+                    sx = sin(zen) * cos(az)
+                    sy = sin(zen) * sin(az)
+                    sz = cos(zen)
+                    sun_dir = Vec(sx, sy, sz)
+                end
+
+                # split global into direct/diffuse using DeJong-like Kt estimate per band
+                for (band, bandval) in ((PAR, info.par), (NIR, info.nir))
+                    global_flux = bandval
+                    et = extraterrestrial_hourly(get(meta, "latitude", 0.0), doy, info.start_hour, info.end_hour)
+                    kt = et == 0.0 ? 0.0 : (global_flux / et)
+                    kd = ArchimedLight.dejong_kd_hourly(kt, _declination(doy))
+                    diffuse = kd * global_flux
+                    direct = max(0.0, global_flux - diffuse)
+                    ArchimedLight.populate_sector_fluxes!(sky, band, global_flux, direct, diffuse, sun_dir, ait)
+                end
             end
         end
     end

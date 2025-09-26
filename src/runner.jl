@@ -12,7 +12,7 @@ function write_components_csv(path::AbstractString, scene::Scene, res::Intercept
     step_duration = cfg.radiation_timestep > 0 ? cfg.radiation_timestep * 60.0 : 0.0
     comp_lookup = Dict(comp.name => comp for comp in scene.components)
     open(path, "w") do io
-        println(io, "component,group,type,area,step_number,step_duration,Ri_PAR_0_f,Ri_NIR_0_f,Ri_PAR_0_q,Ri_NIR_0_q,Ra_PAR_0_f,Ra_NIR_0_f,Ra_PAR_0_q,Ra_NIR_0_q")
+        println(io, "component,group,type,area,step_number,step_duration,Ri_PAR_0_f,Ri_NIR_0_f,Ra_PAR_0_f,Ra_NIR_0_f,Ra_PAR_0_q,Ra_NIR_0_q")
         for name in sort!(collect(keys(res.absorbed)))
             area = res.areas[name]
             inc = res.incident[name]
@@ -24,8 +24,6 @@ function write_components_csv(path::AbstractString, scene::Scene, res::Intercept
             ri_nir = get(inc, NIR, 0.0)
             ra_par = get(absb, PAR, 0.0)
             ra_nir = get(absb, NIR, 0.0)
-            ri_par_q = step_duration == 0 ? 0.0 : ri_par * area * step_duration
-            ri_nir_q = step_duration == 0 ? 0.0 : ri_nir * area * step_duration
             ra_par_q = step_duration == 0 ? 0.0 : ra_par * area * step_duration
             ra_nir_q = step_duration == 0 ? 0.0 : ra_nir * area * step_duration
             println(io, join((name,
@@ -36,8 +34,6 @@ function write_components_csv(path::AbstractString, scene::Scene, res::Intercept
                               step_duration,
                               ri_par,
                               ri_nir,
-                              ri_par_q,
-                              ri_nir_q,
                               ra_par,
                               ra_nir,
                               ra_par_q,

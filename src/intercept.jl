@@ -190,16 +190,20 @@ function compute_interception(scene::Scene, sky::SkyConfig, cfg::InterceptionCon
     pixel_area = max(cell_w * cell_h, 1e-9)
 
     sector_dirs = [vec_to_tuple(sector.dir) for sector in sky.sectors]
-    cos_weight_sum = 0.0
-    for (sector, dir) in zip(sky.sectors, sector_dirs)
-        if dir[3] < 0.0
-            cos_weight_sum += sector.weight * abs(dir[3])
+    if !isempty(sky.sector_fluxes)
+        sector_flux = [Tuple(get(flux, band, 0.0) for band in band_order) for flux in sky.sector_fluxes]
+    else
+        cos_weight_sum = 0.0
+        for (sector, dir) in zip(sky.sectors, sector_dirs)
+            if dir[3] < 0.0
+                cos_weight_sum += sector.weight * abs(dir[3])
+            end
         end
+        cos_weight_sum = cos_weight_sum <= 0 ? 1.0 : cos_weight_sum
+        sector_flux = [Tuple((sector.weight * (dir[3] < 0 ? abs(dir[3]) : 0.0) / cos_weight_sum) * get(sky.irradiance, band, 0.0)
+                              for band in band_order)
+                       for (sector, dir) in zip(sky.sectors, sector_dirs)]
     end
-    cos_weight_sum = cos_weight_sum <= 0 ? 1.0 : cos_weight_sum
-    sector_flux = [Tuple((sector.weight * (dir[3] < 0 ? abs(dir[3]) : 0.0) / cos_weight_sum) * get(sky.irradiance, band, 0.0)
-                         for band in band_order)
-                   for (sector, dir) in zip(sky.sectors, sector_dirs)]
 
     hits = Vector{Tuple{Float64,Int}}()
     best_ts = Vector{Float64}(undef, ncomp)
