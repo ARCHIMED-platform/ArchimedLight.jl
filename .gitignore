@@ -3,3 +3,5 @@
 /docs/build/
 *.DS_Store
 java_implementation/*
+.juliaup
+.julia_depot
