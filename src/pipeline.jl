@@ -1,4 +1,10 @@
-function integrate_light(first::FirstOrderResult, scat::Union{Nothing,ScatteringResult}, cfg::LightConfig)
+function integrate_light(
+    first::FirstOrderResult,
+    scat::Union{Nothing,ScatteringResult},
+    cfg::LightConfig;
+    extra_0_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+    extra_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+)
     ri_par_f_per_node = Dict{Int,Float64}()
     ri_nir_f_per_node = Dict{Int,Float64}()
     ri_par_0_q_per_node = Dict{Int,Float64}()
@@ -30,7 +36,9 @@ function integrate_light(first::FirstOrderResult, scat::Union{Nothing,Scattering
         ri_par_0_q_per_node,
         ri_nir_0_q_per_node,
         ri_par_q_per_node,
-        ri_nir_q_per_node
+        ri_nir_q_per_node,
+        extra_0_q_per_band,
+        extra_q_per_band,
     )
 end
 
@@ -101,14 +109,90 @@ function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::Directi
     FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
 end
 
+function _row_number_local(row, name::Symbol, default::Float64=0.0)
+    if name in propertynames(row)
+        v = getproperty(row, name)
+        if v isa Number
+            return Float64(v)
+        elseif v !== missing
+            try
+                return parse(Float64, string(v))
+            catch
+            end
+        end
+    end
+    return default
+end
+
+function _extra_band_irradiance(meteo_row)
+    extras = Dict{String,Float64}()
+    for p in propertynames(meteo_row)
+        s = String(p)
+        su = uppercase(s)
+        startswith(su, "RI_") || continue
+        endswith(su, "_F") || continue
+        su in ("RI_PAR_F", "RI_NIR_F", "RI_SW_F") && continue
+        band = su[4:(end - 2)]
+        isempty(band) && continue
+        v = _row_number_local(meteo_row, p, NaN)
+        isfinite(v) || continue
+        extras[band] = max(v, 0.0)
+    end
+    extras
+end
+
+function _single_band_flux(total_irradiance::Float64, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
+    tmp = SkyState(
+        sky.sun_azimuth_deg,
+        sky.sun_elevation_deg,
+        total_irradiance,
+        0.0,
+        sky.direct_fraction,
+        sky.diffuse_fraction,
+    )
+    compute_directional_fluxes(tmp, turtle, cfg).par
+end
+
+function _compute_extra_band_light(scene::SceneGeometry, meteo_row, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
+    extras_irr = _extra_band_irradiance(meteo_row)
+    extra_0_q = Dict{String,Dict{Int,Float64}}()
+    extra_q = Dict{String,Dict{Int,Float64}}()
+
+    isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
+
+    ids = [s.id for s in turtle.sectors]
+    n = length(ids)
+    for (band, total_irr) in extras_irr
+        flux_band = _single_band_flux(total_irr, sky, turtle, cfg)
+        first_band = compute_first_order(scene, turtle, DirectionalFluxes(ids, flux_band, zeros(Float64, n)), cfg)
+        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_par_power_per_node)
+
+        added =
+            if cfg.scattering
+                compute_scattering_band(scene, turtle, first_band, cfg; band=band).added_power_per_node
+            else
+                Dict{Int,Float64}()
+            end
+
+        total = Dict{Int,Float64}()
+        for nid in union(keys(order0), keys(added))
+            total[nid] = get(order0, nid, 0.0) + get(added, nid, 0.0)
+        end
+        extra_0_q[band] = order0
+        extra_q[band] = total
+    end
+    return extra_0_q, extra_q, extras_irr
+end
+
 function run_light_step(scene::SceneGeometry, meteo_row, cfg::LightConfig)
     sky = compute_sky(meteo_row, cfg)
     turtle = build_turtle(cfg, sky)
     fluxes = compute_directional_fluxes(sky, turtle, cfg)
     first = compute_first_order(scene, turtle, fluxes, cfg)
     scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
-    budget = integrate_light(first, scat, cfg)
-    LightStepResult(sky, turtle, fluxes, first, scat, budget)
+    extra_0_q, extra_q, extra_irr = _compute_extra_band_light(scene, meteo_row, sky, turtle, cfg)
+    budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
+    LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
 end
 
 function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightConfig)
@@ -132,8 +216,9 @@ function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightCon
             end
 
         scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
-        budget = integrate_light(first, scat, cfg)
-        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget)
+        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(scene, meteo.rows[i], sky, turtle, cfg)
+        budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
+        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
     end
     out
 end

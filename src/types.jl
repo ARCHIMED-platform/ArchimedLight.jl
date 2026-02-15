@@ -75,6 +75,8 @@ struct LightBudget
     ri_nir_0_q_per_node::Dict{Int,Float64}
     ri_par_q_per_node::Dict{Int,Float64}
     ri_nir_q_per_node::Dict{Int,Float64}
+    extra_0_q_per_band::Dict{String,Dict{Int,Float64}}
+    extra_q_per_band::Dict{String,Dict{Int,Float64}}
 end
 
 struct LightStepResult
@@ -84,4 +86,5 @@ struct LightStepResult
     first_order::FirstOrderResult
     scattering::Union{Nothing,ScatteringResult}
     budget::LightBudget
+    extra_band_irradiance::Dict{String,Float64}
 end

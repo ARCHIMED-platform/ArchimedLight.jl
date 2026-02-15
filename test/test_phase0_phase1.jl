@@ -117,6 +117,78 @@ end
     @test max_abs_float_dict_diff(bud_pix.ri_par_q_per_node, bud_lnk.ri_par_q_per_node) < 1e-12
     @test max_abs_float_dict_diff(bud_pix.ri_nir_q_per_node, bud_lnk.ri_nir_q_per_node) < 1e-12
 
+    f_links_stats = fixtures["test-links"]
+    cfg_ls = ArchimedLight.read_light_config(f_links_stats.config_path)
+    scene_ls = ArchimedLight.read_scene(cfg_ls.scene)
+    meteo_ls = ArchimedLight.read_meteo(cfg_ls.meteo)
+    row_ls = first(meteo_ls.rows)
+    sky_ls = ArchimedLight.compute_sky(row_ls, cfg_ls)
+    turtle_ls = ArchimedLight.build_turtle(cfg_ls, sky_ls)
+    flux_ls = ArchimedLight.compute_directional_fluxes(sky_ls, turtle_ls, cfg_ls)
+    first_ls = ArchimedLight.compute_first_order(scene_ls, turtle_ls, flux_ls, cfg_ls)
+    pair_counts_ls, sun_hits_ls, node_ids_ls, _ = ArchimedLight._pair_counts_for_scattering(scene_ls, turtle_ls, cfg_ls)
+    all_hits_ls = ArchimedLight._all_dir_hits_for_scattering(first_ls, sun_hits_ls, cfg_ls, node_ids_ls)
+
+    got_hits = sort([v for v in values(all_hits_ls) if v > 0])
+    neighbours_by_node = Dict{Int,Set{Int}}()
+    for ((to, from), c) in pair_counts_ls
+        c > 0 || continue
+        s = get!(neighbours_by_node, to) do
+            Set{Int}()
+        end
+        push!(s, from)
+    end
+    got_links = sort([length(v) for v in values(neighbours_by_node) if !isempty(v)])
+
+    expected_links_path = joinpath(fixture_path(f_links_stats), "expected", "log-nodelinks-stats-alldirs.csv")
+    @test isfile(expected_links_path)
+    expected_rows = read_java_csv(expected_links_path)
+    to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
+    expected_hits = sort(Int[to_int(getproperty(r, :hits)) for r in expected_rows])
+    expected_links = sort(Int[to_int(getproperty(r, :links)) for r in expected_rows])
+    @test got_hits == expected_hits
+    @test got_links == expected_links
+
+    f_div = fixtures["test-scattering-divergence"]
+    cfg_div = ArchimedLight.read_light_config(f_div.config_path)
+    scene_div = ArchimedLight.read_scene(cfg_div.scene)
+    meteo_div = ArchimedLight.read_meteo(cfg_div.meteo)
+    step_div = ArchimedLight.run_light_step(scene_div, first(meteo_div.rows), cfg_div)
+    @test step_div.scattering !== nothing
+    @test step_div.scattering.converged
+    @test step_div.scattering.iterations <= cfg_div.scattering_max_iter
+    @test all(isfinite, values(step_div.scattering.added_par_power_per_node))
+    @test all(isfinite, values(step_div.scattering.added_nir_power_per_node))
+
+    f_custom = fixtures["test-customband"]
+    cfg_custom = ArchimedLight.read_light_config(f_custom.config_path)
+    scene_custom = ArchimedLight.read_scene(cfg_custom.scene)
+    meteo_custom = ArchimedLight.read_meteo(cfg_custom.meteo)
+    row_custom = first(meteo_custom.rows)
+    step_custom = ArchimedLight.run_light_step(scene_custom, row_custom, cfg_custom)
+    @test haskey(step_custom.extra_band_irradiance, "CUSTOM")
+    @test haskey(step_custom.budget.extra_0_q_per_band, "CUSTOM")
+    @test haskey(step_custom.budget.extra_q_per_band, "CUSTOM")
+
+    _, _, _, _, plotbox_custom, _ = ArchimedLight._scene_geometry_for_interception(scene_custom, cfg_custom)
+    plot_area = plotbox_custom.xdim * plotbox_custom.ydim
+    step_seconds = _step_duration_seconds(row_custom)
+    custom_irr = step_custom.extra_band_irradiance["CUSTOM"]
+
+    scene_incid_par = step_custom.sky.ri_par_f * plot_area * step_seconds
+    scene_incid_custom = custom_irr * plot_area * step_seconds
+    scene_par_0 = sum(values(step_custom.budget.ri_par_0_q_per_node)) * step_seconds
+    scene_par_n = sum(values(step_custom.budget.ri_par_q_per_node)) * step_seconds
+    scene_custom_0 = sum(values(step_custom.budget.extra_0_q_per_band["CUSTOM"])) * step_seconds
+    scene_custom_n = sum(values(step_custom.budget.extra_q_per_band["CUSTOM"])) * step_seconds
+
+    r_par_0 = scene_par_0 / max(scene_incid_par, eps(Float64))
+    r_custom_0 = scene_custom_0 / max(scene_incid_custom, eps(Float64))
+    r_par_n = scene_par_n / max(scene_incid_par, eps(Float64))
+    r_custom_n = scene_custom_n / max(scene_incid_custom, eps(Float64))
+    @test relerr(r_par_0, r_custom_0) < 4e-4
+    @test relerr(r_par_n, r_custom_n) < 4e-4
+
     function run_fixture_series(cfg_path::String)
         cfg = ArchimedLight.read_light_config(cfg_path)
         scene = ArchimedLight.read_scene(cfg.scene)

@@ -50,26 +50,12 @@ function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{In
     all_hits
 end
 
-function _next_scattering_iteration(current::Dict{Int,Float64}, all_hits::Dict{Int,Int}, pair_counts, coeff::Float64, node_ids)
-    hit_energy = _dict_zero(node_ids)
-    for nid in node_ids
-        nh = get(all_hits, nid, 0)
-        hit_energy[nid] = nh > 0 ? get(current, nid, 0.0) * coeff / nh / 2.0 : 0.0
-    end
-
-    next = _dict_zero(node_ids)
-    for ((to, from), cnt) in pair_counts
-        next[to] = get(next, to, 0.0) + cnt * get(hit_energy, from, 0.0)
-    end
-    next
-end
-
 function _group_optical_coeffs(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{String,Tuple{Float64,Float64}}()
+    models isa AbstractVector || return Dict{String,Dict{String,Float64}}()
 
     base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    coeffs = Dict{String,Tuple{Float64,Float64}}()
+    coeffs = Dict{String,Dict{String,Float64}}()
 
     for m in models
         mp = String(m)
@@ -111,23 +97,20 @@ function _group_optical_coeffs(cfg::LightConfig)
         op isa AbstractDict || continue
         op = _to_string_dict(op)
 
-        par = haskey(op, "PAR") ? Float64(op["PAR"]) : cfg.scattering_coeff_par
-        nir = haskey(op, "NIR") ? Float64(op["NIR"]) : cfg.scattering_coeff_nir
-        coeffs[group] = (par, nir)
+        c = Dict{String,Float64}()
+        for (k, v) in op
+            try
+                c[uppercase(string(k))] = Float64(v)
+            catch
+            end
+        end
+        coeffs[group] = c
     end
 
     coeffs
 end
 
-function compute_scattering(
-    scene::SceneGeometry,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    cfg::LightConfig;
-    mode=:raycast,
-)
-    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode")
-
+function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::FirstOrderResult, cfg::LightConfig)
     pair_counts, sun_hits, geom_node_ids, node_group = _pair_counts_for_scattering(scene, turtle, cfg)
     group_coeffs = _group_optical_coeffs(cfg)
 
@@ -142,66 +125,141 @@ function compute_scattering(
         push!(node_set, nid)
     end
     node_ids = collect(node_set)
-
     all_hits = _all_dir_hits_for_scattering(first, sun_hits, cfg, node_ids)
+    return pair_counts, all_hits, node_ids, node_group, group_coeffs
+end
 
-    current_par = Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in node_ids)
-    current_nir = Dict{Int,Float64}(nid => get(first.incident_nir_power_per_node, nid, 0.0) for nid in node_ids)
-    added_par = _dict_zero(node_ids)
-    added_nir = _dict_zero(node_ids)
+function _default_band_coeff(cfg::LightConfig, band_key::String)
+    bk = uppercase(band_key)
+    bk == "NIR" && return cfg.scattering_coeff_nir
+    return cfg.scattering_coeff_par
+end
 
-    ref_par = _sum_dict_values(current_par)
-    ref_nir = _sum_dict_values(current_nir)
-    thr_par = cfg.scattering_stop_ratio * max(ref_par, eps(Float64))
-    thr_nir = cfg.scattering_stop_ratio * max(ref_nir, eps(Float64))
+function _scattering_one_band(
+    initial_power_per_node::Dict{Int,Float64},
+    pair_counts,
+    all_hits::Dict{Int,Int},
+    node_ids,
+    node_group::Dict{Int,String},
+    group_coeffs::Dict{String,Dict{String,Float64}},
+    cfg::LightConfig,
+    band_key::String,
+    default_coeff::Float64,
+)
+    coeff_by_node = Dict{Int,Float64}()
+    for nid in node_ids
+        g = get(node_group, nid, "")
+        c = get(group_coeffs, g, Dict{String,Float64}())
+        coeff_by_node[nid] = get(c, uppercase(band_key), default_coeff)
+    end
+
+    current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
+    added = _dict_zero(node_ids)
+    ref = _sum_dict_values(current)
+    thr = cfg.scattering_stop_ratio * max(ref, eps(Float64))
+    iterations = 0
 
     converged = false
-    iterations = 0
     for it in 1:cfg.scattering_max_iter
         iterations = it
-        coeff_par = Dict{Int,Float64}()
-        coeff_nir = Dict{Int,Float64}()
-        for nid in node_ids
-            g = get(node_group, nid, "")
-            cp, cn = get(group_coeffs, g, (cfg.scattering_coeff_par, cfg.scattering_coeff_nir))
-            coeff_par[nid] = cp
-            coeff_nir[nid] = cn
-        end
 
-        # Build per-node hit energies with optical properties.
-        hit_energy_par = _dict_zero(node_ids)
-        hit_energy_nir = _dict_zero(node_ids)
+        hit_energy = _dict_zero(node_ids)
         for nid in node_ids
             nh = get(all_hits, nid, 0)
             if nh > 0
-                hit_energy_par[nid] = get(current_par, nid, 0.0) * get(coeff_par, nid, cfg.scattering_coeff_par) / nh / 2.0
-                hit_energy_nir[nid] = get(current_nir, nid, 0.0) * get(coeff_nir, nid, cfg.scattering_coeff_nir) / nh / 2.0
+                hit_energy[nid] = get(current, nid, 0.0) * get(coeff_by_node, nid, default_coeff) / nh / 2.0
             end
         end
 
-        next_par = _dict_zero(node_ids)
-        next_nir = _dict_zero(node_ids)
+        next = _dict_zero(node_ids)
         for ((to, from), cnt) in pair_counts
-            next_par[to] = get(next_par, to, 0.0) + cnt * get(hit_energy_par, from, 0.0)
-            next_nir[to] = get(next_nir, to, 0.0) + cnt * get(hit_energy_nir, from, 0.0)
+            next[to] = get(next, to, 0.0) + cnt * get(hit_energy, from, 0.0)
         end
 
-        total_next_par = _sum_dict_values(next_par)
-        total_next_nir = _sum_dict_values(next_nir)
+        total_next = _sum_dict_values(next)
 
         for nid in node_ids
-            added_par[nid] = get(added_par, nid, 0.0) + get(next_par, nid, 0.0)
-            added_nir[nid] = get(added_nir, nid, 0.0) + get(next_nir, nid, 0.0)
+            added[nid] = get(added, nid, 0.0) + get(next, nid, 0.0)
         end
 
-        current_par = next_par
-        current_nir = next_nir
+        current = next
 
-        if total_next_par <= thr_par && total_next_nir <= thr_nir
+        if total_next <= thr
             converged = true
             break
         end
     end
+    return added, iterations, converged
+end
 
-    ScatteringResult(added_par, added_nir, iterations, converged)
+function compute_scattering_band(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode=:raycast,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode")
+    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
+    initial =
+        if initial_power_per_node === nothing
+            Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in node_ids)
+        else
+            Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
+        end
+    dflt = isnothing(default_coeff) ? _default_band_coeff(cfg, String(band)) : default_coeff
+    added, iterations, converged = _scattering_one_band(
+        initial,
+        pair_counts,
+        all_hits,
+        node_ids,
+        node_group,
+        group_coeffs,
+        cfg,
+        String(band),
+        dflt,
+    )
+    return (added_power_per_node=added, iterations=iterations, converged=converged)
+end
+
+function compute_scattering(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode=:raycast,
+)
+    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode")
+    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
+
+    initial_par = Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in node_ids)
+    initial_nir = Dict{Int,Float64}(nid => get(first.incident_nir_power_per_node, nid, 0.0) for nid in node_ids)
+
+    added_par, it_par, conv_par = _scattering_one_band(
+        initial_par,
+        pair_counts,
+        all_hits,
+        node_ids,
+        node_group,
+        group_coeffs,
+        cfg,
+        "PAR",
+        cfg.scattering_coeff_par,
+    )
+    added_nir, it_nir, conv_nir = _scattering_one_band(
+        initial_nir,
+        pair_counts,
+        all_hits,
+        node_ids,
+        node_group,
+        group_coeffs,
+        cfg,
+        "NIR",
+        cfg.scattering_coeff_nir,
+    )
+
+    ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)
 end
