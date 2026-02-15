@@ -1,24 +1,34 @@
 module ArchimedLight
 
-export Component, Scene,
-       Band, OpticalProps, SkyConfig, InterceptionConfig,
-       InterceptionResult,
-       add_component, set_optics!, compute_interception
-
-using Meshes
-
-include("geometry.jl")
-include("scene.jl")
-include("optics.jl")
+include("types.jl")
+include("io.jl")
 include("sky.jl")
-include("intercept.jl")
+include("turtle.jl")
+include("interception.jl")
+include("scattering.jl")
+include("pipeline.jl")
 
-# Optional IO layer backed by PlantGeom + MultiScaleTreeGraph
-include("io/opf.jl")
+export LightConfig
+export MeteoTable
+export SceneGeometry
+export SkyState
+export TurtleSector, TurtleGrid
+export DirectionalFluxes
+export FirstOrderResult
+export ScatteringResult
+export LightBudget
+export LightStepResult
 
-# Config loader and runner
-include("skysets.jl")
-include("config.jl")
-include("runner.jl")
+export read_scene
+export read_light_config
+export read_meteo
+export compute_sky
+export build_turtle
+export compute_directional_fluxes
+export compute_first_order
+export compute_scattering
+export integrate_light
+export run_light_step
+export run_light_series
 
-end # module
+end

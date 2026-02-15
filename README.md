@@ -1,34 +1,28 @@
-# ArchimedLight.jl (prototype)
+# ArchimedLight.jl
 
-A minimal Julia reimplementation of ARCHIMED's light interception core.
+Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
 
-Status: prototype for first-order (no multiple scattering) diffuse sky interception over a triangle mesh scene.
+## Current scope
+- Scene/config/meteo input pipeline
+- Sky + turtle discretization
+- First-order interception (CPU raster/z-buffer)
+- Iterative scattering (CPU reference)
+- Java parity harness (curated light-only fixtures)
 
-Quick start
+Energy balance, transpiration and photosynthesis are intentionally out of scope for now.
 
+## Core API
 ```julia
-using Pkg
-Pkg.activate(".")
-Pkg.develop(path=".") # if testing in place
 using ArchimedLight
 
-# Build a single square component
-scene = Scene()
-mesh = Mesh([Triangle(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0)),
-             Triangle(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0), Vec3(-0.5, 0.5, 0.0))])
-add_component(scene, "leaf", mesh)
-set_optics!("leaf", OpticalProps())
+cfg = read_light_config("config.yml")
+scene = read_scene(cfg.scene)
+meteo = read_meteo(cfg.meteo)
 
-sky = SkyConfig(count=16, PAR_Wm2=400.0, NIR_Wm2=400.0)
-cfg = InterceptionConfig(pixel_size=0.25, scattering=false)
-res = compute_interception(scene, sky, cfg)
-println(res)
+sky = compute_sky(first(meteo.rows), cfg)
+turtle = build_turtle(cfg, sky)
+fluxes = compute_directional_fluxes(sky, turtle, cfg)
+first_order = compute_first_order(scene, turtle, fluxes, cfg)
+scat = compute_scattering(scene, turtle, first_order, cfg)
+budget = integrate_light(first_order, scat, cfg)
 ```
-
-Roadmap
-- Multiple scattering (order-N) with reflectance/transmittance.
-- Sky discretizations matching 1/6/16/46/136/406 sector sets.
-- Solar position + direct beam handling.
-- Scene/format IO (OPS/OPF or a neutral format).
-- Acceleration structures (BVH) and threading.
-

@@ -1,0 +1,131 @@
+function integrate_light(first::FirstOrderResult, scat::Union{Nothing,ScatteringResult}, cfg::LightConfig)
+    ri_par_f_per_node = Dict{Int,Float64}()
+    ri_nir_f_per_node = Dict{Int,Float64}()
+    ri_par_0_q_per_node = Dict{Int,Float64}()
+    ri_nir_0_q_per_node = Dict{Int,Float64}()
+    ri_par_q_per_node = Dict{Int,Float64}()
+    ri_nir_q_per_node = Dict{Int,Float64}()
+
+    node_ids = collect(keys(first.projected_area_per_node))
+    for nid in node_ids
+        pa = max(get(first.projected_area_per_node, nid, 0.0), eps(Float64))
+        p0 = get(first.incident_par_power_per_node, nid, 0.0)
+        n0 = get(first.incident_nir_power_per_node, nid, 0.0)
+        ps = scat === nothing ? 0.0 : get(scat.added_par_power_per_node, nid, 0.0)
+        ns = scat === nothing ? 0.0 : get(scat.added_nir_power_per_node, nid, 0.0)
+
+        ri_par_f_per_node[nid] = (p0 + ps) / pa
+        ri_nir_f_per_node[nid] = (n0 + ns) / pa
+
+        # Unit duration by default. The full time integration is performed by callers if needed.
+        ri_par_0_q_per_node[nid] = p0
+        ri_nir_0_q_per_node[nid] = n0
+        ri_par_q_per_node[nid] = p0 + ps
+        ri_nir_q_per_node[nid] = n0 + ns
+    end
+
+    LightBudget(
+        ri_par_f_per_node,
+        ri_nir_f_per_node,
+        ri_par_0_q_per_node,
+        ri_nir_0_q_per_node,
+        ri_par_q_per_node,
+        ri_nir_q_per_node
+    )
+end
+
+function _turtle_cache_key(turtle::TurtleGrid, cfg::LightConfig)
+    h = hash((length(turtle.sectors), cfg.pixel_size, cfg.area_ratio))
+    for s in turtle.sectors
+        d = s.direction
+        h = hash((round(d[1], digits=8), round(d[2], digits=8), round(d[3], digits=8), s.source), h)
+    end
+    h
+end
+
+function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
+    n = length(turtle.sectors)
+    ids = [s.id for s in turtle.sectors]
+    pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
+    hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
+    for i in 1:n
+        par = zeros(Float64, n)
+        par[i] = 1.0
+        nir = zeros(Float64, n)
+        flux = DirectionalFluxes(ids, par, nir)
+        r = compute_first_order(scene, turtle, flux, cfg)
+        pa_by_sector[i] = r.incident_par_power_per_node
+        hits_by_sector[i] = r.hits_per_node
+    end
+    return pa_by_sector, hits_by_sector
+end
+
+function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::DirectionalFluxes)
+    node_ids = Set{Int}()
+    for d in pa_by_sector
+        for k in keys(d)
+            push!(node_ids, k)
+        end
+    end
+
+    projected_area_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
+    incident_par_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
+    incident_nir_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
+    hits_per_node = Dict{Int,Int}(id => 0 for id in node_ids)
+
+    for i in eachindex(pa_by_sector)
+        pf = fluxes.par[i]
+        nf = fluxes.nir[i]
+        if pf == 0.0 && nf == 0.0
+            continue
+        end
+
+        for (nid, pa) in pa_by_sector[i]
+            projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
+            incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + pf * pa
+            incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nf * pa
+        end
+        for (nid, h) in hits_by_sector[i]
+            hits_per_node[nid] = get(hits_per_node, nid, 0) + h
+        end
+    end
+
+    FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
+end
+
+function run_light_step(scene::SceneGeometry, meteo_row, cfg::LightConfig)
+    sky = compute_sky(meteo_row, cfg)
+    turtle = build_turtle(cfg, sky)
+    fluxes = compute_directional_fluxes(sky, turtle, cfg)
+    first = compute_first_order(scene, turtle, fluxes, cfg)
+    scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
+    budget = integrate_light(first, scat, cfg)
+    LightStepResult(sky, turtle, fluxes, first, scat, budget)
+end
+
+function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightConfig)
+    cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}}}}()
+    out = Vector{LightStepResult}(undef, length(meteo.rows))
+    for i in eachindex(meteo.rows)
+        sky = compute_sky(meteo.rows[i], cfg)
+        turtle = build_turtle(cfg, sky)
+        fluxes = compute_directional_fluxes(sky, turtle, cfg)
+
+        first =
+            if cfg.cache_radiation
+                key = _turtle_cache_key(turtle, cfg)
+                pa_by_sector, hits_by_sector =
+                    get!(cache, key) do
+                        _build_sector_responses(scene, turtle, cfg)
+                    end
+                _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes)
+            else
+                compute_first_order(scene, turtle, fluxes, cfg)
+            end
+
+        scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
+        budget = integrate_light(first, scat, cfg)
+        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget)
+    end
+    out
+end
