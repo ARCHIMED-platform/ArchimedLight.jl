@@ -1,4 +1,3 @@
-import CSV
 import PlantGeom
 import PlantMeteo
 import GeometryBasics
@@ -7,6 +6,7 @@ import YAML
 import Tables
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
+import Dates
 
 function _to_string_dict(x)
     out = Dict{String,Any}()
@@ -137,6 +137,25 @@ function _rows_to_namedtuples(table)
     Tables.rowtable(table) |> collect
 end
 
+function _meta_to_namedtuple(meta)
+    if meta isa NamedTuple
+        return meta
+    elseif meta isa AbstractDict
+        pairs = Pair{Symbol,Any}[Symbol(string(k)) => v for (k, v) in meta]
+        return (; pairs...)
+    else
+        return (;)
+    end
+end
+
+function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
+    pairs = Pair{Symbol,Any}[]
+    for k in (:latitude, :longitude, :altitude)
+        haskey(meta, k) && push!(pairs, k => getfield(meta, k))
+    end
+    isempty(pairs) ? row : merge(row, (; pairs...))
+end
+
 function read_meteo(path::AbstractString)
     weather, meta =
         try
@@ -148,9 +167,20 @@ function read_meteo(path::AbstractString)
             end
             (w, m)
         catch
-            f = CSV.File(path; comment="#", delim=';', ignorerepeated=true)
-            (f, (; file=path))
+            try
+                w = PlantMeteo.read_weather(path; date_format=Dates.DateFormat("yyyy/mm/dd"))
+                m = try
+                    PlantMeteo.metadata(w)
+                catch
+                    (; file=path)
+                end
+                (w, m)
+            catch
+                data, metadata_ = PlantMeteo.read_weather_(path)
+                (data, metadata_)
+            end
         end
-    rows = _rows_to_namedtuples(weather)
-    MeteoTable(rows, NamedTuple(meta))
+    meta_nt = merge((; file=path), _meta_to_namedtuple(meta))
+    rows = [_namedtuple_with_meta(r, meta_nt) for r in _rows_to_namedtuples(weather)]
+    MeteoTable(rows, meta_nt)
 end
