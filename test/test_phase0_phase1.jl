@@ -69,6 +69,7 @@ end
         end
         m
     end
+    to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
 
@@ -143,11 +144,121 @@ end
     expected_links_path = joinpath(fixture_path(f_links_stats), "expected", "log-nodelinks-stats-alldirs.csv")
     @test isfile(expected_links_path)
     expected_rows = read_java_csv(expected_links_path)
-    to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
     expected_hits = sort(Int[to_int(getproperty(r, :hits)) for r in expected_rows])
     expected_links = sort(Int[to_int(getproperty(r, :links)) for r in expected_rows])
     @test got_hits == expected_hits
     @test got_links == expected_links
+
+    function link_metrics_from_fixture_config(cfg_path::String)
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        row = first(meteo.rows)
+        sky = ArchimedLight.compute_sky(row, cfg)
+        turtle = ArchimedLight.build_turtle(cfg, sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+        first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+        pair_counts, sun_hits, node_ids, _ = ArchimedLight._pair_counts_for_scattering(scene, turtle, cfg)
+        all_hits = ArchimedLight._all_dir_hits_for_scattering(first_order, sun_hits, cfg, node_ids)
+
+        neighbours_by_node = Dict{Int,Set{Int}}()
+        hits_by_node = Dict{Int,Int}()
+        undirected_edges = Dict{Tuple{Int,Int},Int}()
+        for ((to, from), c) in pair_counts
+            c > 0 || continue
+            s = get!(neighbours_by_node, to) do
+                Set{Int}()
+            end
+            push!(s, from)
+            hits_by_node[to] = get(hits_by_node, to, 0) + c
+            e = to < from ? (to, from) : (from, to)
+            undirected_edges[e] = max(get(undirected_edges, e, 0), c)
+        end
+
+        return (
+            links=sort([length(v) for v in values(neighbours_by_node) if !isempty(v)]),
+            hits=sort([v for v in values(hits_by_node) if v > 0]),
+            all_hits=sort([v for v in values(all_hits) if v > 0]),
+            edge_counts=sort(collect(values(undirected_edges))),
+        )
+    end
+
+    for links_name in ("test-links2", "test-links3", "test-links4")
+        fx = fixtures[links_name]
+        metrics = link_metrics_from_fixture_config(fx.config_path)
+        expected_stats = read_java_csv(joinpath(fixture_path(fx), "expected", "log-nodelinks-stats-alldirs.csv"))
+        expected_dir = read_java_csv(joinpath(fixture_path(fx), "expected", "log-nodelinks-dir00.csv"))
+        expected_links = sort(Int[to_int(getproperty(r, :links)) for r in expected_stats])
+        expected_hits = sort(Int[to_int(getproperty(r, :hits)) for r in expected_stats])
+        expected_edge_counts = sort(Int[to_int(getproperty(r, :n)) for r in expected_dir])
+
+        @test metrics.links == expected_links
+        @test metrics.hits == expected_hits
+        @test metrics.edge_counts == expected_edge_counts
+    end
+
+    # Java fixture `test-links-stats` expects link statistics to be pixel-size invariant
+    # for the two configured resolutions. Current Julia raster/link extraction is not yet
+    # resolution-invariant here, so we track this explicitly as pending parity work.
+    links_stats_cfg = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml")
+    cfg_links_stats = ArchimedLight.read_light_config(links_stats_cfg)
+    cfg_links_stats_017 = ArchimedLight.LightConfig(
+        cfg_links_stats.scene,
+        cfg_links_stats.meteo,
+        cfg_links_stats.all_in_turtle,
+        cfg_links_stats.turtle_sectors,
+        0.17 / 100.0,
+        cfg_links_stats.area_ratio,
+        cfg_links_stats.scattering,
+        cfg_links_stats.scattering_max_iter,
+        cfg_links_stats.scattering_stop_ratio,
+        cfg_links_stats.scattering_coeff_par,
+        cfg_links_stats.scattering_coeff_nir,
+        cfg_links_stats.cache_radiation,
+        cfg_links_stats.raw,
+    )
+    cfg_links_stats_003 = ArchimedLight.LightConfig(
+        cfg_links_stats.scene,
+        cfg_links_stats.meteo,
+        cfg_links_stats.all_in_turtle,
+        cfg_links_stats.turtle_sectors,
+        0.03 / 100.0,
+        cfg_links_stats.area_ratio,
+        cfg_links_stats.scattering,
+        cfg_links_stats.scattering_max_iter,
+        cfg_links_stats.scattering_stop_ratio,
+        cfg_links_stats.scattering_coeff_par,
+        cfg_links_stats.scattering_coeff_nir,
+        cfg_links_stats.cache_radiation,
+        cfg_links_stats.raw,
+    )
+    function link_metrics_from_cfg(cfg::ArchimedLight.LightConfig)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        row = first(meteo.rows)
+        sky = ArchimedLight.compute_sky(row, cfg)
+        turtle = ArchimedLight.build_turtle(cfg, sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+        first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+        pair_counts, sun_hits, node_ids, _ = ArchimedLight._pair_counts_for_scattering(scene, turtle, cfg)
+        all_hits = ArchimedLight._all_dir_hits_for_scattering(first_order, sun_hits, cfg, node_ids)
+        neighbours_by_node = Dict{Int,Set{Int}}()
+        for ((to, from), c) in pair_counts
+            c > 0 || continue
+            s = get!(neighbours_by_node, to) do
+                Set{Int}()
+            end
+            push!(s, from)
+        end
+        (
+            links=sort([length(v) for v in values(neighbours_by_node) if !isempty(v)]),
+            all_hits=sort([v for v in values(all_hits) if v > 0]),
+        )
+    end
+    m_links_017 = link_metrics_from_cfg(cfg_links_stats_017)
+    m_links_003 = link_metrics_from_cfg(cfg_links_stats_003)
+    @test_broken m_links_017.links == m_links_003.links
+    @test_broken m_links_017.all_hits == m_links_003.all_hits
 
     f_div = fixtures["test-scattering-divergence"]
     cfg_div = ArchimedLight.read_light_config(f_div.config_path)
