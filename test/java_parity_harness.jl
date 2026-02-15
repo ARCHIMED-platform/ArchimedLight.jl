@@ -1,5 +1,6 @@
 import CSV
 import Tables
+import Dates
 
 struct ParityFixture
     name::String
@@ -186,6 +187,35 @@ function _to_degrees_if_radians(x)
     abs(x) <= 2pi + 1e-9 ? rad2deg(x) : x
 end
 
+function _parse_time_or_default(v)
+    s = strip(string(v))
+    if isempty(s)
+        return Dates.Time(0)
+    end
+    try
+        Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+    catch
+        try
+            Dates.Time(s, Dates.DateFormat("HH:MM"))
+        catch
+            Dates.Time(0)
+        end
+    end
+end
+
+function _step_duration_seconds(row)
+    names = propertynames(row)
+    if (:hour_start in names) && (:hour_end in names)
+        t0 = _parse_time_or_default(getproperty(row, :hour_start))
+        t1 = _parse_time_or_default(getproperty(row, :hour_end))
+        dt0 = Dates.DateTime(Dates.Date(2000, 1, 1), t0)
+        dt1 = Dates.DateTime(Dates.Date(2000, 1, 1), t1)
+        dt1 < dt0 && (dt1 += Dates.Day(1))
+        return Dates.value(dt1 - dt0) / 1000.0
+    end
+    return 1.0
+end
+
 function _hitcount_total_from_component_values(rows)
     total = 0
     for r in rows
@@ -220,6 +250,17 @@ end
 function fixture_parity_report(fx::ParityFixture; all_in_turtle=nothing, cache_radiation=nothing)
     step = run_fixture_once(fx; all_in_turtle=all_in_turtle, cache_radiation=cache_radiation)
     snap = parity_snapshot(step)
+    cfg = ArchimedLight.read_light_config(fx.config_path)
+    cfg = _with_overrides(cfg; all_in_turtle=all_in_turtle, cache_radiation=cache_radiation)
+    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    row = first(meteo.rows)
+    dt_seconds = _step_duration_seconds(row)
+    julia_scattering_total =
+        if step.scattering === nothing
+            0.0
+        else
+            sum(values(step.scattering.added_par_power_per_node)) * dt_seconds / 1e6
+        end
 
     component_expected_path = _expected_component_values_path(fx; all_in_turtle=all_in_turtle)
     scene_expected_path = _expected_scene_values_path(fx)
@@ -283,6 +324,7 @@ function fixture_parity_report(fx::ParityFixture; all_in_turtle=nothing, cache_r
         expected_sun_azimuth=expected_sun_az,
         expected_sun_elevation=expected_sun_el,
         expected_scattering_total=expected_scat_total,
+        julia_scattering_total=julia_scattering_total,
         paths=(
             component_values=component_expected_path,
             scene_values=scene_expected_path,

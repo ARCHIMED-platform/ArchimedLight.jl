@@ -45,23 +45,27 @@ end
 
 function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
     n = length(turtle.sectors)
-    ids = [s.id for s in turtle.sectors]
+    vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
     hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
     for i in 1:n
-        par = zeros(Float64, n)
-        par[i] = 1.0
-        nir = zeros(Float64, n)
-        flux = DirectionalFluxes(ids, par, nir)
-        r = compute_first_order(scene, turtle, flux, cfg)
-        pa_by_sector[i] = r.incident_par_power_per_node
-        hits_by_sector[i] = r.hits_per_node
+        pa_by_sector[i], hits_by_sector[i] = _rasterize_direction_java(
+            vertices,
+            faces,
+            face2node,
+            turtle.sectors[i].direction,
+            cfg,
+            plotbox,
+        )
     end
-    return pa_by_sector, hits_by_sector
+    return pa_by_sector, hits_by_sector, node_ids
 end
 
-function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::DirectionalFluxes)
+function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::DirectionalFluxes, node_ids_all)
     node_ids = Set{Int}()
+    for k in node_ids_all
+        push!(node_ids, k)
+    end
     for d in pa_by_sector
         for k in keys(d)
             push!(node_ids, k)
@@ -76,14 +80,18 @@ function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::Directi
     for i in eachindex(pa_by_sector)
         pf = fluxes.par[i]
         nf = fluxes.nir[i]
-        if pf == 0.0 && nf == 0.0
-            continue
-        end
+        active_flux = (pf != 0.0) || (nf != 0.0)
 
         for (nid, pa) in pa_by_sector[i]
-            projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-            incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + pf * pa
-            incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nf * pa
+            if active_flux
+                projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
+                if pf != 0.0
+                    incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + pf * pa
+                end
+                if nf != 0.0
+                    incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nf * pa
+                end
+            end
         end
         for (nid, h) in hits_by_sector[i]
             hits_per_node[nid] = get(hits_per_node, nid, 0) + h
@@ -104,7 +112,7 @@ function run_light_step(scene::SceneGeometry, meteo_row, cfg::LightConfig)
 end
 
 function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightConfig)
-    cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}}}}()
+    cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
     out = Vector{LightStepResult}(undef, length(meteo.rows))
     for i in eachindex(meteo.rows)
         sky = compute_sky(meteo.rows[i], cfg)
@@ -114,11 +122,11 @@ function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightCon
         first =
             if cfg.cache_radiation
                 key = _turtle_cache_key(turtle, cfg)
-                pa_by_sector, hits_by_sector =
+                pa_by_sector, hits_by_sector, node_ids =
                     get!(cache, key) do
                         _build_sector_responses(scene, turtle, cfg)
                     end
-                _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes)
+                _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes, node_ids)
             else
                 compute_first_order(scene, turtle, fluxes, cfg)
             end

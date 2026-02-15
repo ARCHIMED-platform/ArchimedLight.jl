@@ -30,7 +30,13 @@ function main()
     println("ArchimedLight parity report (baseline)")
     println("====================================")
 
-    for (name, all_turtle) in [("test-hitcount2", false), ("test-hitcount2", true), ("test-weighted-sun", nothing), ("test-scattering-one-plate", nothing)]
+    for (name, all_turtle) in [
+        ("test-hitcount2", false),
+        ("test-hitcount2", true),
+        ("test-weighted-sun", nothing),
+        ("test-scattering-one-plate", nothing),
+        ("test-scattering-two-plates", nothing),
+    ]
         fx = fixtures[name]
         rep = fixture_parity_report(fx; all_in_turtle=all_turtle)
         suffix = all_turtle === nothing ? "" : (all_turtle ? " [all_in_turtle=true]" : " [all_in_turtle=false]")
@@ -40,9 +46,8 @@ function main()
         _print_row(name, "total_hits", rep.snapshot.total_hits, rep.expected_hitcount_total)
         _print_row(name, "sun_azimuth_deg", rep.snapshot.sun_azimuth, rep.expected_sun_azimuth)
         _print_row(name, "sun_elevation_deg", rep.snapshot.sun_elevation, rep.expected_sun_elevation)
-        _print_row(name, "scattering_sum", rep.snapshot.total_par - rep.snapshot.total_par0, rep.expected_scattering_total)
+        _print_row(name, "scattering_sum", rep.julia_scattering_total, rep.expected_scattering_total)
     end
 end
 
 main()
-

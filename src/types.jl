@@ -24,6 +24,7 @@ struct SceneGeometry
     merged_mesh
     face2node::Vector{Int}
     total_area_per_node::Dict{Int,Float64}
+    node_group::Dict{Int,String}
     source_path::String
 end
 
@@ -84,4 +85,3 @@ struct LightStepResult
     scattering::Union{Nothing,ScatteringResult}
     budget::LightBudget
 end
-

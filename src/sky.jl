@@ -24,12 +24,15 @@ function _row_datetime(row)
         else
             "2000-01-01"
         end
-    hval =
+    hstart =
         if :hour_start in names
             getproperty(row, :hour_start)
+        elseif :hour in names
+            getproperty(row, :hour)
         else
             "12:00:00"
         end
+    hend = :hour_end in names ? getproperty(row, :hour_end) : nothing
 
     d =
         if dval isa Dates.Date
@@ -53,23 +56,37 @@ function _row_datetime(row)
             end
         end
 
-    t =
-        if hval isa Dates.Time
-            hval
-        else
-            s = strip(string(hval))
-            if isempty(s)
-                Dates.Time(12)
-            else
-                try
-                    Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
-                catch
-                    Dates.Time(12)
-                end
+    function parse_time(v)
+        if v isa Dates.Time
+            return v
+        end
+        s = strip(string(v))
+        if isempty(s)
+            return Dates.Time(12)
+        end
+        try
+            return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+        catch
+            try
+                return Dates.Time(s, Dates.DateFormat("HH:MM"))
+            catch
+                return Dates.Time(12)
             end
         end
+    end
 
-    Dates.DateTime(d, t)
+    t0 = parse_time(hstart)
+    t =
+        if isnothing(hend)
+            t0
+        else
+            t1 = parse_time(hend)
+            dt0 = Dates.DateTime(d, t0)
+            dt1 = Dates.DateTime(d, t1)
+            dt1 < dt0 && (dt1 += Dates.Day(1))
+            dt0 + Dates.Millisecond(round(Int, Dates.value(dt1 - dt0) / 2))
+        end
+    t isa Dates.DateTime ? t : Dates.DateTime(d, t)
 end
 
 function _solar_position_deg(dt::Dates.DateTime, latitude_deg::Float64, longitude_deg::Float64=0.0)

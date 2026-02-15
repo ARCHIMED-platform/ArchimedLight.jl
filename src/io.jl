@@ -55,6 +55,7 @@ function read_light_config(path::AbstractString)
     raw = YAML.load_file(path)
     d = raw isa AbstractDict ? _to_string_dict(raw) : Dict{String,Any}()
     base = dirname(path)
+    d["__base_dir"] = base
 
     scene_rel = _cfg_get(d, ["scene", "scene_file"], "")
     meteo_rel = _cfg_get(d, ["meteo", "meteo_file"], "")
@@ -65,8 +66,13 @@ function read_light_config(path::AbstractString)
     propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
 
     all_in_turtle = _as_bool(_cfg_get(propsd, ["all_in_turtle"], get(d, "all_in_turtle", nothing)), false)
-    turtle_sectors = _as_int(_cfg_get(propsd, ["turtle_nb_sectors", "turtle_sectors"], get(d, "turtle_sectors", nothing)), 46)
-    pixel_size = _as_float(_cfg_get(propsd, ["pixel_size"], get(d, "pixel_size", nothing)), 0.25)
+    turtle_sectors = _as_int(
+        _cfg_get(propsd, ["turtle_nb_sectors", "turtle_sectors", "sky_sectors"], _cfg_get(d, ["turtle_sectors", "sky_sectors"], nothing)),
+        46
+    )
+    # Java config uses centimeters; internal computations use meters.
+    pixel_size_cm = _as_float(_cfg_get(propsd, ["pixel_size"], get(d, "pixel_size", nothing)), 0.25)
+    pixel_size = pixel_size_cm / 100.0
     area_ratio = _as_bool(_cfg_get(propsd, ["area_ratio"], get(d, "area_ratio", nothing)), true)
     scattering = _as_bool(_cfg_get(propsd, ["scattering"], get(d, "scattering", nothing)), true)
     scattering_max_iter = _as_int(
@@ -104,8 +110,74 @@ function _triangle_area3d(p1, p2, p3)
     0.5 * norm(cross(v1, v2))
 end
 
+function _node_attrs(node)
+    try
+        getfield(node, :attributes)
+    catch
+        nothing
+    end
+end
+
+function _node_children(node)
+    try
+        getfield(node, :children)
+    catch
+        nothing
+    end
+end
+
+function _has_attr(attrs, key::Symbol)
+    attrs isa AbstractDict || return false
+    haskey(attrs, key) || haskey(attrs, String(key))
+end
+
+function _collect_mesh_nodes!(node, meshes, node_ids, node_group, next_id::Base.RefValue{Int}, current_group::String="")
+    attrs = _node_attrs(node)
+    group = current_group
+    if attrs isa AbstractDict
+        if haskey(attrs, :functional_group)
+            group = string(attrs[:functional_group])
+        elseif haskey(attrs, "functional_group")
+            group = string(attrs["functional_group"])
+        end
+    end
+
+    if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)
+        push!(meshes, PlantGeom.refmesh_to_mesh(node))
+        next_id[] += 1
+        push!(node_ids, next_id[])
+        node_group[next_id[]] = group
+    end
+
+    children = _node_children(node)
+    if children !== nothing
+        for ch in children
+            _collect_mesh_nodes!(ch, meshes, node_ids, node_group, next_id, group)
+        end
+    end
+end
+
+function _build_merged_mesh_with_map_local(mtg)
+    meshes = Any[]
+    mesh_node_ids = Int[]
+    node_group = Dict{Int,String}()
+    next_id = Ref(0)
+    _collect_mesh_nodes!(mtg, meshes, mesh_node_ids, node_group, next_id)
+
+    isempty(meshes) && error("No geometry meshes found in scene.")
+
+    merged_mesh = length(meshes) == 1 ? first(meshes) : PlantGeom.merge_simple_meshes(meshes)
+
+    face2node = Int[]
+    for (mi, mesh) in enumerate(meshes)
+        nfaces = length(GeometryBasics.decompose(PlantGeom.Face3, mesh))
+        append!(face2node, fill(mesh_node_ids[mi], nfaces))
+    end
+    merged_mesh, face2node, node_group
+end
+
 function _build_scene_geometry(mtg, source_path::AbstractString)
-    merged_mesh, face2node = PlantGeom.build_merged_mesh_with_map(mtg; filter_fun=node -> !isnothing(node.geometry))
+    merged_mesh, face2node, node_group = _build_merged_mesh_with_map_local(mtg)
 
     verts = GeometryBasics.decompose(PlantGeom.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
@@ -115,14 +187,62 @@ function _build_scene_geometry(mtg, source_path::AbstractString)
         area = _triangle_area3d(verts[f[1]], verts[f[2]], verts[f[3]])
         node_area[n] = get(node_area, n, 0.0) + area
     end
-    SceneGeometry(mtg, merged_mesh, face2node, node_area, String(source_path))
+    SceneGeometry(mtg, merged_mesh, face2node, node_area, node_group, String(source_path))
+end
+
+function _normalize_ops_lines(lines::Vector{String})
+    out = String[]
+    for line in lines
+        s = replace(line, '\r' => "")
+        st = strip(s)
+        if isempty(st) || startswith(st, "#")
+            push!(out, s)
+            continue
+        end
+
+        if startswith(st, "T ")
+            push!(out, join(split(st), " "))
+            continue
+        end
+
+        toks = split(st)
+        if length(toks) >= 10 && occursin(r"\.(opf|gwa)$"i, toks[3])
+            # Java reader interprets OPS plant rows as:
+            # sceneId plantId file x y z azimuth inclination stemTwist <ignored>
+            # while PlantGeom expects:
+            # sceneId plantId file x y z scale inclinationAzimut inclinationAngle rotation
+            # Use scale=0.01 (cm to m conversion) and remap angle fields to match Java behavior.
+            row = [toks[1], toks[2], toks[3], toks[4], toks[5], toks[6], "0.01", toks[7], toks[8], toks[9]]
+            push!(out, join(row, '\t'))
+        else
+            push!(out, s)
+        end
+    end
+    out
+end
+
+function _read_ops_relaxed(path::AbstractString)
+    lines = readlines(path)
+    normalized = _normalize_ops_lines(lines)
+
+    tmp_path = ""
+    mtg = mktemp(dirname(path)) do p, io
+        tmp_path = p
+        write(io, join(normalized, "\n"))
+        write(io, "\n")
+        flush(io)
+        PlantGeom.read_ops(p)
+    end
+
+    isfile(tmp_path) && rm(tmp_path; force=true)
+    mtg
 end
 
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
     mtg =
         if ext == ".ops"
-            PlantGeom.read_ops(path)
+            _read_ops_relaxed(path)
         elseif ext == ".opf"
             PlantGeom.read_opf(path)
         elseif ext == ".gwa"
