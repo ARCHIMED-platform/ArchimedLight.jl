@@ -142,6 +142,36 @@ end
     @test_throws ErrorException ArchimedLight.run_light_step(scene, row, cfg_bad)
 end
 
+@testset "Clearness/global parity" begin
+    root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-clearness-global")
+    cfg = ArchimedLight.read_light_config(joinpath(root, "clearness", "config.yml"))
+    meteo_c = ArchimedLight.read_meteo(joinpath(root, "clearness", "meteo.csv"))
+    meteo_g = ArchimedLight.read_meteo(joinpath(root, "global", "meteo.csv"))
+    @test length(meteo_c.rows) == length(meteo_g.rows)
+    @test !isempty(meteo_c.rows)
+
+    # Java meteo conventions leave date empty after the first line.
+    # We forward-fill so day-of-year dependent sky computations remain stable.
+    @test getproperty(meteo_c.rows[1], :date) !== missing
+    @test getproperty(meteo_c.rows[2], :date) == getproperty(meteo_c.rows[1], :date)
+
+    for i in eachindex(meteo_c.rows)
+        sky_c = ArchimedLight.compute_sky(meteo_c.rows[i], cfg)
+        sky_g = ArchimedLight.compute_sky(meteo_g.rows[i], cfg)
+
+        row_g = meteo_g.rows[i]
+        global_ref =
+            if :RI_SW_f in propertynames(row_g)
+                Float64(getproperty(row_g, :RI_SW_f))
+            else
+                Float64(getproperty(row_g, :global))
+            end
+        @test abs((sky_c.ri_par_f + sky_c.ri_nir_f) - global_ref) < 2e-4
+        @test abs((sky_g.ri_par_f + sky_g.ri_nir_f) - global_ref) < 2e-9
+        @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.03
+    end
+end
+
 @testset "Parity reports" begin
     relerr(a, b) = abs(a - b) / max(abs(b), eps(Float64))
     function max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
@@ -242,8 +272,8 @@ end
         # Java intent: pavement irradiance is effectively uniform with area-ratio correction.
         @test got_std / max(abs(got_mean), eps(Float64)) < 1e-8
         @test exp_std / max(abs(exp_mean), eps(Float64)) < 1e-5
-        # Absolute irradiance still depends on sky parametrization; keep a coarse parity envelope.
-        @test relerr(got_mean, exp_mean) < 0.05
+        # Java sky conversion is now matched closely.
+        @test relerr(got_mean, exp_mean) < 1e-5
 
         area_ratio_metrics[area_name] = (got_mean, got_std, exp_mean, exp_std)
     end
