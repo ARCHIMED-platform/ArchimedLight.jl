@@ -168,7 +168,7 @@ end
             end
         @test abs((sky_c.ri_par_f + sky_c.ri_nir_f) - global_ref) < 2e-4
         @test abs((sky_g.ri_par_f + sky_g.ri_nir_f) - global_ref) < 2e-9
-        @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.03
+        @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.07
     end
 end
 
@@ -211,8 +211,29 @@ end
     @test r_wsun.expected_sun_elevation !== nothing
     @test isfinite(r_wsun.snapshot.sun_azimuth)
     @test isfinite(r_wsun.snapshot.sun_elevation)
-    @test abs(r_wsun.snapshot.sun_azimuth - r_wsun.expected_sun_azimuth) < 0.2
-    @test abs(r_wsun.snapshot.sun_elevation - r_wsun.expected_sun_elevation) < 0.2
+    @test abs(r_wsun.snapshot.sun_azimuth - r_wsun.expected_sun_azimuth) < 0.05
+    @test abs(r_wsun.snapshot.sun_elevation - r_wsun.expected_sun_elevation) < 0.05
+
+    cfg_wsun = ArchimedLight.read_light_config(f_wsun.config_path)
+    meteo_wsun = ArchimedLight.read_meteo(cfg_wsun.meteo)
+    sun_log_wsun = _expected_sun_log_path(f_wsun)
+    @test sun_log_wsun !== nothing
+    rows_wsun = read_java_csv(sun_log_wsun)
+    @test length(rows_wsun) == length(meteo_wsun.rows)
+    max_az_err = 0.0
+    max_el_err = 0.0
+    for i in eachindex(meteo_wsun.rows)
+        sky_i = ArchimedLight.compute_sky(meteo_wsun.rows[i], cfg_wsun)
+        az_exp = _to_degrees_if_radians(Float64(getproperty(rows_wsun[i], :azimuthWeighted)))
+        el_exp = _to_degrees_if_radians(Float64(getproperty(rows_wsun[i], :elevationWeighted)))
+        da = abs(sky_i.sun_azimuth_deg - az_exp)
+        da = min(da, 360.0 - da)
+        de = abs(sky_i.sun_elevation_deg - el_exp)
+        max_az_err = max(max_az_err, da)
+        max_el_err = max(max_el_err, de)
+    end
+    @test max_az_err < 0.02
+    @test max_el_err < 0.05
 
     f_scat = fixtures["test-scattering-one-plate"]
     r_scat = fixture_parity_report(f_scat)

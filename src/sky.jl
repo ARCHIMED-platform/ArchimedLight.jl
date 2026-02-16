@@ -229,29 +229,197 @@ function _as_degrees_if_radians(x::Float64)
     abs(x) <= 2pi + 1e-9 ? rad2deg(x) : x
 end
 
+function _dict_float_or_nan(d, key::String)
+    d isa AbstractDict || return NaN
+    haskey(d, key) || return NaN
+    v = d[key]
+    v isa Number && return Float64(v)
+    v === missing && return NaN
+    try
+        return parse(Float64, string(v))
+    catch
+        return NaN
+    end
+end
+
+function _cfg_radiation_timestep_hours(cfg::LightConfig)
+    raw = cfg.raw
+    props = get(raw, "prop", nothing)
+    mins = _dict_float_or_nan(raw, "radiation_timestep")
+    isnan(mins) && (mins = _dict_float_or_nan(props, "radiation_timestep"))
+    isnan(mins) && (mins = 15.0)
+    mins <= 0.0 && (mins = 15.0)
+    mins / 60.0
+end
+
+function _java_sunrise_sunset_hours(latitude_rad::Float64, doy::Int)
+    decl = _java_declination(doy)
+    hour_angle = _java_sunset_hour_angle(latitude_rad, decl)
+    ut = hour_angle / deg2rad(15.0)
+    tst = _java_equation_of_time(doy)
+    rise = 12.0 - tst - ut
+    set = 12.0 - tst + ut
+    return rise, set
+end
+
+function _sun_direction_from_az_el_deg(azimuth_deg::Float64, elevation_deg::Float64)
+    az = deg2rad(azimuth_deg)
+    el = deg2rad(elevation_deg)
+    x = cos(el) * sin(az)
+    y = cos(el) * cos(az)
+    z = sin(el)
+    return x, y, z
+end
+
+function _az_el_from_direction_deg(x::Float64, y::Float64, z::Float64)
+    n = sqrt(x * x + y * y + z * z)
+    n <= 0.0 && return (0.0, -90.0)
+    xn, yn, zn = x / n, y / n, z / n
+    az = atan(xn, yn)
+    az < 0.0 && (az += 2pi)
+    return rad2deg(az), rad2deg(asin(clamp(zn, -1.0, 1.0)))
+end
+
+function _java_substeps_v2(date::Dates.Date, start_h::Float64, end_h::Float64, timestep_h::Float64, latitude_rad::Float64)
+    timestep_h = max(timestep_h, 1e-6)
+    end_h < start_h && (end_h += 24.0)
+
+    substeps = NamedTuple[]
+    start_day = floor(Int, start_h / 24.0)
+    end_day = floor(Int, (end_h - eps(Float64)) / 24.0)
+    for day_off in start_day:end_day
+        day_abs0 = 24.0 * day_off
+        seg_abs_start = max(start_h, day_abs0)
+        seg_abs_end = min(end_h, day_abs0 + 24.0)
+        seg_abs_end <= seg_abs_start && continue
+
+        d = date + Dates.Day(day_off)
+        doy = Dates.dayofyear(d)
+        rise, set = _java_sunrise_sunset_hours(latitude_rad, doy)
+
+        local_start = seg_abs_start - day_abs0
+        local_end = seg_abs_end - day_abs0
+        s = max(local_start, rise)
+        e = min(local_end, set)
+        e <= s && continue
+
+        step_duration = e - s
+        sub_count = max(1, ceil(Int, step_duration / timestep_h))
+        sub_duration = step_duration / sub_count
+        h = s
+        for _ in 1:sub_count
+            push!(substeps, (doy=doy, start=h, stop=h + sub_duration, sun_pos=h + sub_duration / 2, duration=sub_duration))
+            h += sub_duration
+        end
+    end
+
+    return substeps
+end
+
+function _midpoint_sun_position_deg(date::Dates.Date, start_h::Float64, end_h::Float64, latitude_rad::Float64)
+    end_h < start_h && (end_h += 24.0)
+    mid = (start_h + end_h) / 2.0
+    day_off = floor(Int, mid / 24.0)
+    doy = Dates.dayofyear(date + Dates.Day(day_off))
+    local_mid = mid - 24.0 * day_off
+    _java_sun_position_deg(doy, latitude_rad, local_mid)
+end
+
+function _auto_sun_and_direct_fraction(
+    date::Dates.Date,
+    start_h::Float64,
+    end_h::Float64,
+    latitude_rad::Float64,
+    timestep_h::Float64,
+    ri_sw::Float64,
+    clearness::Float64,
+    global_from_input::Bool,
+    clearness_provided::Bool,
+)
+    substeps = _java_substeps_v2(date, start_h, end_h, timestep_h, latitude_rad)
+    sx = 0.0
+    sy = 0.0
+    sz = 0.0
+    total_direct_weight = 0.0
+    total_direct_energy = 0.0
+    total_diffuse_energy = 0.0
+
+    for ss in substeps
+        global_w =
+            if global_from_input
+                max(ri_sw, 0.0)
+            elseif clearness_provided
+                _global_wm2_from_clearness(clearness, latitude_rad, ss.doy, ss.start, ss.stop)
+            else
+                max(ri_sw, 0.0)
+            end
+
+        clearness_sub =
+            if clearness_provided
+                clearness
+            else
+                _clearness_from_global_wm2(global_w, latitude_rad, ss.doy, ss.start, ss.stop)
+            end
+
+        sun_az_sub, sun_el_sub = _java_sun_position_deg(ss.doy, latitude_rad, ss.sun_pos)
+        diffuse_w, direct_w = _partition_global_hourly(global_w, clearness_sub, deg2rad(sun_el_sub))
+        total_diffuse_energy += diffuse_w * ss.duration
+        total_direct_energy += direct_w * ss.duration
+
+        if direct_w > 0.0
+            x, y, z = _sun_direction_from_az_el_deg(sun_az_sub, sun_el_sub)
+            sx += x * direct_w
+            sy += y * direct_w
+            sz += z * direct_w
+            total_direct_weight += direct_w
+        end
+    end
+
+    sun_az, sun_el =
+        if total_direct_weight > 0.0
+            _az_el_from_direction_deg(sx, sy, sz)
+        else
+            _midpoint_sun_position_deg(date, start_h, end_h, latitude_rad)
+        end
+
+    total_energy = total_direct_energy + total_diffuse_energy
+    direct_fraction =
+        if total_energy > 0.0
+            clamp(total_direct_energy / total_energy, 0.0, 1.0)
+        else
+            # Nighttime or empty daylight interval.
+            diffuse_w, direct_w = _partition_global_hourly(max(ri_sw, 0.0), clearness, deg2rad(sun_el))
+            tw = diffuse_w + direct_w
+            tw > 0.0 ? clamp(direct_w / tw, 0.0, 1.0) : 0.0
+        end
+
+    return sun_az, sun_el, direct_fraction
+end
+
 function compute_sky(meteo_row, cfg::LightConfig)
-    ri_sw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
+    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
     ri_par = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)
     ri_nir = _row_value(meteo_row, [:RI_NIR_f, :NIR, :nir], NaN)
+    ri_sw = ri_sw_raw
+    global_from_input = !isnan(ri_sw_raw) || !isnan(ri_par) || !isnan(ri_nir)
 
-    clearness = _row_value(meteo_row, [:clearness, :Kt], NaN)
+    clearness_raw = _row_value(meteo_row, [:clearness, :Kt], NaN)
+    clearness_provided = !isnan(clearness_raw)
+    clearness = clearness_raw
     latitude_deg = _row_value(meteo_row, [:latitude, :lat], 0.0)
     latitude_rad = deg2rad(latitude_deg)
     date = _row_date(meteo_row)
     doy = Dates.dayofyear(date)
     start_h, end_h = _row_step_hours(meteo_row)
-    mid_h = (start_h + end_h) / 2.0
 
     sun_azimuth = _row_value(meteo_row, [:sun_azimut, :sun_azimuth], NaN)
     sun_elevation = _row_value(meteo_row, [:sun_elevation], NaN)
+    sun_provided = !isnan(sun_azimuth) && !isnan(sun_elevation)
     if !isnan(sun_azimuth)
         sun_azimuth = _as_degrees_if_radians(sun_azimuth)
     end
     if !isnan(sun_elevation)
         sun_elevation = _as_degrees_if_radians(sun_elevation)
-    end
-    if isnan(sun_azimuth) || isnan(sun_elevation)
-        sun_azimuth, sun_elevation = _java_sun_position_deg(doy, latitude_rad, mid_h)
     end
 
     if isnan(ri_sw)
@@ -272,6 +440,22 @@ function compute_sky(meteo_row, cfg::LightConfig)
         clearness = _clearness_from_global_wm2(ri_sw, latitude_rad, doy, start_h, end_h)
     end
 
+    auto_sun_az, auto_sun_el, auto_direct_fraction = _auto_sun_and_direct_fraction(
+        date,
+        start_h,
+        end_h,
+        latitude_rad,
+        _cfg_radiation_timestep_hours(cfg),
+        ri_sw,
+        clearness,
+        global_from_input,
+        clearness_provided,
+    )
+    if !sun_provided
+        sun_azimuth = auto_sun_az
+        sun_elevation = auto_sun_el
+    end
+
     if isnan(ri_par) && isnan(ri_nir)
         ri_par = _SOLAR_TO_PAR * ri_sw
         ri_nir = _SOLAR_TO_NIR * ri_sw
@@ -286,9 +470,7 @@ function compute_sky(meteo_row, cfg::LightConfig)
         if !isnan(explicit_direct)
             clamp(explicit_direct, 0.0, 1.0)
         else
-            diffuse_w, direct_w = _partition_global_hourly(max(ri_sw, 0.0), clearness, deg2rad(sun_elevation))
-            total_w = direct_w + diffuse_w
-            total_w > 0.0 ? clamp(direct_w / total_w, 0.0, 1.0) : 0.0
+            auto_direct_fraction
         end
     diffuse_fraction = 1.0 - direct_fraction
 
