@@ -26,6 +26,7 @@ struct SceneGeometry
     total_area_per_node::Dict{Int,Float64}
     node_group::Dict{Int,String}
     source_path::String
+    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}}
 end
 
 struct SkyState

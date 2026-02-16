@@ -177,6 +177,10 @@ function _build_merged_mesh_with_map_local(mtg)
 end
 
 function _build_scene_geometry(mtg, source_path::AbstractString)
+    _build_scene_geometry(mtg, source_path, nothing)
+end
+
+function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
     merged_mesh, face2node, node_group = _build_merged_mesh_with_map_local(mtg)
 
     verts = GeometryBasics.decompose(PlantGeom.Point3, merged_mesh)
@@ -187,7 +191,7 @@ function _build_scene_geometry(mtg, source_path::AbstractString)
         area = _triangle_area3d(verts[f[1]], verts[f[2]], verts[f[3]])
         node_area[n] = get(node_area, n, 0.0) + area
     end
-    SceneGeometry(mtg, merged_mesh, face2node, node_area, node_group, String(source_path))
+    SceneGeometry(mtg, merged_mesh, face2node, node_area, node_group, String(source_path), scene_xy_bounds)
 end
 
 function _normalize_ops_lines(lines::Vector{String})
@@ -208,11 +212,13 @@ function _normalize_ops_lines(lines::Vector{String})
         toks = split(st)
         if length(toks) >= 10 && occursin(r"\.(opf|gwa)$"i, toks[3])
             # Java reader interprets OPS plant rows as:
-            # sceneId plantId file x y z azimuth inclination stemTwist <ignored>
+            # sceneId plantId file x y z azimuth inclination stemTwist <ignored>,
             # while PlantGeom expects:
             # sceneId plantId file x y z scale inclinationAzimut inclinationAngle rotation
-            # Use scale=0.01 (cm to m conversion) and remap angle fields to match Java behavior.
-            row = [toks[1], toks[2], toks[3], toks[4], toks[5], toks[6], "0.01", toks[7], toks[8], toks[9]]
+            # Java ignores OPS scale. For parity with current PlantGeom readers:
+            # keep OPF at scale=1.0, and keep historical GWA cm->m conversion (0.01).
+            scale = endswith(lowercase(toks[3]), ".gwa") ? "0.01" : "1.0"
+            row = [toks[1], toks[2], toks[3], toks[4], toks[5], toks[6], scale, toks[7], toks[8], toks[9]]
             push!(out, join(row, '\t'))
         else
             push!(out, s)
@@ -238,10 +244,38 @@ function _read_ops_relaxed(path::AbstractString)
     mtg
 end
 
+function _ops_scene_xy_bounds(path::AbstractString)
+    lines = readlines(path)
+    for line in lines
+        s = strip(replace(line, '\r' => ""))
+        if isempty(s) || startswith(s, "#")
+            continue
+        end
+        if startswith(s, "T")
+            toks = split(s)
+            length(toks) < 6 && return nothing
+            try
+                x0 = parse(Float64, toks[2])
+                y0 = parse(Float64, toks[3])
+                xsize = parse(Float64, toks[5])
+                ysize = parse(Float64, toks[6])
+                x1 = x0 + xsize
+                y1 = y0 + ysize
+                return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            catch
+                return nothing
+            end
+        end
+    end
+    nothing
+end
+
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
+    scene_xy_bounds = nothing
     mtg =
         if ext == ".ops"
+            scene_xy_bounds = _ops_scene_xy_bounds(path)
             _read_ops_relaxed(path)
         elseif ext == ".opf"
             PlantGeom.read_opf(path)
@@ -250,7 +284,7 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
         else
             error("Unsupported scene extension: $ext")
         end
-    _build_scene_geometry(mtg, path)
+    _build_scene_geometry(mtg, path, scene_xy_bounds)
 end
 
 function _rows_to_namedtuples(table)

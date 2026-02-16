@@ -46,6 +46,10 @@ function _cfg_plot_paving(cfg::LightConfig)
 end
 
 function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
+    if scene.scene_xy_bounds !== nothing
+        return scene.scene_xy_bounds
+    end
+
     attrs =
         if hasproperty(scene.mtg, :attributes)
             getfield(scene.mtg, :attributes)
