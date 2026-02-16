@@ -1,5 +1,10 @@
 import Dates
 
+const _SOLAR_CONSTANT_MJ_M2_MIN = 0.0820
+const _CENTER_OF_SOLAR_DISK_RAD = deg2rad(-0.83)
+const _SOLAR_TO_PAR = 0.48
+const _SOLAR_TO_NIR = 0.52
+
 function _row_value(row, candidates::Vector{Symbol}, default::Float64)
     names = propertynames(row)
     for c in candidates
@@ -16,159 +21,274 @@ function _row_value(row, candidates::Vector{Symbol}, default::Float64)
     return default
 end
 
-function _row_datetime(row)
+function _row_time_value(row, candidates::Vector{Symbol}, default::Dates.Time)
     names = propertynames(row)
-    dval =
-        if :date in names
-            getproperty(row, :date)
-        else
-            "2000-01-01"
-        end
-    hstart =
-        if :hour_start in names
-            getproperty(row, :hour_start)
-        elseif :hour in names
-            getproperty(row, :hour)
-        else
-            "12:00:00"
-        end
-    hend = :hour_end in names ? getproperty(row, :hour_end) : nothing
-
-    d =
-        if dval isa Dates.Date
-            dval
-        elseif dval isa Dates.DateTime
-            Dates.Date(dval)
-        else
-            s = strip(string(dval))
-            if isempty(s)
-                Dates.Date(2000, 1, 1)
-            else
+    for c in candidates
+        if c in names
+            v = getproperty(row, c)
+            v === missing && continue
+            if v isa Dates.Time
+                return v
+            elseif v isa Dates.DateTime
+                return Dates.Time(v)
+            end
+            s = strip(string(v))
+            isempty(s) && continue
+            try
+                return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+            catch
                 try
-                    Dates.Date(s, Dates.DateFormat("yyyy/mm/dd"))
+                    return Dates.Time(s, Dates.DateFormat("HH:MM"))
                 catch
-                    try
-                        Dates.Date(s, Dates.DateFormat("yyyy-mm-dd"))
-                    catch
-                        Dates.Date(2000, 1, 1)
-                    end
                 end
             end
         end
+    end
+    return default
+end
 
-    function parse_time(v)
-        if v isa Dates.Time
-            return v
-        end
-        s = strip(string(v))
-        if isempty(s)
-            return Dates.Time(12)
-        end
+function _parse_date_value(v, default::Dates.Date)
+    v === missing && return default
+    if v isa Dates.Date
+        return v
+    elseif v isa Dates.DateTime
+        return Dates.Date(v)
+    end
+    s = strip(string(v))
+    isempty(s) && return default
+    lowercase(s) == "missing" && return default
+    try
+        return Dates.Date(s, Dates.DateFormat("yyyy/mm/dd"))
+    catch
         try
-            return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+            return Dates.Date(s, Dates.DateFormat("yyyy-mm-dd"))
         catch
-            try
-                return Dates.Time(s, Dates.DateFormat("HH:MM"))
-            catch
-                return Dates.Time(12)
-            end
+            return default
         end
     end
+end
 
-    t0 = parse_time(hstart)
-    t =
-        if isnothing(hend)
-            t0
+_to_decimal_hour(t::Dates.Time) = Dates.hour(t) + Dates.minute(t) / 60 + Dates.second(t) / 3600
+
+function _row_date(meteo_row)
+    names = propertynames(meteo_row)
+    if :date in names
+        return _parse_date_value(getproperty(meteo_row, :date), Dates.Date(2000, 1, 1))
+    end
+    if :dayofyear in names
+        doy = Int(round(_row_value(meteo_row, [:dayofyear], 1.0)))
+        year = Int(round(_row_value(meteo_row, [:year], 2000.0)))
+        doy = clamp(doy, 1, 366)
+        return Dates.Date(year, 1, 1) + Dates.Day(doy - 1)
+    end
+    return Dates.Date(2000, 1, 1)
+end
+
+function _row_step_hours(meteo_row)
+    t0 = _row_time_value(meteo_row, [:hour_start, :hour], Dates.Time(12))
+    t1 = _row_time_value(meteo_row, [:hour_end], t0)
+
+    start_h = _to_decimal_hour(t0)
+    end_h = _to_decimal_hour(t1)
+    end_h < start_h && (end_h += 24.0)
+
+    if end_h == start_h
+        duration = _row_value(meteo_row, [:duration], NaN)
+        if isfinite(duration) && duration > 0.0
+            # Duration column is usually in hours; allow second-based values as a fallback.
+            end_h += duration > 24 ? duration / 3600.0 : duration
         else
-            t1 = parse_time(hend)
-            dt0 = Dates.DateTime(d, t0)
-            dt1 = Dates.DateTime(d, t1)
-            dt1 < dt0 && (dt1 += Dates.Day(1))
-            dt0 + Dates.Millisecond(round(Int, Dates.value(dt1 - dt0) / 2))
+            end_h += 1e-6
         end
-    t isa Dates.DateTime ? t : Dates.DateTime(d, t)
-end
-
-function _solar_position_deg(dt::Dates.DateTime, latitude_deg::Float64, longitude_deg::Float64=0.0)
-    # Lightweight solar geometry approximation suitable for fallback meteo files.
-    n = Dates.dayofyear(Dates.Date(dt))
-    hour = Dates.hour(dt) + Dates.minute(dt) / 60 + Dates.second(dt) / 3600
-
-    γ = 2pi / 365 * (n - 1 + (hour - 12) / 24)
-    eqtime = 229.18 * (
-        0.000075 + 0.001868 * cos(γ) - 0.032077 * sin(γ) -
-        0.014615 * cos(2γ) - 0.040849 * sin(2γ)
-    )
-    decl = (
-        0.006918 - 0.399912 * cos(γ) + 0.070257 * sin(γ) -
-        0.006758 * cos(2γ) + 0.000907 * sin(2γ) -
-        0.002697 * cos(3γ) + 0.00148 * sin(3γ)
-    )
-
-    # Assume meteo times are local solar-ish time if timezone is unavailable.
-    time_offset_min = eqtime + 4 * longitude_deg
-    tst = hour * 60 + time_offset_min
-    ha = deg2rad(tst / 4 - 180)
-
-    φ = deg2rad(latitude_deg)
-    cos_zenith = clamp(sin(φ) * sin(decl) + cos(φ) * cos(decl) * cos(ha), -1.0, 1.0)
-    zen = acos(cos_zenith)
-    elev = 90.0 - rad2deg(zen)
-
-    y = sin(ha)
-    x = cos(ha) * sin(φ) - tan(decl) * cos(φ)
-    az = rad2deg(atan(y, x)) + 180.0
-    az = mod(az, 360.0)
-
-    return az, elev
-end
-
-function _derive_ri_sw(clearness::Float64, sun_elevation_deg::Float64)
-    if sun_elevation_deg <= 0.0
-        return 0.0
     end
-    s0 = 1367.0
-    exo = s0 * sin(deg2rad(sun_elevation_deg))
-    clamp(clearness, 0.0, 1.2) * max(exo, 0.0)
+
+    return start_h, end_h
+end
+
+_java_doy_angle(doy::Int) = 2pi * doy / 365.0
+
+function _java_declination(doy::Int)
+    asin(
+        sin(deg2rad(-23.44)) *
+        cos(
+            (deg2rad(360) / 365.24) * (doy + 10) +
+            (deg2rad(360) / pi) * 0.0167 * sin((deg2rad(360) / 365.24) * (doy - 2)),
+        ),
+    )
+end
+
+function _java_equation_of_time(doy::Int)
+    b = 2pi * (doy - 81) / 365.0
+    (0.1645 * sin(2b)) - (0.1255 * cos(b)) - (0.025 * sin(b))
+end
+
+function _java_corr_factor(doy::Int)
+    a = _java_doy_angle(doy)
+    1.000110 + 0.034221 * cos(a) + 0.001280 * sin(a) + 0.000719 * cos(2a) + 0.000077 * sin(2a)
+end
+
+function _java_sunset_hour_angle(latitude_rad::Float64, declination_rad::Float64)
+    x =
+        (sin(_CENTER_OF_SOLAR_DISK_RAD) - sin(latitude_rad) * sin(declination_rad)) /
+        (cos(latitude_rad) * cos(declination_rad))
+    acos(clamp(x, -1.0, 1.0))
+end
+
+_java_hour_angle(decimal_hour::Float64) = (pi / 12.0) * (decimal_hour - 12.0)
+
+function _java_extra_terrestrial_hourly_mj(latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+    sc = _java_equation_of_time(doy)
+    h1 = _java_hour_angle(start_hour + sc)
+    h2 = _java_hour_angle(end_hour + sc)
+
+    decl = _java_declination(doy)
+    sunset = _java_sunset_hour_angle(latitude_rad, decl)
+
+    rise = max(h1, -sunset)
+    set = min(h2, sunset)
+    solar_time_angle = set - rise
+    solar_time_angle <= 0.0 && return 0.0
+
+    corr = _java_corr_factor(doy)
+    ((12 * 60) / pi) * _SOLAR_CONSTANT_MJ_M2_MIN * corr *
+    (
+        cos(latitude_rad) * cos(decl) * (sin(set) - sin(rise)) +
+        solar_time_angle * (sin(latitude_rad) * sin(decl))
+    )
+end
+
+_watt_to_mj(watts::Float64, duration_hours::Float64) = watts * duration_hours * 0.0036
+
+function _mega_joules_to_watts(mj::Float64, duration_hours::Float64)
+    duration_hours <= 0.0 && return 0.0
+    mj * 1_000_000 / (duration_hours * 3600.0)
+end
+
+function _global_wm2_from_clearness(clearness::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+    et_mj = _java_extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
+    _mega_joules_to_watts(clearness * et_mj, end_hour - start_hour)
+end
+
+function _clearness_from_global_wm2(global_wm2::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+    et_mj = _java_extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
+    if et_mj > 0.0
+        global_mj = _watt_to_mj(global_wm2, end_hour - start_hour)
+        return global_mj / et_mj
+    end
+    return 0.5
+end
+
+function _java_sun_position_deg(doy::Int, latitude_rad::Float64, decimal_hour::Float64)
+    hour_angle = deg2rad((decimal_hour + _java_equation_of_time(doy) - 12) * 15)
+    cos_ha = cos(hour_angle)
+    cos_lat = cos(latitude_rad)
+    sin_lat = sin(latitude_rad)
+    decl = _java_declination(doy)
+    cos_decl = cos(decl)
+    sin_decl = sin(decl)
+
+    elevation = asin((sin_lat * sin_decl) + (cos_lat * cos_decl * cos_ha))
+
+    dy = -sin(hour_angle)
+    dx = tan(decl) * cos_lat - sin_lat * cos_ha
+    azimuth = atan(dy, dx)
+    azimuth < 0.0 && (azimuth += 2pi)
+
+    return mod(rad2deg(azimuth), 360.0), rad2deg(elevation)
+end
+
+function _dejong_kd_hourly(clearness::Float64, sun_elevation_rad::Float64)
+    if clearness <= 0.22
+        return 1.0
+    elseif clearness <= 0.35
+        d = clearness - 0.22
+        return 1.0 - 6.4 * d * d
+    else
+        sin_el = sin(sun_elevation_rad)
+        r = 0.847 - (1.61 * sin_el) + (1.04 * sin_el * sin_el)
+        k = (1.47 - r) / 1.66
+        return clearness <= k ? 1.47 - 1.66 * clearness : r
+    end
+end
+
+function _partition_global_hourly(global_wm2::Float64, clearness::Float64, sun_elevation_rad::Float64)
+    if global_wm2 <= 0.0
+        return 0.0, 0.0
+    elseif sun_elevation_rad <= 0.0
+        return global_wm2, 0.0
+    end
+
+    kd = clamp(_dejong_kd_hourly(clearness, sun_elevation_rad), 0.0, 1.0)
+    diffuse = kd * global_wm2
+    direct = max(global_wm2 - diffuse, 0.0)
+    return diffuse, direct
+end
+
+function _as_degrees_if_radians(x::Float64)
+    isnan(x) && return x
+    abs(x) <= 2pi + 1e-9 ? rad2deg(x) : x
 end
 
 function compute_sky(meteo_row, cfg::LightConfig)
-    ri_sw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global], NaN)
+    ri_sw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
     ri_par = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)
     ri_nir = _row_value(meteo_row, [:RI_NIR_f, :NIR, :nir], NaN)
 
-    clearness = _row_value(meteo_row, [:clearness, :Kt], 0.5)
-    latitude = _row_value(meteo_row, [:latitude, :lat], 0.0)
-    longitude = _row_value(meteo_row, [:longitude, :lon], 0.0)
+    clearness = _row_value(meteo_row, [:clearness, :Kt], NaN)
+    latitude_deg = _row_value(meteo_row, [:latitude, :lat], 0.0)
+    latitude_rad = deg2rad(latitude_deg)
+    date = _row_date(meteo_row)
+    doy = Dates.dayofyear(date)
+    start_h, end_h = _row_step_hours(meteo_row)
+    mid_h = (start_h + end_h) / 2.0
 
     sun_azimuth = _row_value(meteo_row, [:sun_azimut, :sun_azimuth], NaN)
     sun_elevation = _row_value(meteo_row, [:sun_elevation], NaN)
+    if !isnan(sun_azimuth)
+        sun_azimuth = _as_degrees_if_radians(sun_azimuth)
+    end
+    if !isnan(sun_elevation)
+        sun_elevation = _as_degrees_if_radians(sun_elevation)
+    end
     if isnan(sun_azimuth) || isnan(sun_elevation)
-        dt = _row_datetime(meteo_row)
-        sun_azimuth, sun_elevation = _solar_position_deg(dt, latitude, longitude)
+        sun_azimuth, sun_elevation = _java_sun_position_deg(doy, latitude_rad, mid_h)
     end
 
     if isnan(ri_sw)
-        ri_sw = _derive_ri_sw(clearness, sun_elevation)
+        if !isnan(ri_par) && !isnan(ri_nir)
+            ri_sw = ri_par + ri_nir
+        elseif !isnan(ri_par)
+            ri_sw = ri_par / _SOLAR_TO_PAR
+        elseif !isnan(ri_nir)
+            ri_sw = ri_nir / _SOLAR_TO_NIR
+        elseif !isnan(clearness)
+            ri_sw = _global_wm2_from_clearness(clearness, latitude_rad, doy, start_h, end_h)
+        else
+            ri_sw = 0.0
+        end
+    end
+
+    if isnan(clearness)
+        clearness = _clearness_from_global_wm2(ri_sw, latitude_rad, doy, start_h, end_h)
     end
 
     if isnan(ri_par) && isnan(ri_nir)
-        ri_par = 0.48 * ri_sw
-        ri_nir = 0.52 * ri_sw
+        ri_par = _SOLAR_TO_PAR * ri_sw
+        ri_nir = _SOLAR_TO_NIR * ri_sw
     elseif isnan(ri_par)
-        ri_par = max(ri_sw - ri_nir, 0.0)
+        ri_par = (ri_nir / _SOLAR_TO_NIR) * _SOLAR_TO_PAR
     elseif isnan(ri_nir)
-        ri_nir = max(ri_sw - ri_par, 0.0)
+        ri_nir = (ri_par / _SOLAR_TO_PAR) * _SOLAR_TO_NIR
     end
 
     explicit_direct = _row_value(meteo_row, [:direct_fraction, :fDIR_SW, :Fd], NaN)
     direct_fraction =
-        if sun_elevation <= 0.0
-            0.0
-        elseif isnan(explicit_direct)
-            clamp(0.15 + 0.75 * clearness, 0.0, 1.0)
-        else
+        if !isnan(explicit_direct)
             clamp(explicit_direct, 0.0, 1.0)
+        else
+            diffuse_w, direct_w = _partition_global_hourly(max(ri_sw, 0.0), clearness, deg2rad(sun_elevation))
+            total_w = direct_w + diffuse_w
+            total_w > 0.0 ? clamp(direct_w / total_w, 0.0, 1.0) : 0.0
         end
     diffuse_fraction = 1.0 - direct_fraction
 
