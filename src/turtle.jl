@@ -189,6 +189,76 @@ function _circle_lumen_area(centers_distance::Float64, radius1::Float64, radius2
     (r22 * acos(t1)) + (r12 * acos(t2)) - term
 end
 
+function _soc_fraction_hourly(diffuse::Float64, global_flux::Float64, sun_elevation_deg::Float64)
+    if sun_elevation_deg <= 0.0
+        return 0.5
+    end
+
+    global_flux <= 0.0 && return 0.0
+    ratio = diffuse / global_flux
+
+    sun_elevation = deg2rad(sun_elevation_deg)
+    sin_sun = sin(sun_elevation)
+    r_clear = 0.847 - (1.61 * sin_sun) + (1.04 * sin_sun * sin_sun)
+    return max((ratio - r_clear) / (1.0 - r_clear), 0.0)
+end
+
+function _brightness_norm_soc(elevation::Float64)
+    (1.0 + 2.0 * sin(elevation)) / 3.0
+end
+
+function _brightness_norm_clear(dir_up, sun_up)
+    cos_sun_zen = cos(acos(clamp(sun_up[3], -1.0, 1.0)))
+    sin_elevation = sin(asin(clamp(dir_up[3], -1.0, 1.0)))
+    if sin_elevation <= 0.0
+        return 0.0
+    end
+
+    angle = acos(clamp(dot(sun_up, dir_up), -1.0, 1.0))
+    cos_angle = cos(angle)
+
+    brightness = 0.91 + 10.0 * exp(-3.0 * angle)
+    brightness += 0.45 * (cos_angle * cos_angle)
+    brightness *= 1.0 - exp(-0.32 / sin_elevation)
+
+    denom = 0.91 + (10.0 * exp(-3.0 * acos(clamp(sun_up[3], -1.0, 1.0)))) + (0.45 * cos_sun_zen * cos_sun_zen)
+    brightness /= max(denom, eps(Float64))
+    brightness /= 0.27385
+    brightness
+end
+
+function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::Vector{Int})
+    n = length(sky_ids)
+    n == 0 && return Float64[]
+
+    sun_dir = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
+    sun_up = -sun_dir
+    coeff_soc = _soc_fraction_hourly(sky.diffuse_fraction, 1.0, sky.sun_elevation_deg)
+    coeff_clear = 1.0 - coeff_soc
+
+    raw = zeros(Float64, n)
+    total = 0.0
+    for (k, i) in enumerate(sky_ids)
+        sec_up = -turtle.sectors[i].direction
+        elev = asin(clamp(sec_up[3], -1.0, 1.0))
+        b_soc = _brightness_norm_soc(elev)
+        b_clear = _brightness_norm_clear(sec_up, sun_up)
+        b = coeff_soc * b_soc + coeff_clear * b_clear
+
+        # horizontal-plane conversion as in Java (multiply by cos(zenith))
+        coeff = max(-turtle.sectors[i].direction[3], 0.0)
+        raw[k] = b * coeff
+        total += raw[k]
+    end
+
+    if total > 0.0
+        return raw ./ total
+    end
+
+    # Defensive fallback.
+    fill(1.0 / n, n)
+end
+
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(cfg.turtle_sectors, 1)
     dirs =
@@ -223,11 +293,11 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
     nir_dir = sky.ri_nir_f * sky.direct_fraction
 
     sky_wsum = sum(turtle.sectors[i].weight for i in sky_ids)
-    if sky_wsum > 0.0
-        for i in sky_ids
-            w = turtle.sectors[i].weight / sky_wsum
-            par[i] += par_diff * w
-            nir[i] += nir_diff * w
+    if !isempty(sky_ids)
+        wdiff = _diffuse_weights_java_like(sky, turtle, sky_ids)
+        for (k, i) in enumerate(sky_ids)
+            par[i] += par_diff * wdiff[k]
+            nir[i] += nir_diff * wdiff[k]
         end
     end
 

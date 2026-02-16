@@ -252,8 +252,8 @@ end
         @test metrics.edge_counts == expected_edge_counts
     end
 
-    # Java fixture `test-links-stats` expects node-link counts to be pixel-size invariant
-    # for the two configured resolutions. Raw ray hit counts remain resolution-dependent.
+    # Java fixture `test-links-stats` compares node-link counts across two pixel sizes.
+    # It does not compare our internal all-direction hit count proxy.
     links_stats_cfg = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml")
     cfg_links_stats = ArchimedLight.read_light_config(links_stats_cfg)
     cfg_links_stats_017 = ArchimedLight.LightConfig(
@@ -295,7 +295,7 @@ end
         fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
         first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
         pair_counts, sun_hits, node_ids, _ = ArchimedLight._pair_counts_for_scattering(scene, turtle, cfg)
-        all_hits = ArchimedLight._all_dir_hits_for_scattering(first_order, sun_hits, cfg, node_ids)
+        _ = ArchimedLight._all_dir_hits_for_scattering(first_order, sun_hits, cfg, node_ids)
         neighbours_by_node = Dict{Int,Set{Int}}()
         for ((to, from), c) in pair_counts
             c > 0 || continue
@@ -304,15 +304,40 @@ end
             end
             push!(s, from)
         end
+
+        vertices, faces, face2node, _, plotbox, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+        perdir_links = Int[]
+        for sector in turtle.sectors
+            pixel_hits, _, _, _ = ArchimedLight._direction_projection(vertices, faces, face2node, sector.direction, cfg, plotbox)
+            dir_neigh = Dict{Int,Set{Int}}()
+            for stack in values(pixel_hits)
+                length(stack) <= 1 && continue
+                sort!(stack, by=x -> x[1], rev=true)
+                for h in 1:(length(stack) - 1)
+                    above = stack[h][2]
+                    below = stack[h + 1][2]
+                    s1 = get!(dir_neigh, above) do
+                        Set{Int}()
+                    end
+                    s2 = get!(dir_neigh, below) do
+                        Set{Int}()
+                    end
+                    push!(s1, below)
+                    push!(s2, above)
+                end
+            end
+            append!(perdir_links, [length(v) for v in values(dir_neigh) if !isempty(v)])
+        end
+
         (
             links=sort([length(v) for v in values(neighbours_by_node) if !isempty(v)]),
-            all_hits=sort([v for v in values(all_hits) if v > 0]),
+            perdir_links=sort(perdir_links),
         )
     end
     m_links_017 = link_metrics_from_cfg(cfg_links_stats_017)
     m_links_003 = link_metrics_from_cfg(cfg_links_stats_003)
     @test m_links_017.links == m_links_003.links
-    @test_broken m_links_017.all_hits == m_links_003.all_hits
+    @test m_links_017.perdir_links == m_links_003.perdir_links
 
     f_div = fixtures["test-scattering-divergence"]
     cfg_div = ArchimedLight.read_light_config(f_div.config_path)

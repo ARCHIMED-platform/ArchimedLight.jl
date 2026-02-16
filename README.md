@@ -26,3 +26,22 @@ first_order = compute_first_order(scene, turtle, fluxes, cfg)
 scat = compute_scattering(scene, turtle, first_order, cfg)
 budget = integrate_light(first_order, scat, cfg)
 ```
+
+## Single-call pipeline
+```julia
+step = run_light_step(scene, first(meteo.rows), cfg)
+series = run_light_series(scene, meteo, cfg)
+```
+
+## Stage flexibility
+- You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, ...).
+- `compute_first_order(...; backend=:raster_cpu)` is the current reference backend.
+- `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are both available.
+- `build_turtle` follows Java-compatible sector sets for `1, 6, 16, 46, 136, 406`.
+
+## Testing
+Run the parity and smoke suite:
+
+```bash
+julia --project=. test/runtests.jl
+```
