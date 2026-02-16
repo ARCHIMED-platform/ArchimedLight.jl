@@ -32,11 +32,29 @@ end
 struct SkyState
     sun_azimuth_deg::Float64
     sun_elevation_deg::Float64
+    ri_sw_f::Float64
     ri_par_f::Float64
     ri_nir_f::Float64
     direct_fraction::Float64
     diffuse_fraction::Float64
 end
+
+SkyState(
+    sun_azimuth_deg::Float64,
+    sun_elevation_deg::Float64,
+    ri_par_f::Float64,
+    ri_nir_f::Float64,
+    direct_fraction::Float64,
+    diffuse_fraction::Float64,
+) = SkyState(
+    sun_azimuth_deg,
+    sun_elevation_deg,
+    ri_par_f + ri_nir_f,
+    ri_par_f,
+    ri_nir_f,
+    direct_fraction,
+    diffuse_fraction,
+)
 
 struct TurtleSector
     id::Int

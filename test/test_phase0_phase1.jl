@@ -166,8 +166,8 @@ end
             else
                 Float64(getproperty(row_g, :global))
             end
-        @test abs((sky_c.ri_par_f + sky_c.ri_nir_f) - global_ref) < 2e-4
-        @test abs((sky_g.ri_par_f + sky_g.ri_nir_f) - global_ref) < 2e-9
+        @test abs(sky_c.ri_sw_f - global_ref) < 2e-4
+        @test abs(sky_g.ri_sw_f - global_ref) < 2e-9
         @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.06
     end
 end
@@ -196,9 +196,38 @@ end
     s5 = sky_from_file(5)
     s6 = sky_from_file(6)
     s7 = sky_from_file(7)
-    @test abs((s5.ri_par_f + s5.ri_nir_f) - 100.0) < 1e-12
-    @test abs((s6.ri_par_f + s6.ri_nir_f) - 100.0) < 1e-12
-    @test abs((s7.ri_par_f + s7.ri_nir_f) - 100.0) < 1e-12
+    @test abs(s5.ri_sw_f - 100.0) < 1e-12
+    @test abs(s6.ri_sw_f - 100.0) < 1e-12
+    @test abs(s7.ri_sw_f - 100.0) < 1e-12
+
+    # Java ClearnessGlobalRelation precedence checks on valid variants.
+    s1 = sky_from_file(1)   # clearness only
+    s2 = sky_from_file(2)   # global only
+    s17 = sky_from_file(17) # PAR only
+    s18 = sky_from_file(18) # NIR only
+    s19 = sky_from_file(19) # PAR + NIR
+    s20 = sky_from_file(20) # PAR + global
+    s21 = sky_from_file(21) # NIR + global
+    s23 = sky_from_file(23) # PAR + NIR + global (+use)
+    s24 = sky_from_file(24)
+    s25 = sky_from_file(25)
+
+    @test abs(s1.ri_sw_f - 528.1693424202258) < 1e-4
+    @test abs(s2.ri_sw_f - 0.67) < 1e-12
+
+    @test abs(s17.ri_sw_f - (10 / 0.48)) < 1e-9
+    @test abs(s18.ri_sw_f - (10 / 0.52)) < 1e-9
+    @test abs(s19.ri_sw_f - 20.0) < 1e-12
+
+    @test abs(s20.ri_sw_f - 10.0) < 1e-12
+    @test abs(s21.ri_sw_f - 10.0) < 1e-12
+    @test abs(s23.ri_sw_f - 10.0) < 1e-12
+    @test abs(s24.ri_sw_f - 10.0) < 1e-12
+    @test abs(s25.ri_sw_f - 10.0) < 1e-12
+
+    # When RI_SW_f is defined and only one waveband is provided, missing band comes from RI_SW_f.
+    @test abs(s20.ri_nir_f - (10.0 * 0.52)) < 1e-12
+    @test abs(s21.ri_par_f - (10.0 * 0.48)) < 1e-12
 end
 
 @testset "Parity reports" begin

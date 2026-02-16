@@ -527,13 +527,24 @@ function compute_sky(meteo_row, cfg::LightConfig)
         sun_elevation = auto_sun_el
     end
 
+    ri_sw_known = !isnan(ri_sw)
     if isnan(ri_par) && isnan(ri_nir)
         ri_par = _SOLAR_TO_PAR * ri_sw
         ri_nir = _SOLAR_TO_NIR * ri_sw
     elseif isnan(ri_par)
-        ri_par = (ri_nir / _SOLAR_TO_NIR) * _SOLAR_TO_PAR
+        if ri_sw_known
+            # Java ClearnessGlobalRelation computes PAR from global before trying NIR.
+            ri_par = _SOLAR_TO_PAR * ri_sw
+        else
+            ri_par = (ri_nir / _SOLAR_TO_NIR) * _SOLAR_TO_PAR
+        end
     elseif isnan(ri_nir)
-        ri_nir = (ri_par / _SOLAR_TO_PAR) * _SOLAR_TO_NIR
+        if ri_sw_known
+            # Java ClearnessGlobalRelation computes NIR from global before trying PAR.
+            ri_nir = _SOLAR_TO_NIR * ri_sw
+        else
+            ri_nir = (ri_par / _SOLAR_TO_PAR) * _SOLAR_TO_NIR
+        end
     end
 
     explicit_direct = _row_value(meteo_row, [:direct_fraction, :fDIR_SW, :Fd], NaN)
@@ -548,6 +559,7 @@ function compute_sky(meteo_row, cfg::LightConfig)
     SkyState(
         sun_azimuth,
         sun_elevation,
+        max(ri_sw, 0.0),
         max(ri_par, 0.0),
         max(ri_nir, 0.0),
         direct_fraction,
