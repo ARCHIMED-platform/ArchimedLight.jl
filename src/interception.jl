@@ -2,6 +2,7 @@ import GeometryBasics
 import StaticArrays
 import PlantGeom
 import LinearAlgebra: norm, cross
+import Serialization
 
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
@@ -43,6 +44,136 @@ function _cfg_plot_paving(cfg::LightConfig)
         end
     end
     best
+end
+
+function _cfg_cache_pixel_table(cfg::LightConfig)
+    raw = cfg.raw
+    if haskey(raw, "cache_pixel_table")
+        return _as_bool_local(raw["cache_pixel_table"], false)
+    end
+    if haskey(raw, "save_on_disk")
+        return _as_bool_local(raw["save_on_disk"], false)
+    end
+    props = get(raw, "prop", nothing)
+    if props isa AbstractDict
+        haskey(props, "cache_pixel_table") && return _as_bool_local(props["cache_pixel_table"], false)
+        haskey(props, "save_on_disk") && return _as_bool_local(props["save_on_disk"], false)
+    end
+    return false
+end
+
+function _projection_cache_dir(cfg::LightConfig)
+    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    out_rel = haskey(cfg.raw, "output_directory") ? string(cfg.raw["output_directory"]) : ".archimedlight_cache"
+    out_dir = isabspath(out_rel) ? out_rel : normpath(joinpath(base, out_rel))
+    joinpath(out_dir, "pixel_tables_cache")
+end
+
+const _FNV64_OFFSET_BASIS = UInt64(0xcbf29ce484222325)
+const _FNV64_PRIME = UInt64(0x00000100000001b3)
+
+@inline function _stable_mix_u64(h::UInt64, x::UInt64)
+    return (h ⊻ x) * _FNV64_PRIME
+end
+
+@inline function _stable_mix_i64(h::UInt64, x::Int)
+    return _stable_mix_u64(h, reinterpret(UInt64, Int64(x)))
+end
+
+@inline function _stable_mix_f64(h::UInt64, x::Float64)
+    y = ifelse(x == 0.0, 0.0, x)
+    return _stable_mix_u64(h, reinterpret(UInt64, y))
+end
+
+function _projection_scene_key(vertices, faces, face2node, plotbox, cfg::LightConfig)
+    h = _FNV64_OFFSET_BASIS
+    h = _stable_mix_i64(h, length(vertices))
+    h = _stable_mix_i64(h, length(faces))
+    h = _stable_mix_i64(h, length(face2node))
+    h = _stable_mix_u64(h, _cfg_toricity(cfg) ? UInt64(1) : UInt64(0))
+    h = _stable_mix_f64(h, plotbox.origin_x)
+    h = _stable_mix_f64(h, plotbox.origin_y)
+    h = _stable_mix_f64(h, plotbox.xdim)
+    h = _stable_mix_f64(h, plotbox.ydim)
+    h = _stable_mix_i64(h, plotbox.nx)
+    h = _stable_mix_i64(h, plotbox.ny)
+    h = _stable_mix_f64(h, plotbox.pix_x)
+    h = _stable_mix_f64(h, plotbox.pix_y)
+    h = _stable_mix_f64(h, plotbox.pixel_area)
+
+    @inbounds for v in vertices
+        h = _stable_mix_f64(h, Float64(v[1]))
+        h = _stable_mix_f64(h, Float64(v[2]))
+        h = _stable_mix_f64(h, Float64(v[3]))
+    end
+
+    @inbounds for i in eachindex(faces)
+        f = faces[i]
+        h = _stable_mix_i64(h, Int(f[1]))
+        h = _stable_mix_i64(h, Int(f[2]))
+        h = _stable_mix_i64(h, Int(f[3]))
+        h = _stable_mix_i64(h, Int(face2node[i]))
+    end
+
+    h
+end
+
+function _projection_dir_key(direction)
+    h = _FNV64_OFFSET_BASIS
+    h = _stable_mix_f64(h, Float64(direction[1]))
+    h = _stable_mix_f64(h, Float64(direction[2]))
+    h = _stable_mix_f64(h, Float64(direction[3]))
+    h
+end
+
+function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::LightConfig)
+    _cfg_cache_pixel_table(cfg) || return nothing
+    return (
+        cache_dir=_projection_cache_dir(cfg),
+        scene_key=_projection_scene_key(vertices, faces, face2node, plotbox, cfg),
+    )
+end
+
+function _projection_cache_path(cache_ctx, direction)
+    scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
+    dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
+    joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * ".jls")
+end
+
+function _read_projection_cache(path::AbstractString)
+    try
+        open(path, "r") do io
+            payload = Serialization.deserialize(io)
+            payload isa NamedTuple || return nothing
+            (:version in propertynames(payload) && getproperty(payload, :version) == 1) || return nothing
+            req = (:pixel_hits, :node_hits, :projected_mesh_area, :projected_pixels_area)
+            all(n -> n in propertynames(payload), req) || return nothing
+            return (
+                getproperty(payload, :pixel_hits),
+                getproperty(payload, :node_hits),
+                getproperty(payload, :projected_mesh_area),
+                getproperty(payload, :projected_pixels_area),
+            )
+        end
+    catch
+        return nothing
+    end
+end
+
+function _write_projection_cache(path::AbstractString, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
+    mkpath(dirname(path))
+    tmp = path * ".tmp-" * string(getpid()) * "-" * string(time_ns())
+    payload = (
+        version=1,
+        pixel_hits=pixel_hits,
+        node_hits=node_hits,
+        projected_mesh_area=projected_mesh_area,
+        projected_pixels_area=projected_pixels_area,
+    )
+    open(tmp, "w") do io
+        Serialization.serialize(io, payload)
+    end
+    mv(tmp, path; force=true)
 end
 
 function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
@@ -280,9 +411,9 @@ function _project_triangle!(
     projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
 end
 
-function _rasterize_direction_java(vertices, faces, face2node, direction, cfg::LightConfig, plotbox)
+function _rasterize_direction_java(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; cache_ctx=nothing)
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox)
+        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx)
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
@@ -339,6 +470,24 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
         )
     end
 
+    return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+end
+
+function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx)
+    if cache_ctx === nothing
+        return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox)
+    end
+
+    path = _projection_cache_path(cache_ctx, direction)
+    if isfile(path)
+        cached = _read_projection_cache(path)
+        cached !== nothing && return cached
+        rm(path; force=true)
+    end
+
+    pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
+        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox)
+    _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
 end
 
@@ -434,6 +583,7 @@ function compute_first_order(
     backend == :raster_cpu || error("Unsupported backend: $backend")
 
     vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
 
     projected_area_per_node = Dict(id => 0.0 for id in node_ids)
     incident_par_power_per_node = Dict(id => 0.0 for id in node_ids)
@@ -441,7 +591,8 @@ function compute_first_order(
     hits_per_node = Dict(id => 0 for id in node_ids)
 
     for (k, sector) in enumerate(turtle.sectors)
-        visible_area, node_hits = _rasterize_direction_java(vertices, faces, face2node, sector.direction, cfg, plotbox)
+        visible_area, node_hits =
+            _rasterize_direction_java(vertices, faces, face2node, sector.direction, cfg, plotbox; cache_ctx=cache_ctx)
 
         for (nid, h) in node_hits
             hits_per_node[nid] = get(hits_per_node, nid, 0) + h

@@ -12,11 +12,13 @@ end
 
 function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
     vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
 
     for sector in turtle.sectors
-        pixel_hits, node_hits, _, _ = _direction_projection(vertices, faces, face2node, sector.direction, cfg, plotbox)
+        pixel_hits, node_hits, _, _ =
+            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
 
         if sector.source == :sun
             for (nid, h) in node_hits

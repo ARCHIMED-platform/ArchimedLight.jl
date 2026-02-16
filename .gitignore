@@ -5,3 +5,4 @@
 java_implementation/*
 .juliaup
 .julia_depot
+.archimedlight_cache/

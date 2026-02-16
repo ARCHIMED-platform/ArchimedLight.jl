@@ -42,6 +42,8 @@ function light_parity_fixtures()
         "test-hitcount2",
         "test-hitcount3",
         "test-weighted-sun",
+        "test-save_on_disk1",
+        "test-save_on_disk6",
         "test-skytir",
         "test-area_ratio",
         "test-area_ratio2",

@@ -40,6 +40,7 @@ series = run_light_series(scene, meteo, cfg)
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend.
 - `pixel_size` is validated with Java parity bounds (`0 < pixel_size <= 0.5` meters).
+- `cache_pixel_table: true` (or `save_on_disk: true`) enables on-disk direction projection cache under `<output_directory>/pixel_tables_cache`.
 - `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are both available.
 - `build_turtle` follows Java-compatible sector sets for `1, 6, 16, 46, 136, 406`.
 

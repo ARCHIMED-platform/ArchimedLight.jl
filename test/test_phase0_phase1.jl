@@ -250,6 +250,38 @@ end
     end
     to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
     mean_std(vals::Vector{Float64}) = (mean(vals), std(vals))
+    function with_cache_pixel_table(cfg::ArchimedLight.LightConfig, enabled::Bool)
+        raw = copy(cfg.raw)
+        raw["cache_pixel_table"] = enabled
+        raw["save_on_disk"] = enabled
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+    function expected_component_hits(path::String)
+        rows = read_java_csv(path)
+        vals = Int[]
+        for r in rows
+            names = propertynames(r)
+            (:area in names && :surface_hits in names) || continue
+            area = Float64(getproperty(r, :area))
+            hits = Float64(getproperty(r, :surface_hits))
+            push!(vals, Int(floor(area * hits)))
+        end
+        sort(vals)
+    end
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
 
@@ -262,6 +294,19 @@ end
     @test r_true.snapshot.total_hits > 0
     @test relerr(r_false.snapshot.total_hits, r_false.expected_hitcount_total) < 0.01
     @test relerr(r_true.snapshot.total_hits, r_true.expected_hitcount_total) < 0.01
+
+    for (all_in_turtle, max_abs_err, max_rel_err) in ((false, 900, 0.002), (true, 500, 0.0012))
+        step = run_fixture_once(f_hit; all_in_turtle=all_in_turtle)
+        expected_path = _expected_component_values_path(f_hit; all_in_turtle=all_in_turtle)
+        @test expected_path !== nothing
+        expected_hits = expected_component_hits(expected_path)
+        got_hits = sort(collect(values(step.first_order.hits_per_node)))
+        @test length(got_hits) == length(expected_hits)
+        abs_err = abs.(got_hits .- expected_hits)
+        rel_errs = abs_err ./ max.(abs.(Float64.(expected_hits)), 1.0)
+        @test maximum(abs_err) <= max_abs_err
+        @test maximum(rel_errs) <= max_rel_err
+    end
 
     f_wsun = fixtures["test-weighted-sun"]
     r_wsun = fixture_parity_report(f_wsun)
@@ -292,6 +337,30 @@ end
     end
     @test max_az_err < 0.02
     @test max_el_err < 0.05
+
+    for (fx_name, max_abs_err, max_mean_rel_err) in (
+        ("test-weighted-sun", 1.0, 0.01),
+        ("test-save_on_disk1", 1e-3, 1e-3),
+        ("test-save_on_disk6", 1e-3, 1e-3),
+    )
+        fx = fixtures[fx_name]
+        expected_path = _expected_scene_values_path(fx)
+        @test expected_path !== nothing
+        expected_rows = read_java_csv(expected_path)
+        expected_sw = Float64[getproperty(r, :RI_SW_f) for r in expected_rows]
+
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
+        got_sw = Float64[s.sky.ri_sw_f for s in series]
+        @test length(got_sw) == length(expected_sw)
+
+        abs_err = abs.(got_sw .- expected_sw)
+        rel_err = abs_err ./ max.(abs.(expected_sw), eps(Float64))
+        @test maximum(abs_err) < max_abs_err
+        @test mean(rel_err) < max_mean_rel_err
+    end
 
     f_scat = fixtures["test-scattering-one-plate"]
     r_scat = fixture_parity_report(f_scat)
@@ -594,4 +663,64 @@ end
             @test max_abs_float_dict_diff(s1[i].budget.ri_nir_q_per_node, s2[i].budget.ri_nir_q_per_node) == 0.0
         end
     end
+
+    f_disk = fixtures["test-save_on_disk1"]
+    cfg_disk_base = ArchimedLight.read_light_config(f_disk.config_path)
+    cfg_disk_on = with_cache_pixel_table(cfg_disk_base, true)
+    cfg_disk_off = with_cache_pixel_table(cfg_disk_base, false)
+    cache_dir = ArchimedLight._projection_cache_dir(cfg_disk_on)
+    isdir(cache_dir) && rm(cache_dir; recursive=true, force=true)
+
+    scene_disk = ArchimedLight.read_scene(cfg_disk_on.scene)
+    row_disk = first(ArchimedLight.read_meteo(cfg_disk_on.meteo).rows)
+
+    step_disk_1 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
+    @test isdir(cache_dir)
+    files_1 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
+    @test !isempty(files_1)
+    mtimes_1 = Dict(f => stat(f).mtime for f in files_1)
+
+    step_disk_2 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
+    files_2 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
+    @test basename.(files_2) == basename.(files_1)
+    mtimes_2 = Dict(f => stat(f).mtime for f in files_2)
+    @test all(mtimes_2[f] == mtimes_1[f] for f in files_1)
+
+    step_mem = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_off)
+    @test max_abs_float_dict_diff(step_disk_2.first_order.projected_area_per_node, step_mem.first_order.projected_area_per_node) == 0.0
+    @test max_abs_int_dict_diff(step_disk_2.first_order.hits_per_node, step_mem.first_order.hits_per_node) == 0
+    @test max_abs_float_dict_diff(step_disk_2.budget.ri_par_q_per_node, step_mem.budget.ri_par_q_per_node) == 0.0
+    @test max_abs_float_dict_diff(step_disk_2.budget.ri_nir_q_per_node, step_mem.budget.ri_nir_q_per_node) == 0.0
+    rm(cache_dir; recursive=true, force=true)
+
+    f_scat_cache = fixtures["test-scattering-one-plate"]
+    cfg_scat_base = ArchimedLight.read_light_config(f_scat_cache.config_path)
+    cfg_scat_on = with_cache_pixel_table(cfg_scat_base, true)
+    cfg_scat_off = with_cache_pixel_table(cfg_scat_base, false)
+    scat_cache_dir = ArchimedLight._projection_cache_dir(cfg_scat_on)
+    isdir(scat_cache_dir) && rm(scat_cache_dir; recursive=true, force=true)
+
+    scene_scat = ArchimedLight.read_scene(cfg_scat_on.scene)
+    row_scat = first(ArchimedLight.read_meteo(cfg_scat_on.meteo).rows)
+    sky_scat = ArchimedLight.compute_sky(row_scat, cfg_scat_on)
+    turtle_scat = ArchimedLight.build_turtle(cfg_scat_on, sky_scat)
+    flux_scat = ArchimedLight.compute_directional_fluxes(sky_scat, turtle_scat, cfg_scat_on)
+    first_scat_on = ArchimedLight.compute_first_order(scene_scat, turtle_scat, flux_scat, cfg_scat_on)
+    @test isdir(scat_cache_dir)
+    scat_files_1 = sort(filter(f -> endswith(f, ".jls"), readdir(scat_cache_dir; join=true)))
+    @test !isempty(scat_files_1)
+    scat_mtimes_1 = Dict(f => stat(f).mtime for f in scat_files_1)
+    scat_on = ArchimedLight.compute_scattering(scene_scat, turtle_scat, first_scat_on, cfg_scat_on)
+    scat_files_2 = sort(filter(f -> endswith(f, ".jls"), readdir(scat_cache_dir; join=true)))
+    @test basename.(scat_files_2) == basename.(scat_files_1)
+    scat_mtimes_2 = Dict(f => stat(f).mtime for f in scat_files_2)
+    @test all(scat_mtimes_2[f] == scat_mtimes_1[f] for f in scat_files_1)
+
+    first_scat_off = ArchimedLight.compute_first_order(scene_scat, turtle_scat, flux_scat, cfg_scat_off)
+    scat_off = ArchimedLight.compute_scattering(scene_scat, turtle_scat, first_scat_off, cfg_scat_off)
+    @test max_abs_float_dict_diff(first_scat_on.projected_area_per_node, first_scat_off.projected_area_per_node) == 0.0
+    @test max_abs_int_dict_diff(first_scat_on.hits_per_node, first_scat_off.hits_per_node) == 0
+    @test max_abs_float_dict_diff(scat_on.added_par_power_per_node, scat_off.added_par_power_per_node) == 0.0
+    @test max_abs_float_dict_diff(scat_on.added_nir_power_per_node, scat_off.added_nir_power_per_node) == 0.0
+    rm(scat_cache_dir; recursive=true, force=true)
 end
