@@ -1,3 +1,5 @@
+using Statistics
+
 @testset "Phase 0 artifacts" begin
     note = joinpath(dirname(@__DIR__), "docs", "phase0_reverse_engineering.md")
     @test isfile(note)
@@ -106,6 +108,40 @@ end
     end
 end
 
+@testset "Pixel size validation parity" begin
+    root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-pixelsize")
+    cfg = ArchimedLight.read_light_config(joinpath(root, "config.yml"))
+    scene = ArchimedLight.read_scene(cfg.scene)
+    row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+
+    function with_pixel_size(cfg::ArchimedLight.LightConfig, pixel_size_m::Float64)
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            pixel_size_m,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            cfg.raw,
+        )
+    end
+
+    cfg_ok = with_pixel_size(cfg, 49.9999 / 100.0)
+    @test begin
+        step = ArchimedLight.run_light_step(scene, row, cfg_ok)
+        !isempty(step.budget.ri_par_q_per_node)
+    end
+
+    cfg_bad = with_pixel_size(cfg, 50.0001 / 100.0)
+    @test_throws ErrorException ArchimedLight.run_light_step(scene, row, cfg_bad)
+end
+
 @testset "Parity reports" begin
     relerr(a, b) = abs(a - b) / max(abs(b), eps(Float64))
     function max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
@@ -125,6 +161,7 @@ end
         m
     end
     to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
+    mean_std(vals::Vector{Float64}) = (mean(vals), std(vals))
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
 
@@ -157,21 +194,64 @@ end
     @test r_scat2.expected_scattering_total !== nothing
     @test relerr(r_scat2.julia_scattering_total, r_scat2.expected_scattering_total) < 0.01
 
-    f_links = fixtures["test-links-pixeltable"]
-    cfg_links = ArchimedLight.read_light_config(f_links.config_path)
-    scene_links = ArchimedLight.read_scene(cfg_links.scene)
-    meteo_links = ArchimedLight.read_meteo(cfg_links.meteo)
-    row_links = first(meteo_links.rows)
-    sky_links = ArchimedLight.compute_sky(row_links, cfg_links)
-    turtle_links = ArchimedLight.build_turtle(cfg_links, sky_links)
-    fluxes_links = ArchimedLight.compute_directional_fluxes(sky_links, turtle_links, cfg_links)
-    first_links = ArchimedLight.compute_first_order(scene_links, turtle_links, fluxes_links, cfg_links)
-    scat_pix = ArchimedLight.compute_scattering(scene_links, turtle_links, first_links, cfg_links; mode=:raycast)
-    scat_lnk = ArchimedLight.compute_scattering(scene_links, turtle_links, first_links, cfg_links; mode=:links)
-    bud_pix = ArchimedLight.integrate_light(first_links, scat_pix, cfg_links)
-    bud_lnk = ArchimedLight.integrate_light(first_links, scat_lnk, cfg_links)
-    @test max_abs_float_dict_diff(bud_pix.ri_par_q_per_node, bud_lnk.ri_par_q_per_node) < 1e-12
-    @test max_abs_float_dict_diff(bud_pix.ri_nir_q_per_node, bud_lnk.ri_nir_q_per_node) < 1e-12
+    for links_fx_name in ("test-links-pixeltable", "test-links-pixeltable2")
+        f_links = fixtures[links_fx_name]
+        cfg_links = ArchimedLight.read_light_config(f_links.config_path)
+        scene_links = ArchimedLight.read_scene(cfg_links.scene)
+        meteo_links = ArchimedLight.read_meteo(cfg_links.meteo)
+        row_links = first(meteo_links.rows)
+        sky_links = ArchimedLight.compute_sky(row_links, cfg_links)
+        turtle_links = ArchimedLight.build_turtle(cfg_links, sky_links)
+        fluxes_links = ArchimedLight.compute_directional_fluxes(sky_links, turtle_links, cfg_links)
+        first_links = ArchimedLight.compute_first_order(scene_links, turtle_links, fluxes_links, cfg_links)
+        scat_pix = ArchimedLight.compute_scattering(scene_links, turtle_links, first_links, cfg_links; mode=:raycast)
+        scat_lnk = ArchimedLight.compute_scattering(scene_links, turtle_links, first_links, cfg_links; mode=:links)
+        bud_pix = ArchimedLight.integrate_light(first_links, scat_pix, cfg_links)
+        bud_lnk = ArchimedLight.integrate_light(first_links, scat_lnk, cfg_links)
+        @test max_abs_float_dict_diff(bud_pix.ri_par_q_per_node, bud_lnk.ri_par_q_per_node) < 1e-12
+        @test max_abs_float_dict_diff(bud_pix.ri_nir_q_per_node, bud_lnk.ri_nir_q_per_node) < 1e-12
+    end
+
+    area_ratio_metrics = Dict{String,Tuple{Float64,Float64,Float64,Float64}}()
+    for area_name in ("test-area_ratio", "test-area_ratio2", "test-area_ratio3", "test-area_ratio4")
+        fx = fixtures[area_name]
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        @test !isempty(step.budget.ri_par_0_q_per_node)
+
+        base_max = maximum(keys(scene.total_area_per_node))
+        got = Float64[]
+        for nid in keys(step.budget.ri_par_0_q_per_node)
+            nid > base_max || continue
+            push!(got, step.budget.ri_par_0_q_per_node[nid] + step.budget.ri_nir_0_q_per_node[nid])
+        end
+        @test length(got) == 100
+        got_mean, got_std = mean_std(got)
+
+        expected_path = _expected_component_values_path(fx)
+        @test expected_path !== nothing
+        expected_rows = read_java_csv(expected_path)
+        expected = Float64[
+            Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR)) for r in expected_rows if to_int(getproperty(r, :item_id)) == -1
+        ]
+        @test length(expected) == 100
+        exp_mean, exp_std = mean_std(expected)
+
+        # Java intent: pavement irradiance is effectively uniform with area-ratio correction.
+        @test got_std / max(abs(got_mean), eps(Float64)) < 1e-8
+        @test exp_std / max(abs(exp_mean), eps(Float64)) < 1e-5
+        # Absolute irradiance still depends on sky parametrization; keep a coarse parity envelope.
+        @test relerr(got_mean, exp_mean) < 0.05
+
+        area_ratio_metrics[area_name] = (got_mean, got_std, exp_mean, exp_std)
+    end
+
+    # Java runs this fixture family under four cache/all_in_turtle combinations.
+    # Means should stay stable across those runtime switches.
+    got_means = [v[1] for v in values(area_ratio_metrics)]
+    @test maximum(got_means) - minimum(got_means) < 1e-9
 
     f_links_stats = fixtures["test-links"]
     cfg_ls = ArchimedLight.read_light_config(f_links_stats.config_path)

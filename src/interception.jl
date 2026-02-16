@@ -87,6 +87,10 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
 end
 
 function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
+    pixel_size > 0.0 || error("pixel_size must be > 0 m")
+    # Java fixtures enforce a strict upper bound at 50 cm.
+    pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
+
     x0, y0, x1, y1 = _extract_scene_xy_bounds(scene, vertices)
     xdim = max(x1 - x0, pixel_size)
     ydim = max(y1 - y0, pixel_size)
