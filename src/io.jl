@@ -310,6 +310,31 @@ function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
     isempty(pairs) ? row : merge(row, (; pairs...))
 end
 
+function _forward_fill_row_date(rows::Vector{<:NamedTuple})
+    out = Vector{NamedTuple}(undef, length(rows))
+    last_date = nothing
+    for i in eachindex(rows)
+        r = rows[i]
+        if :date in propertynames(r)
+            d = getproperty(r, :date)
+            if d === missing
+                out[i] = last_date === nothing ? r : merge(r, (; date=last_date))
+            else
+                s = lowercase(strip(string(d)))
+                if isempty(s) || s == "missing"
+                    out[i] = last_date === nothing ? r : merge(r, (; date=last_date))
+                else
+                    out[i] = r
+                    last_date = d
+                end
+            end
+        else
+            out[i] = r
+        end
+    end
+    out
+end
+
 function read_meteo(path::AbstractString)
     weather, meta =
         try
@@ -335,6 +360,7 @@ function read_meteo(path::AbstractString)
             end
         end
     meta_nt = merge((; file=path), _meta_to_namedtuple(meta))
-    rows = [_namedtuple_with_meta(r, meta_nt) for r in _rows_to_namedtuples(weather)]
+    raw_rows = _forward_fill_row_date(_rows_to_namedtuples(weather))
+    rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
     MeteoTable(rows, meta_nt)
 end
