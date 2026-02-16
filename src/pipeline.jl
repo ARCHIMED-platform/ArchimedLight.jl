@@ -1,3 +1,8 @@
+"""
+    integrate_light(first, scat, cfg; extra_0_q_per_band=..., extra_q_per_band=...)::LightBudget
+
+Combine first-order and scattering results into per-node irradiance and power budgets.
+"""
 function integrate_light(
     first::FirstOrderResult,
     scat::Union{Nothing,ScatteringResult},
@@ -155,7 +160,16 @@ function _single_band_flux(total_irradiance::Float64, sky::SkyState, turtle::Tur
     compute_directional_fluxes(tmp, turtle, cfg).par
 end
 
-function _compute_extra_band_light(scene::SceneGeometry, meteo_row, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
+function _compute_extra_band_light(
+    scene::SceneGeometry,
+    meteo_row,
+    sky::SkyState,
+    turtle::TurtleGrid,
+    cfg::LightConfig;
+    interception_backend::InterceptionBackend=RasterCPUBackend(),
+    scattering_mode::Symbol=:raycast,
+    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+)
     extras_irr = _extra_band_irradiance(meteo_row)
     extra_0_q = Dict{String,Dict{Int,Float64}}()
     extra_q = Dict{String,Dict{Int,Float64}}()
@@ -166,12 +180,26 @@ function _compute_extra_band_light(scene::SceneGeometry, meteo_row, sky::SkyStat
     n = length(ids)
     for (band, total_irr) in extras_irr
         flux_band = _single_band_flux(total_irr, sky, turtle, cfg)
-        first_band = compute_first_order(scene, turtle, DirectionalFluxes(ids, flux_band, zeros(Float64, n)), cfg)
+        first_band = compute_first_order(
+            scene,
+            turtle,
+            DirectionalFluxes(ids, flux_band, zeros(Float64, n)),
+            cfg;
+            backend=interception_backend,
+        )
         order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_par_power_per_node)
 
         added =
             if cfg.scattering
-                compute_scattering_band(scene, turtle, first_band, cfg; band=band).added_power_per_node
+                compute_scattering_band(
+                    scene,
+                    turtle,
+                    first_band,
+                    cfg;
+                    mode=scattering_mode,
+                    backend=scattering_backend,
+                    band=band,
+                ).added_power_per_node
             else
                 Dict{Int,Float64}()
             end
@@ -186,18 +214,69 @@ function _compute_extra_band_light(scene::SceneGeometry, meteo_row, sky::SkyStat
     return extra_0_q, extra_q, extras_irr
 end
 
-function run_light_step(scene::SceneGeometry, meteo_row, cfg::LightConfig)
+function _can_use_series_radiation_cache(::RasterCPUBackend)
+    true
+end
+
+function _can_use_series_radiation_cache(::InterceptionBackend)
+    false
+end
+
+"""
+    run_light_step(scene, meteo_row, cfg; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::LightStepResult
+
+Run a complete light computation for one meteo row:
+`compute_sky -> build_turtle -> compute_directional_fluxes -> compute_first_order -> compute_scattering -> integrate_light`.
+"""
+function run_light_step(
+    scene::SceneGeometry,
+    meteo_row,
+    cfg::LightConfig;
+    interception_backend=:raster_cpu,
+    scattering_mode::Symbol=:raycast,
+    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+)
+    ib = _resolve_interception_backend(interception_backend)
     sky = compute_sky(meteo_row, cfg)
     turtle = build_turtle(cfg, sky)
     fluxes = compute_directional_fluxes(sky, turtle, cfg)
-    first = compute_first_order(scene, turtle, fluxes, cfg)
-    scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
-    extra_0_q, extra_q, extra_irr = _compute_extra_band_light(scene, meteo_row, sky, turtle, cfg)
+    first = compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
+    scat =
+        if cfg.scattering
+            compute_scattering(scene, turtle, first, cfg; mode=scattering_mode, backend=scattering_backend)
+        else
+            nothing
+        end
+    extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
+        scene,
+        meteo_row,
+        sky,
+        turtle,
+        cfg;
+        interception_backend=ib,
+        scattering_mode=scattering_mode,
+        scattering_backend=scattering_backend,
+    )
     budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
     LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
 end
 
-function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightConfig)
+"""
+    run_light_series(scene, meteo, cfg; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
+
+Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
+response reuse when `cfg.cache_radiation` is enabled.
+"""
+function run_light_series(
+    scene::SceneGeometry,
+    meteo::MeteoTable,
+    cfg::LightConfig;
+    interception_backend=:raster_cpu,
+    scattering_mode::Symbol=:raycast,
+    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+)
+    ib = _resolve_interception_backend(interception_backend)
+    use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
     cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
     out = Vector{LightStepResult}(undef, length(meteo.rows))
     for i in eachindex(meteo.rows)
@@ -206,7 +285,7 @@ function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightCon
         fluxes = compute_directional_fluxes(sky, turtle, cfg)
 
         first =
-            if cfg.cache_radiation
+            if use_cache
                 key = _turtle_cache_key(turtle, cfg)
                 pa_by_sector, hits_by_sector, node_ids =
                     get!(cache, key) do
@@ -214,11 +293,25 @@ function run_light_series(scene::SceneGeometry, meteo::MeteoTable, cfg::LightCon
                     end
                 _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes, node_ids)
             else
-                compute_first_order(scene, turtle, fluxes, cfg)
+                compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
             end
 
-        scat = cfg.scattering ? compute_scattering(scene, turtle, first, cfg) : nothing
-        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(scene, meteo.rows[i], sky, turtle, cfg)
+        scat =
+            if cfg.scattering
+                compute_scattering(scene, turtle, first, cfg; mode=scattering_mode, backend=scattering_backend)
+            else
+                nothing
+            end
+        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
+            scene,
+            meteo.rows[i],
+            sky,
+            turtle,
+            cfg;
+            interception_backend=ib,
+            scattering_mode=scattering_mode,
+            scattering_backend=scattering_backend,
+        )
         budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
         out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
     end

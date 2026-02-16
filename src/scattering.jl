@@ -131,30 +131,99 @@ function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::Fi
     return pair_counts, all_hits, node_ids, node_group, group_coeffs
 end
 
+function _scattering_backend_from_mode(mode::Symbol)
+    mode == :raycast && return RaycastScatteringBackend()
+    mode == :links && return LinksScatteringBackend()
+    error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+end
+
+function _resolve_scattering_backend(mode::Symbol, backend::Nothing)
+    return _scattering_backend_from_mode(mode)
+end
+
+function _resolve_scattering_backend(mode::Symbol, backend::ScatteringBackend)
+    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+    return backend
+end
+
+function _resolve_scattering_backend(mode::Symbol, backend)
+    error(
+        "Unsupported scattering backend selector type: $(typeof(backend)). " *
+        "Use `nothing`, `RaycastScatteringBackend()`, or `LinksScatteringBackend()`.",
+    )
+end
+
+"""
+    build_scattering_transfer_graph(scene, turtle, first, cfg; mode=:raycast, backend=nothing)::ScatteringTransferGraph
+
+Build the scattering transfer graph (pair links and per-node hit normalization data)
+independently from iterative scattering propagation.
+"""
+function build_scattering_transfer_graph(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    return build_scattering_transfer_graph(scene, turtle, first, cfg, b)
+end
+
+function build_scattering_transfer_graph(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::RaycastScatteringBackend,
+)
+    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
+    return ScatteringTransferGraph(pair_counts, all_hits, node_ids, node_group, group_coeffs)
+end
+
+function build_scattering_transfer_graph(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::LinksScatteringBackend,
+)
+    # CPU reference currently uses the same transfer-graph construction for both modes.
+    return build_scattering_transfer_graph(scene, turtle, first, cfg, RaycastScatteringBackend())
+end
+
 function _default_band_coeff(cfg::LightConfig, band_key::String)
     bk = uppercase(band_key)
     bk == "NIR" && return cfg.scattering_coeff_nir
     return cfg.scattering_coeff_par
 end
 
-function _scattering_one_band(
-    initial_power_per_node::Dict{Int,Float64},
-    pair_counts,
-    all_hits::Dict{Int,Int},
-    node_ids,
-    node_group::Dict{Int,String},
-    group_coeffs::Dict{String,Dict{String,Float64}},
-    cfg::LightConfig,
+function _coeff_by_node(
+    graph::ScatteringTransferGraph,
     band_key::String,
     default_coeff::Float64,
 )
     coeff_by_node = Dict{Int,Float64}()
-    for nid in node_ids
-        g = get(node_group, nid, "")
-        c = get(group_coeffs, g, Dict{String,Float64}())
-        coeff_by_node[nid] = get(c, uppercase(band_key), default_coeff)
+    band = uppercase(band_key)
+    for nid in graph.node_ids
+        g = get(graph.node_group, nid, "")
+        c = get(graph.group_coeffs, g, Dict{String,Float64}())
+        coeff_by_node[nid] = get(c, band, default_coeff)
     end
+    coeff_by_node
+end
 
+function _propagate_scattering_one_band(
+    initial_power_per_node::Dict{Int,Float64},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    cfg::LightConfig,
+    default_coeff::Float64,
+)
+    node_ids = graph.node_ids
+    pair_counts = graph.pair_counts
+    all_hits = graph.all_hits
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     added = _dict_zero(node_ids)
     ref = _sum_dict_values(current)
@@ -194,37 +263,169 @@ function _scattering_one_band(
     return added, iterations, converged
 end
 
+function _scattering_one_band(
+    initial_power_per_node::Dict{Int,Float64},
+    graph::ScatteringTransferGraph,
+    cfg::LightConfig,
+    band_key::String,
+    default_coeff::Float64,
+)
+    coeffs = _coeff_by_node(graph, band_key, default_coeff)
+    return _propagate_scattering_one_band(initial_power_per_node, graph, coeffs, cfg, default_coeff)
+end
+
+"""
+    compute_scattering_band(graph, first, cfg; mode=:raycast, backend=nothing, band="PAR", initial_power_per_node=nothing, default_coeff=nothing)
+
+Run one-band iterative scattering from a pre-built transfer graph.
+"""
+function compute_scattering_band(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode=:raycast,
+    backend=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    return compute_scattering_band(
+        graph,
+        first,
+        cfg,
+        b;
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
+end
+
+function compute_scattering_band(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::RaycastScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    initial =
+        if initial_power_per_node === nothing
+            Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
+        else
+            Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in graph.node_ids)
+        end
+    dflt = isnothing(default_coeff) ? _default_band_coeff(cfg, String(band)) : default_coeff
+    added, iterations, converged = _scattering_one_band(
+        initial,
+        graph,
+        cfg,
+        String(band),
+        dflt,
+    )
+    return (added_power_per_node=added, iterations=iterations, converged=converged)
+end
+
+function compute_scattering_band(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::LinksScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    # CPU reference currently shares the same iterative propagation path.
+    return compute_scattering_band(
+        graph,
+        first,
+        cfg,
+        RaycastScatteringBackend();
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
+end
+
 function compute_scattering_band(
     scene::SceneGeometry,
     turtle::TurtleGrid,
     first::FirstOrderResult,
     cfg::LightConfig;
     mode=:raycast,
+    backend=nothing,
     band::AbstractString="PAR",
     initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     default_coeff::Union{Nothing,Float64}=nothing,
 )
-    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode")
-    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
-    initial =
-        if initial_power_per_node === nothing
-            Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in node_ids)
-        else
-            Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
-        end
-    dflt = isnothing(default_coeff) ? _default_band_coeff(cfg, String(band)) : default_coeff
-    added, iterations, converged = _scattering_one_band(
-        initial,
-        pair_counts,
-        all_hits,
-        node_ids,
-        node_group,
-        group_coeffs,
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(scene, turtle, first, cfg, b)
+    return compute_scattering_band(
+        graph,
+        first,
         cfg,
-        String(band),
-        dflt,
+        b;
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
     )
-    return (added_power_per_node=added, iterations=iterations, converged=converged)
+end
+
+"""
+    compute_scattering(scene, turtle, first, cfg; mode=:raycast, backend=nothing)::ScatteringResult
+    compute_scattering(graph, first, cfg; mode=:raycast, backend=nothing)::ScatteringResult
+
+Compute iterative multiple scattering for PAR and NIR from first-order incident power.
+When a `ScatteringTransferGraph` is provided, transfer-link construction is skipped and only
+iterative propagation is run.
+"""
+function compute_scattering(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    return compute_scattering(graph, first, cfg, b)
+end
+
+function compute_scattering(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::RaycastScatteringBackend,
+)
+    initial_par = Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
+    initial_nir = Dict{Int,Float64}(nid => get(first.incident_nir_power_per_node, nid, 0.0) for nid in graph.node_ids)
+
+    added_par, it_par, conv_par = _scattering_one_band(
+        initial_par,
+        graph,
+        cfg,
+        "PAR",
+        cfg.scattering_coeff_par,
+    )
+    added_nir, it_nir, conv_nir = _scattering_one_band(
+        initial_nir,
+        graph,
+        cfg,
+        "NIR",
+        cfg.scattering_coeff_nir,
+    )
+
+    ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)
+end
+
+function compute_scattering(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    cfg::LightConfig,
+    ::LinksScatteringBackend,
+)
+    # CPU reference currently shares the same iterative propagation path.
+    return compute_scattering(graph, first, cfg, RaycastScatteringBackend())
 end
 
 function compute_scattering(
@@ -233,35 +434,9 @@ function compute_scattering(
     first::FirstOrderResult,
     cfg::LightConfig;
     mode=:raycast,
+    backend=nothing,
 )
-    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode")
-    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
-
-    initial_par = Dict{Int,Float64}(nid => get(first.incident_par_power_per_node, nid, 0.0) for nid in node_ids)
-    initial_nir = Dict{Int,Float64}(nid => get(first.incident_nir_power_per_node, nid, 0.0) for nid in node_ids)
-
-    added_par, it_par, conv_par = _scattering_one_band(
-        initial_par,
-        pair_counts,
-        all_hits,
-        node_ids,
-        node_group,
-        group_coeffs,
-        cfg,
-        "PAR",
-        cfg.scattering_coeff_par,
-    )
-    added_nir, it_nir, conv_nir = _scattering_one_band(
-        initial_nir,
-        pair_counts,
-        all_hits,
-        node_ids,
-        node_group,
-        group_coeffs,
-        cfg,
-        "NIR",
-        cfg.scattering_coeff_nir,
-    )
-
-    ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(scene, turtle, first, cfg, b)
+    return compute_scattering(graph, first, cfg, b)
 end

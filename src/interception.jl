@@ -573,6 +573,33 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     return vertices, faces, face2node, unique(node_ids), plotbox, node_group
 end
 
+function _interception_java_keys(scene::SceneGeometry, cfg::LightConfig)
+    _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
+    keys_by_node = Dict{Int,Tuple{Int,Int}}()
+
+    pav_ids = sort(Int[nid for nid in node_ids if get(node_group, nid, "") == "pavement"])
+    for (i, nid) in enumerate(pav_ids)
+        keys_by_node[nid] = (-1, i + 1)
+    end
+
+    for nid in node_ids
+        haskey(keys_by_node, nid) && continue
+        item_id = get(scene.java_item_id_per_node, nid, 1)
+        comp_id = get(scene.java_component_id_per_node, nid, nid + 1)
+        keys_by_node[nid] = (item_id, comp_id)
+    end
+    keys_by_node
+end
+
+"""
+    compute_first_order(scene, turtle, fluxes, cfg; backend=:raster_cpu)::FirstOrderResult
+
+Compute first-order interception by rasterizing each direction, then integrating projected area,
+incident power, and hit counts per geometry node.
+
+`backend` accepts either a symbol (currently `:raster_cpu`) or an
+`InterceptionBackend` instance (currently `RasterCPUBackend()`).
+"""
 function compute_first_order(
     scene::SceneGeometry,
     turtle::TurtleGrid,
@@ -580,7 +607,32 @@ function compute_first_order(
     cfg::LightConfig;
     backend=:raster_cpu,
 )
-    backend == :raster_cpu || error("Unsupported backend: $backend")
+    return compute_first_order(scene, turtle, fluxes, cfg, _resolve_interception_backend(backend))
+end
+
+function _resolve_interception_backend(backend::InterceptionBackend)
+    return backend
+end
+
+function _resolve_interception_backend(backend::Symbol)
+    backend == :raster_cpu && return RasterCPUBackend()
+    error("Unsupported interception backend symbol: $backend (supported: :raster_cpu)")
+end
+
+function _resolve_interception_backend(backend)
+    error(
+        "Unsupported interception backend selector type: $(typeof(backend)). " *
+        "Use :raster_cpu or RasterCPUBackend().",
+    )
+end
+
+function compute_first_order(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    cfg::LightConfig,
+    ::RasterCPUBackend,
+)
 
     vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
@@ -592,7 +644,15 @@ function compute_first_order(
 
     for (k, sector) in enumerate(turtle.sectors)
         visible_area, node_hits =
-            _rasterize_direction_java(vertices, faces, face2node, sector.direction, cfg, plotbox; cache_ctx=cache_ctx)
+            _rasterize_direction_java(
+                vertices,
+                faces,
+                face2node,
+                sector.direction,
+                cfg,
+                plotbox;
+                cache_ctx=cache_ctx,
+            )
 
         for (nid, h) in node_hits
             hits_per_node[nid] = get(hits_per_node, nid, 0) + h
@@ -618,4 +678,14 @@ function compute_first_order(
         incident_nir_power_per_node,
         hits_per_node,
     )
+end
+
+function compute_first_order(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    cfg::LightConfig,
+    backend::InterceptionBackend,
+)
+    error("Unsupported interception backend type: $(typeof(backend))")
 end

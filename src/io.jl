@@ -51,6 +51,13 @@ function _join_if_relative(base::AbstractString, p::AbstractString)
     isabspath(p) ? p : normpath(joinpath(base, p))
 end
 
+"""
+    read_light_config(path)::LightConfig
+
+Read a YAML configuration file and normalize ARCHIMED light options into a `LightConfig`.
+
+`pixel_size` is interpreted like Java input files (centimeters) and converted to meters.
+"""
 function read_light_config(path::AbstractString)
     raw = YAML.load_file(path)
     d = raw isa AbstractDict ? _to_string_dict(raw) : Dict{String,Any}()
@@ -131,9 +138,129 @@ function _has_attr(attrs, key::Symbol)
     haskey(attrs, key) || haskey(attrs, String(key))
 end
 
-function _collect_mesh_nodes!(node, meshes, node_ids, node_group, next_id::Base.RefValue{Int}, current_group::String="")
+function _dict_attr(attrs, key::Symbol)
+    attrs isa AbstractDict || return nothing
+    if haskey(attrs, key)
+        return attrs[key]
+    elseif haskey(attrs, String(key))
+        return attrs[String(key)]
+    end
+    return nothing
+end
+
+function _as_int_or(x, default::Int)
+    x === nothing && return default
+    x isa Integer && return Int(x)
+    x isa Number && return round(Int, x)
+    if x isa String
+        try
+            return parse(Int, strip(x))
+        catch
+            return default
+        end
+    end
+    return default
+end
+
+function _node_item_id(attrs, default::Int)
+    for key in (:plantID, :plant_id, :item_id, :itemID)
+        v = _dict_attr(attrs, key)
+        v === nothing && continue
+        return _as_int_or(v, default)
+    end
+    return default
+end
+
+function _node_component_id(node, default::Int)
+    idv =
+        try
+            getfield(node, :id)
+        catch
+            nothing
+        end
+    idv === nothing && return default
+    # Java component ids match MTG node ids with +1 offset.
+    _as_int_or(idv, default) + 1
+end
+
+function _opf_geometry_component_ids(path::AbstractString)
+    lines = readlines(path)
+    stack = Any[]
+    out = Int[]
+    seen = Set{Int}()
+
+    for ln in lines
+        mo = match(r"<([A-Za-z]+)\b[^>]*\bclass=\"[^\"]+\"[^>]*\bid=\"([0-9]+)\"", ln)
+        if mo !== nothing
+            push!(stack, (tag=mo.captures[1], id=parse(Int, mo.captures[2]), has_shape=false))
+        end
+
+        ms = match(r"<shapeIndex>\s*([0-9]+)\s*</shapeIndex>", ln)
+        if ms !== nothing && !isempty(stack)
+            ctx = stack[end]
+            if !ctx.has_shape
+                stack[end] = (tag=ctx.tag, id=ctx.id, has_shape=true)
+                if !(ctx.id in seen)
+                    push!(out, ctx.id)
+                    push!(seen, ctx.id)
+                end
+            end
+        end
+
+        mc = match(r"</([A-Za-z]+)>", ln)
+        if mc !== nothing && !isempty(stack)
+            if mc.captures[1] == stack[end].tag
+                pop!(stack)
+            end
+        end
+    end
+
+    out
+end
+
+function _ops_component_id_hints(path::AbstractString)
+    hints = Dict{Int,Vector{Int}}()
+    base = dirname(path)
+    lines = readlines(path)
+    for line in lines
+        s = strip(replace(line, '\r' => ""))
+        isempty(s) && continue
+        startswith(s, "#") && continue
+        startswith(s, "T") && continue
+        toks = split(s)
+        length(toks) < 3 && continue
+
+        plant_id = try
+            parse(Int, toks[2])
+        catch
+            continue
+        end
+        f = toks[3]
+        full = isabspath(f) ? f : normpath(joinpath(base, f))
+        ext = lowercase(splitext(full)[2])
+        if ext == ".opf" && isfile(full)
+            hints[plant_id] = _opf_geometry_component_ids(full)
+        end
+    end
+    hints
+end
+
+function _collect_mesh_nodes!(
+    node,
+    meshes,
+    node_ids,
+    node_group,
+    node_item_id,
+    node_component_id,
+    component_id_hints,
+    component_id_hint_cursor,
+    next_id::Base.RefValue{Int},
+    current_group::String="",
+    current_item_id::Int=1,
+)
     attrs = _node_attrs(node)
     group = current_group
+    item_id = _node_item_id(attrs, current_item_id)
     if attrs isa AbstractDict
         if haskey(attrs, :functional_group)
             group = string(attrs[:functional_group])
@@ -147,22 +274,59 @@ function _collect_mesh_nodes!(node, meshes, node_ids, node_group, next_id::Base.
         next_id[] += 1
         push!(node_ids, next_id[])
         node_group[next_id[]] = group
+        node_item_id[next_id[]] = item_id
+
+        hinted = nothing
+        if haskey(component_id_hints, item_id)
+            cursor = get(component_id_hint_cursor, item_id, 1)
+            ids = component_id_hints[item_id]
+            if 1 <= cursor <= length(ids)
+                hinted = ids[cursor]
+                component_id_hint_cursor[item_id] = cursor + 1
+            end
+        end
+        node_component_id[next_id[]] = hinted === nothing ? _node_component_id(node, next_id[] + 1) : Int(hinted)
     end
 
     children = _node_children(node)
     if children !== nothing
         for ch in children
-            _collect_mesh_nodes!(ch, meshes, node_ids, node_group, next_id, group)
+            _collect_mesh_nodes!(
+                ch,
+                meshes,
+                node_ids,
+                node_group,
+                node_item_id,
+                node_component_id,
+                component_id_hints,
+                component_id_hint_cursor,
+                next_id,
+                group,
+                item_id,
+            )
         end
     end
 end
 
-function _build_merged_mesh_with_map_local(mtg)
+function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vector{Int}}=Dict{Int,Vector{Int}}())
     meshes = Any[]
     mesh_node_ids = Int[]
     node_group = Dict{Int,String}()
+    node_item_id = Dict{Int,Int}()
+    node_component_id = Dict{Int,Int}()
+    component_id_hint_cursor = Dict{Int,Int}(k => 1 for k in keys(component_id_hints))
     next_id = Ref(0)
-    _collect_mesh_nodes!(mtg, meshes, mesh_node_ids, node_group, next_id)
+    _collect_mesh_nodes!(
+        mtg,
+        meshes,
+        mesh_node_ids,
+        node_group,
+        node_item_id,
+        node_component_id,
+        component_id_hints,
+        component_id_hint_cursor,
+        next_id,
+    )
 
     isempty(meshes) && error("No geometry meshes found in scene.")
 
@@ -173,15 +337,25 @@ function _build_merged_mesh_with_map_local(mtg)
         nfaces = length(GeometryBasics.decompose(PlantGeom.Face3, mesh))
         append!(face2node, fill(mesh_node_ids[mi], nfaces))
     end
-    merged_mesh, face2node, node_group
+    merged_mesh, face2node, node_group, node_item_id, node_component_id
 end
 
 function _build_scene_geometry(mtg, source_path::AbstractString)
-    _build_scene_geometry(mtg, source_path, nothing)
+    _build_scene_geometry(mtg, source_path, nothing, Dict{Int,Vector{Int}}())
 end
 
 function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
-    merged_mesh, face2node, node_group = _build_merged_mesh_with_map_local(mtg)
+    _build_scene_geometry(mtg, source_path, scene_xy_bounds, Dict{Int,Vector{Int}}())
+end
+
+function _build_scene_geometry(
+    mtg,
+    source_path::AbstractString,
+    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}},
+    component_id_hints::Dict{Int,Vector{Int}},
+)
+    merged_mesh, face2node, node_group, node_item_id, node_component_id =
+        _build_merged_mesh_with_map_local(mtg; component_id_hints=component_id_hints)
 
     verts = GeometryBasics.decompose(PlantGeom.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
@@ -191,7 +365,17 @@ function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds
         area = _triangle_area3d(verts[f[1]], verts[f[2]], verts[f[3]])
         node_area[n] = get(node_area, n, 0.0) + area
     end
-    SceneGeometry(mtg, merged_mesh, face2node, node_area, node_group, String(source_path), scene_xy_bounds)
+    SceneGeometry(
+        mtg,
+        merged_mesh,
+        face2node,
+        node_area,
+        node_group,
+        node_item_id,
+        node_component_id,
+        String(source_path),
+        scene_xy_bounds,
+    )
 end
 
 function _normalize_ops_lines(lines::Vector{String})
@@ -270,21 +454,30 @@ function _ops_scene_xy_bounds(path::AbstractString)
     nothing
 end
 
+"""
+    read_scene(path; plantgeom_backend=:auto)::SceneGeometry
+
+Read an ARCHIMED scene file (`.ops`, `.opf`, or `.gwa`) and return merged triangle geometry
+with per-node metadata used by light interception and scattering.
+"""
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
     scene_xy_bounds = nothing
+    component_id_hints = Dict{Int,Vector{Int}}()
     mtg =
         if ext == ".ops"
             scene_xy_bounds = _ops_scene_xy_bounds(path)
+            component_id_hints = _ops_component_id_hints(path)
             _read_ops_relaxed(path)
         elseif ext == ".opf"
+            component_id_hints[1] = _opf_geometry_component_ids(path)
             PlantGeom.read_opf(path)
         elseif ext == ".gwa"
             PlantGeom.read_gwa(path)
         else
             error("Unsupported scene extension: $ext")
         end
-    _build_scene_geometry(mtg, path, scene_xy_bounds)
+    _build_scene_geometry(mtg, path, scene_xy_bounds, component_id_hints)
 end
 
 function _rows_to_namedtuples(table)
@@ -335,6 +528,12 @@ function _forward_fill_row_date(rows::Vector{<:NamedTuple})
     out
 end
 
+"""
+    read_meteo(path)::MeteoTable
+
+Read a weather/meteo file with `PlantMeteo.read_weather`, preserving parsed metadata
+and returning rows as named tuples.
+"""
 function read_meteo(path::AbstractString)
     weather, meta =
         try

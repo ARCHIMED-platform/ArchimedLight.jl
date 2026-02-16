@@ -1,3 +1,13 @@
+abstract type InterceptionBackend end
+
+struct RasterCPUBackend <: InterceptionBackend end
+
+abstract type ScatteringBackend end
+
+struct RaycastScatteringBackend <: ScatteringBackend end
+
+struct LinksScatteringBackend <: ScatteringBackend end
+
 struct LightConfig
     scene::String
     meteo::String
@@ -25,6 +35,8 @@ struct SceneGeometry
     face2node::Vector{Int}
     total_area_per_node::Dict{Int,Float64}
     node_group::Dict{Int,String}
+    java_item_id_per_node::Dict{Int,Int}
+    java_component_id_per_node::Dict{Int,Int}
     source_path::String
     scene_xy_bounds::Union{Nothing,NTuple{4,Float64}}
 end
@@ -85,6 +97,14 @@ struct ScatteringResult
     added_nir_power_per_node::Dict{Int,Float64}
     iterations::Int
     converged::Bool
+end
+
+struct ScatteringTransferGraph
+    pair_counts::Dict{Tuple{Int,Int},Int}
+    all_hits::Dict{Int,Int}
+    node_ids::Vector{Int}
+    node_group::Dict{Int,String}
+    group_coeffs::Dict{String,Dict{String,Float64}}
 end
 
 struct LightBudget

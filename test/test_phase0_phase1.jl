@@ -22,9 +22,98 @@ end
     meteo = ArchimedLight.read_meteo(cfg.meteo)
     @test !isempty(meteo.rows)
 
-    step = ArchimedLight.run_light_step(scene, first(meteo.rows), cfg)
+    row = first(meteo.rows)
+    step = ArchimedLight.run_light_step(scene, row, cfg)
     @test length(step.turtle.sectors) >= 1
     @test !isempty(step.budget.ri_par_q_per_node)
+    step_bk = ArchimedLight.run_light_step(
+        scene,
+        row,
+        cfg;
+        interception_backend=ArchimedLight.RasterCPUBackend(),
+        scattering_backend=ArchimedLight.RaycastScatteringBackend(),
+    )
+    step_lk = ArchimedLight.run_light_step(
+        scene,
+        row,
+        cfg;
+        interception_backend=ArchimedLight.RasterCPUBackend(),
+        scattering_backend=ArchimedLight.LinksScatteringBackend(),
+    )
+
+    # Function-first composability check: manual staged execution must match run_light_step.
+    sky = ArchimedLight.compute_sky(row, cfg)
+    turtle = ArchimedLight.build_turtle(cfg, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+    max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64}) = maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
+    max_abs_int_dict_diff(a::Dict{Int,Int}, b::Dict{Int,Int}) = maximum(abs(get(a, id, 0) - get(b, id, 0)) for id in union(keys(a), keys(b)); init=0)
+    first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+    first_order_cpu_obj = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg; backend=ArchimedLight.RasterCPUBackend())
+    scat =
+        if cfg.scattering
+            graph = ArchimedLight.build_scattering_transfer_graph(scene, turtle, first_order, cfg)
+            graph_cpu = ArchimedLight.build_scattering_transfer_graph(
+                scene,
+                turtle,
+                first_order,
+                cfg;
+                backend=ArchimedLight.RaycastScatteringBackend(),
+            )
+            scat_graph = ArchimedLight.compute_scattering(graph, first_order, cfg)
+            scat_graph_cpu = ArchimedLight.compute_scattering(
+                graph_cpu,
+                first_order,
+                cfg;
+                backend=ArchimedLight.RaycastScatteringBackend(),
+            )
+            scat_scene = ArchimedLight.compute_scattering(scene, turtle, first_order, cfg)
+            scat_scene_links = ArchimedLight.compute_scattering(
+                scene,
+                turtle,
+                first_order,
+                cfg;
+                backend=ArchimedLight.LinksScatteringBackend(),
+            )
+            @test max_abs_float_dict_diff(scat_graph.added_par_power_per_node, scat_scene.added_par_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(scat_graph.added_nir_power_per_node, scat_scene.added_nir_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(scat_graph_cpu.added_par_power_per_node, scat_scene.added_par_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(scat_graph_cpu.added_nir_power_per_node, scat_scene.added_nir_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(scat_scene_links.added_par_power_per_node, scat_scene.added_par_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(scat_scene_links.added_nir_power_per_node, scat_scene.added_nir_power_per_node) == 0.0
+            @test_throws ErrorException ArchimedLight.compute_scattering(scene, turtle, first_order, cfg; mode=:gpu)
+            scat_scene
+        else
+            nothing
+        end
+    budget = ArchimedLight.integrate_light(first_order, scat, cfg)
+
+    @test abs(step.sky.ri_sw_f - sky.ri_sw_f) < 1e-12
+    @test abs(step.sky.direct_fraction - sky.direct_fraction) < 1e-12
+    @test length(step.turtle.sectors) == length(turtle.sectors)
+    @test max_abs_float_dict_diff(step.first_order.projected_area_per_node, step_bk.first_order.projected_area_per_node) == 0.0
+    @test max_abs_int_dict_diff(step.first_order.hits_per_node, step_bk.first_order.hits_per_node) == 0
+    @test max_abs_float_dict_diff(step.budget.ri_par_q_per_node, step_bk.budget.ri_par_q_per_node) == 0.0
+    @test max_abs_float_dict_diff(step.budget.ri_nir_q_per_node, step_bk.budget.ri_nir_q_per_node) == 0.0
+    @test max_abs_float_dict_diff(step.budget.ri_par_q_per_node, step_lk.budget.ri_par_q_per_node) == 0.0
+    @test max_abs_float_dict_diff(step.budget.ri_nir_q_per_node, step_lk.budget.ri_nir_q_per_node) == 0.0
+    @test step.fluxes.sector_ids == fluxes.sector_ids
+    @test maximum(abs.(step.fluxes.par .- fluxes.par)) == 0.0
+    @test maximum(abs.(step.fluxes.nir .- fluxes.nir)) == 0.0
+    @test max_abs_float_dict_diff(step.first_order.projected_area_per_node, first_order.projected_area_per_node) == 0.0
+    @test max_abs_int_dict_diff(step.first_order.hits_per_node, first_order.hits_per_node) == 0
+    @test max_abs_float_dict_diff(first_order.projected_area_per_node, first_order_cpu_obj.projected_area_per_node) == 0.0
+    @test max_abs_int_dict_diff(first_order.hits_per_node, first_order_cpu_obj.hits_per_node) == 0
+    @test max_abs_float_dict_diff(step.budget.ri_par_q_per_node, budget.ri_par_q_per_node) == 0.0
+    @test max_abs_float_dict_diff(step.budget.ri_nir_q_per_node, budget.ri_nir_q_per_node) == 0.0
+    @test_throws ErrorException ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg; backend=:gpu)
+    if cfg.scattering
+        @test step.scattering !== nothing
+        @test scat !== nothing
+        @test max_abs_float_dict_diff(step.scattering.added_par_power_per_node, scat.added_par_power_per_node) == 0.0
+        @test max_abs_float_dict_diff(step.scattering.added_nir_power_per_node, scat.added_nir_power_per_node) == 0.0
+    else
+        @test step.scattering === nothing
+    end
 
     cfg_cache = ArchimedLight.LightConfig(
         cfg.scene,
@@ -43,7 +132,31 @@ end
     )
     subset = ArchimedLight.MeteoTable(meteo.rows[1:min(2, end)], meteo.metadata)
     series = ArchimedLight.run_light_series(scene, subset, cfg_cache)
+    series_bk = ArchimedLight.run_light_series(
+        scene,
+        subset,
+        cfg_cache;
+        interception_backend=ArchimedLight.RasterCPUBackend(),
+        scattering_backend=ArchimedLight.RaycastScatteringBackend(),
+    )
+    series_lk = ArchimedLight.run_light_series(
+        scene,
+        subset,
+        cfg_cache;
+        interception_backend=ArchimedLight.RasterCPUBackend(),
+        scattering_backend=ArchimedLight.LinksScatteringBackend(),
+    )
     @test length(series) == length(subset.rows)
+    @test length(series_bk) == length(series)
+    @test length(series_lk) == length(series)
+    for i in eachindex(series)
+        @test max_abs_float_dict_diff(series[i].first_order.projected_area_per_node, series_bk[i].first_order.projected_area_per_node) == 0.0
+        @test max_abs_int_dict_diff(series[i].first_order.hits_per_node, series_bk[i].first_order.hits_per_node) == 0
+        @test max_abs_float_dict_diff(series[i].budget.ri_par_q_per_node, series_bk[i].budget.ri_par_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(series[i].budget.ri_nir_q_per_node, series_bk[i].budget.ri_nir_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(series[i].budget.ri_par_q_per_node, series_lk[i].budget.ri_par_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(series[i].budget.ri_nir_q_per_node, series_lk[i].budget.ri_nir_q_per_node) == 0.0
+    end
 end
 
 @testset "OPS GWA scene load" begin
@@ -282,6 +395,28 @@ end
         end
         sort(vals)
     end
+    function expected_component_metrics(path::String)
+        rows = read_java_csv(path)
+        out = Dict{Tuple{Int,Int},NamedTuple{(:area,:hits,:irr0),Tuple{Float64,Int,Float64}}}()
+        for r in rows
+            item = to_int(getproperty(r, :item_id))
+            comp = to_int(getproperty(r, :component_id))
+            area = Float64(getproperty(r, :area))
+            hits = Int(floor(area * Float64(getproperty(r, :surface_hits))))
+            irr0 = Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR))
+            out[(item, comp)] = (area=area, hits=hits, irr0=irr0)
+        end
+        out
+    end
+    function observed_component_metrics(scene::ArchimedLight.SceneGeometry, cfg::ArchimedLight.LightConfig, step::ArchimedLight.LightStepResult)
+        key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
+        out = Dict{Tuple{Int,Int},NamedTuple{(:hits,:power0),Tuple{Int,Float64}}}()
+        for (nid, key) in key_by_node
+            p0 = get(step.first_order.incident_par_power_per_node, nid, 0.0) + get(step.first_order.incident_nir_power_per_node, nid, 0.0)
+            out[key] = (hits=get(step.first_order.hits_per_node, nid, 0), power0=p0)
+        end
+        out
+    end
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
 
@@ -294,6 +429,82 @@ end
     @test r_true.snapshot.total_hits > 0
     @test relerr(r_false.snapshot.total_hits, r_false.expected_hitcount_total) < 0.01
     @test relerr(r_true.snapshot.total_hits, r_true.expected_hitcount_total) < 0.01
+
+    for all_in_turtle in (false, true)
+        cfg = ArchimedLight.read_light_config(f_hit.config_path)
+        cfg = _with_overrides(cfg; all_in_turtle=all_in_turtle)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+
+        expected_path = _expected_component_values_path(f_hit; all_in_turtle=all_in_turtle)
+        @test expected_path !== nothing
+        expected = expected_component_metrics(expected_path)
+        observed = observed_component_metrics(scene, cfg, step)
+
+        @test Set(keys(observed)) == Set(keys(expected))
+        for key in keys(expected)
+            exp = expected[key]
+            got = observed[key]
+            @test abs(got.hits - exp.hits) / max(exp.hits, 1) < 0.003
+        end
+
+        # Item component IDs are now mapped explicitly; plant component irradiance is in tight parity.
+        plant_key = (1, 2)
+        @test haskey(expected, plant_key)
+        @test haskey(observed, plant_key)
+        expp = expected[plant_key]
+        gotp = observed[plant_key]
+        got_irr = gotp.power0 / max(expp.area, eps(Float64))
+        @test abs(got_irr - expp.irr0) / max(abs(expp.irr0), eps(Float64)) < 1e-6
+    end
+
+    f_hit3 = fixtures["test-hitcount3"]
+    for all_in_turtle in (false, true)
+        cfg = ArchimedLight.read_light_config(f_hit3.config_path)
+        cfg = _with_overrides(cfg; all_in_turtle=all_in_turtle)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        expected_path = _expected_component_values_path(f_hit3; all_in_turtle=all_in_turtle)
+        @test expected_path !== nothing
+        expected = expected_component_metrics(expected_path)
+        observed = observed_component_metrics(scene, cfg, step)
+
+        missing = setdiff(Set(keys(expected)), Set(keys(observed)))
+        extra = setdiff(Set(keys(observed)), Set(keys(expected)))
+        @test isempty(missing)
+        @test isempty(extra)
+
+        hit_rel_hi = Float64[]
+        irr_rel_hi = Float64[]
+        irr_abs_hi = Float64[]
+        for key in keys(expected)
+            exp = expected[key]
+            got = observed[key]
+            rel_hit = abs(got.hits - exp.hits) / max(exp.hits, 1)
+            if exp.hits >= 1000
+                push!(hit_rel_hi, rel_hit)
+            end
+
+            got_irr = got.power0 / max(exp.area, eps(Float64))
+            abs_err_irr = abs(got_irr - exp.irr0)
+            if abs(exp.irr0) >= 1.0
+                push!(irr_abs_hi, abs_err_irr)
+                push!(irr_rel_hi, abs_err_irr / max(abs(exp.irr0), eps(Float64)))
+            end
+        end
+
+        @test !isempty(hit_rel_hi)
+        @test !isempty(irr_abs_hi)
+        if all_in_turtle
+            @test maximum(hit_rel_hi) < 0.003
+            @test maximum(irr_rel_hi) < 0.4
+        else
+            @test maximum(hit_rel_hi) < 0.05
+            @test maximum(irr_abs_hi) < 650.0
+        end
+    end
 
     for (all_in_turtle, max_abs_err, max_rel_err) in ((false, 900, 0.002), (true, 500, 0.0012))
         step = run_fixture_once(f_hit; all_in_turtle=all_in_turtle)

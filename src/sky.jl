@@ -458,6 +458,12 @@ function _auto_sun_and_direct_fraction(
     return sun_az, sun_el, direct_fraction
 end
 
+"""
+    compute_sky(meteo_row, cfg)::SkyState
+
+Compute sun position, PAR/NIR/SW irradiance, and direct/diffuse partition for one meteo row,
+following Java-compatible precedence rules for available meteorological inputs.
+"""
 function compute_sky(meteo_row, cfg::LightConfig)
     ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
     ri_par = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)

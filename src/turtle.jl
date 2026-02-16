@@ -259,6 +259,12 @@ function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::
     fill(1.0 / n, n)
 end
 
+"""
+    build_turtle(cfg, sky)::TurtleGrid
+
+Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
+sector when `cfg.all_in_turtle == false`.
+"""
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(cfg.turtle_sectors, 1)
     dirs =
@@ -279,6 +285,12 @@ function build_turtle(cfg::LightConfig, sky::SkyState)
     TurtleGrid(sectors)
 end
 
+"""
+    compute_directional_fluxes(sky, turtle, cfg)::DirectionalFluxes
+
+Project sky-level PAR/NIR irradiance to each turtle sector using Java-compatible diffuse and
+direct distribution rules.
+"""
 function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
     n = length(turtle.sectors)
     par = zeros(Float64, n)
