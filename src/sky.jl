@@ -229,6 +229,68 @@ function _as_degrees_if_radians(x::Float64)
     abs(x) <= 2pi + 1e-9 ? rad2deg(x) : x
 end
 
+function _use_tokens(row)
+    if :use in propertynames(row)
+        v = getproperty(row, :use)
+        if v isa AbstractString
+            t = strip(String(v))
+            return isempty(t) ? String[] : split(t)
+        elseif v isa AbstractVector
+            return [strip(string(x)) for x in v if !isempty(strip(string(x)))]
+        elseif v !== missing
+            t = strip(string(v))
+            return isempty(t) ? String[] : split(t)
+        end
+    end
+    return String[]
+end
+
+function _validate_meteo_radiation_inputs(use_tokens::AbstractVector{<:AbstractString}, has_cl::Bool, has_sw::Bool, has_par::Bool, has_nir::Bool)
+    key_cl = "clearness"
+    keys_set2 = ("RI_SW_f", "RI_PAR_f", "RI_NIR_f")
+    all_keys = (key_cl, keys_set2...)
+    uses_rel = [u for u in use_tokens if u in all_keys]
+
+    # Java check for RI_SW_f/RI_PAR_f/RI_NIR_f triplet consistency.
+    if has_sw && has_par && has_nir
+        k = count(u -> u in keys_set2, uses_rel)
+        k == 0 && error("meteo consistency error: missing 'use' line with RI_SW_f/RI_PAR_f/RI_NIR_f columns")
+        k == 1 || error("meteo consistency error: extra use(s) with RI_SW_f/RI_PAR_f/RI_NIR_f columns")
+    end
+
+    # Java checkConsistency(set1=clearness, set2=[RI_SW_f, RI_PAR_f, RI_NIR_f], allowDoubleUse=true)
+    has_any = has_cl || has_sw || has_par || has_nir
+    has_any || error("meteo consistency error: missing column clearness/RI_SW_f/RI_PAR_f/RI_NIR_f")
+
+    for u in uses_rel
+        if u == key_cl && !has_cl
+            error("meteo consistency error: missing clearness column specified in 'use' line")
+        elseif u == "RI_SW_f" && !has_sw
+            error("meteo consistency error: missing RI_SW_f column specified in 'use' line")
+        elseif u == "RI_PAR_f" && !has_par
+            error("meteo consistency error: missing RI_PAR_f column specified in 'use' line")
+        elseif u == "RI_NIR_f" && !has_nir
+            error("meteo consistency error: missing RI_NIR_f column specified in 'use' line")
+        end
+    end
+
+    use1 = any(==("clearness"), uses_rel)
+    uses2 = [u for u in uses_rel if u in keys_set2]
+    if use1
+        length(uses2) <= 1 || error("meteo consistency error: multiple uses: clearness/$(join(uses2, '/'))")
+    else
+        length(uses2) <= 1 || error("meteo consistency error: multiple uses: $(join(uses2, '/'))")
+    end
+
+    if !use1 && isempty(uses2) && has_cl && (has_sw || has_par || has_nir)
+        cols = String[]
+        has_sw && push!(cols, "RI_SW_f")
+        has_par && push!(cols, "RI_PAR_f")
+        has_nir && push!(cols, "RI_NIR_f")
+        error("meteo consistency error: missing 'use' for columns clearness/$(join(cols, '/'))")
+    end
+end
+
 function _dict_float_or_nan(d, key::String)
     d isa AbstractDict || return NaN
     haskey(d, key) || return NaN
@@ -406,6 +468,15 @@ function compute_sky(meteo_row, cfg::LightConfig)
     clearness_raw = _row_value(meteo_row, [:clearness, :Kt], NaN)
     clearness_provided = !isnan(clearness_raw)
     clearness = clearness_raw
+
+    _validate_meteo_radiation_inputs(
+        _use_tokens(meteo_row),
+        !isnan(clearness_raw),
+        !isnan(ri_sw_raw),
+        !isnan(ri_par),
+        !isnan(ri_nir),
+    )
+
     latitude_deg = _row_value(meteo_row, [:latitude, :lat], 0.0)
     latitude_rad = deg2rad(latitude_deg)
     date = _row_date(meteo_row)

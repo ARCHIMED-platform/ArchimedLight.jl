@@ -168,8 +168,37 @@ end
             end
         @test abs((sky_c.ri_par_f + sky_c.ri_nir_f) - global_ref) < 2e-4
         @test abs((sky_g.ri_par_f + sky_g.ri_nir_f) - global_ref) < 2e-9
-        @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.07
+        @test abs(sky_c.direct_fraction - sky_g.direct_fraction) < 0.06
     end
+end
+
+@testset "Meteo use parity" begin
+    root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-clearness-global2")
+    cfg = ArchimedLight.read_light_config(joinpath(root, "config.yml"))
+
+    function sky_from_file(n::Int)
+        m = ArchimedLight.read_meteo(joinpath(root, "meteo$(n).csv"))
+        ArchimedLight.compute_sky(first(m.rows), cfg)
+    end
+
+    for n in (1, 2, 3, 4, 5, 6, 7, 17, 18, 19, 20, 21, 23, 24, 25)
+        s = sky_from_file(n)
+        @test isfinite(s.ri_par_f + s.ri_nir_f)
+        @test isfinite(s.direct_fraction)
+    end
+
+    for n in (8, 9, 10, 11, 12, 16, 22)
+        @test_throws ErrorException sky_from_file(n)
+    end
+
+    # Java behavior: with both clearness and RI_SW_f columns present, use lines validate
+    # consistency but the provided RI_SW_f remains the irradiance source.
+    s5 = sky_from_file(5)
+    s6 = sky_from_file(6)
+    s7 = sky_from_file(7)
+    @test abs((s5.ri_par_f + s5.ri_nir_f) - 100.0) < 1e-12
+    @test abs((s6.ri_par_f + s6.ri_nir_f) - 100.0) < 1e-12
+    @test abs((s7.ri_par_f + s7.ri_nir_f) - 100.0) < 1e-12
 end
 
 @testset "Parity reports" begin

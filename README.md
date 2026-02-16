@@ -37,6 +37,7 @@ series = run_light_series(scene, meteo, cfg)
 - You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, ...).
 - `compute_sky` follows Java clearness/global conversion and DeJong hourly direct/diffuse partitioning.
 - `compute_sky` uses Java-style substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
+- Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend.
 - `pixel_size` is validated with Java parity bounds (`0 < pixel_size <= 0.5` meters).
 - `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are both available.

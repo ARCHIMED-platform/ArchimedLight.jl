@@ -304,7 +304,7 @@ end
 
 function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
     pairs = Pair{Symbol,Any}[]
-    for k in (:latitude, :longitude, :altitude)
+    for k in (:latitude, :longitude, :altitude, :use)
         haskey(meta, k) && push!(pairs, k => getfield(meta, k))
     end
     isempty(pairs) ? row : merge(row, (; pairs...))
