@@ -49,6 +49,61 @@ end
     cfg = ArchimedLight.read_light_config(joinpath(root, "config.yml"))
     scene = ArchimedLight.read_scene(cfg.scene)
     @test !isempty(scene.face2node)
+
+    # Legacy OPS rows are interpreted with extension-dependent scale normalization:
+    # .gwa keeps historical cm->m conversion, .opf stays at scale=1.0.
+    cfg_gwa = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-hitcount2", "config.yml"))
+    scene_gwa = ArchimedLight.read_scene(cfg_gwa.scene)
+    @test isapprox(sum(values(scene_gwa.total_area_per_node)), 1.0; atol=1e-9, rtol=1e-9)
+
+    cfg_opf = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-customband", "config.yml"))
+    scene_opf = ArchimedLight.read_scene(cfg_opf.scene)
+    @test isapprox(sum(values(scene_opf.total_area_per_node)), 0.007472579789211572; atol=1e-12, rtol=1e-9)
+end
+
+@testset "Turtle geometry parity" begin
+    cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
+    sky_ref = ArchimedLight.SkyState(0.0, 45.0, 1.0, 1.0, 0.0, 1.0)
+
+    function with_sectors(cfg::ArchimedLight.LightConfig, n::Int)
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            true,
+            n,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            cfg.raw,
+        )
+    end
+
+    for n in (1, 6, 16, 46, 136, 406)
+        t = ArchimedLight.build_turtle(with_sectors(cfg_ref, n), sky_ref)
+        @test length(t.sectors) == n
+    end
+
+    t6 = ArchimedLight.build_turtle(with_sectors(cfg_ref, 6), sky_ref)
+    got6 = [s.direction for s in t6.sectors]
+    exp6 = [
+        (0.0, 0.0, -1.0),
+        (1.5637987e-7, -0.89438856, -0.44729084),
+        (-0.85061413, -0.27638108, -0.44729084),
+        (-0.5257086, 0.7235755, -0.4472909),
+        (0.5257085, 0.7235755, -0.44729084),
+        (0.85061413, -0.2763814, -0.4472909),
+    ]
+    @test length(got6) == length(exp6)
+    for i in eachindex(exp6)
+        @test abs(got6[i][1] - exp6[i][1]) < 1e-6
+        @test abs(got6[i][2] - exp6[i][2]) < 1e-6
+        @test abs(got6[i][3] - exp6[i][3]) < 1e-6
+    end
 end
 
 @testset "Parity reports" begin
@@ -197,9 +252,8 @@ end
         @test metrics.edge_counts == expected_edge_counts
     end
 
-    # Java fixture `test-links-stats` expects link statistics to be pixel-size invariant
-    # for the two configured resolutions. Current Julia raster/link extraction is not yet
-    # resolution-invariant here, so we track this explicitly as pending parity work.
+    # Java fixture `test-links-stats` expects node-link counts to be pixel-size invariant
+    # for the two configured resolutions. Raw ray hit counts remain resolution-dependent.
     links_stats_cfg = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml")
     cfg_links_stats = ArchimedLight.read_light_config(links_stats_cfg)
     cfg_links_stats_017 = ArchimedLight.LightConfig(
@@ -257,7 +311,7 @@ end
     end
     m_links_017 = link_metrics_from_cfg(cfg_links_stats_017)
     m_links_003 = link_metrics_from_cfg(cfg_links_stats_003)
-    @test_broken m_links_017.links == m_links_003.links
+    @test m_links_017.links == m_links_003.links
     @test_broken m_links_017.all_hits == m_links_003.all_hits
 
     f_div = fixtures["test-scattering-divergence"]

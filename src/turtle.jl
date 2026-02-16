@@ -1,5 +1,5 @@
 import StaticArrays
-import LinearAlgebra: norm, dot
+import LinearAlgebra: norm, dot, cross
 
 function _normalize3(v)
     n = norm(v)
@@ -14,6 +14,114 @@ function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     sy = cos(el) * cos(az)
     sz = -sin(el)
     _normalize3(StaticArrays.SVector{3,Float64}(sx, sy, sz))
+end
+
+function _java_turtle_order(n::Int)
+    if n == 1
+        return 0
+    elseif n == 6
+        return 1
+    elseif n == 16
+        return 2
+    elseif n == 46
+        return 3
+    elseif n == 136
+        return 4
+    elseif n == 406
+        return 5
+    end
+    return -1
+end
+
+function _java_seed_points_up()
+    elevation6 = (90.0, 26.57, 26.57, 26.57, 26.57, 26.57)
+    azimuth6 = (0.0, 180.0, 252.0, 324.0, 36.0, 108.0)
+
+    pts = StaticArrays.SVector{3,Float64}[]
+    for i in eachindex(elevation6)
+        elevation = deg2rad(elevation6[i])
+        azimuth = deg2rad(azimuth6[i] + 180.0)
+        x = cos(elevation) * sin(azimuth)
+        y = cos(elevation) * cos(azimuth)
+        z = sin(elevation)
+        p = StaticArrays.SVector{3,Float64}(x, y, z)
+        push!(pts, p)
+        push!(pts, -p)
+    end
+    pts
+end
+
+function _hull_faces_12(points)
+    n = length(points)
+    n == 12 || error("_hull_faces_12 expects exactly 12 points.")
+
+    faces = NTuple{3,Int}[]
+    eps = 1e-9
+
+    for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
+        nrm = cross(points[j] - points[i], points[k] - points[i])
+        norm(nrm) <= 1e-12 && continue
+
+        pos = false
+        neg = false
+        for l in 1:n
+            (l == i || l == j || l == k) && continue
+            d = dot(nrm, points[l] - points[i])
+            d > eps && (pos = true)
+            d < -eps && (neg = true)
+            if pos && neg
+                break
+            end
+        end
+        (pos && neg) && continue
+
+        c = (points[i] + points[j] + points[k]) / 3.0
+        if dot(nrm, c) < 0.0
+            push!(faces, (i, k, j))
+        else
+            push!(faces, (i, j, k))
+        end
+    end
+
+    faces
+end
+
+function _orient_face_outward(a::Int, b::Int, c::Int, points)
+    pa = points[a]
+    pb = points[b]
+    pc = points[c]
+    nrm = cross(pb - pa, pc - pa)
+    cen = (pa + pb + pc) / 3.0
+    dot(nrm, cen) >= 0.0 ? (a, b, c) : (a, c, b)
+end
+
+function _refine_turtle_mesh(points, faces)
+    new_points = copy(points)
+    new_faces = NTuple{3,Int}[]
+
+    for (a, b, c) in faces
+        d = length(new_points) + 1
+        bary = _normalize3((points[a] + points[b] + points[c]) / 3.0)
+        push!(new_points, bary)
+        push!(new_faces, _orient_face_outward(a, b, d, new_points))
+        push!(new_faces, _orient_face_outward(b, c, d, new_points))
+        push!(new_faces, _orient_face_outward(c, a, d, new_points))
+    end
+
+    return new_points, new_faces
+end
+
+function _java_turtle_upward_points(order::Int)
+    order == 0 && return [StaticArrays.SVector{3,Float64}(0.0, 0.0, 1.0)]
+
+    points = _java_seed_points_up()
+    faces = _hull_faces_12(points)
+
+    for _ in 2:order
+        points, faces = _refine_turtle_mesh(points, faces)
+    end
+
+    [p for p in points if p[3] >= 0.0]
 end
 
 function _hemisphere_fibonacci_incoming(n::Int)
@@ -35,9 +143,60 @@ function _hemisphere_fibonacci_incoming(n::Int)
     dirs
 end
 
+const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
+
+function _java_turtle_incoming(n::Int)
+    get!(_TURTLE_DIR_CACHE, n) do
+        order = _java_turtle_order(n)
+        order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
+        up = _java_turtle_upward_points(order)
+        [_normalize3(-u) for u in up]
+    end
+end
+
+function _circle_lumen_area(centers_distance::Float64, radius1::Float64, radius2::Float64)
+    if centers_distance >= (radius1 + radius2)
+        return 0.0
+    end
+
+    if radius1 == radius2
+        half_dist = centers_distance / 2.0
+        h2 = max(radius2 * radius2 - half_dist * half_dist, 0.0)
+        h = sqrt(h2)
+        alpha = acos(clamp(half_dist / max(radius2, eps(Float64)), -1.0, 1.0))
+        return 2.0 * ((alpha * (radius2 * radius2)) - (h * half_dist))
+    end
+
+    d2 = centers_distance * centers_distance
+    r12 = radius1 * radius1
+    r22 = radius2 * radius2
+
+    if centers_distance + radius2 < radius1
+        return pi * r22
+    end
+    if centers_distance + radius1 < radius2
+        return pi * r12
+    end
+
+    t1 = clamp((d2 + r22 - r12) / (2.0 * centers_distance * radius2), -1.0, 1.0)
+    t2 = clamp((d2 + r12 - r22) / (2.0 * centers_distance * radius1), -1.0, 1.0)
+    k = (-centers_distance + radius2 + radius1) *
+        (centers_distance + radius2 - radius1) *
+        (centers_distance - radius2 + radius1) *
+        (centers_distance + radius2 + radius1)
+    term = sqrt(max(k, 0.0)) / 2.0
+
+    (r22 * acos(t1)) + (r12 * acos(t2)) - term
+end
+
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(cfg.turtle_sectors, 1)
-    dirs = _hemisphere_fibonacci_incoming(n)
+    dirs =
+        if _java_turtle_order(n) >= 0
+            _java_turtle_incoming(n)
+        else
+            _hemisphere_fibonacci_incoming(n)
+        end
     sectors = TurtleSector[]
     w = 1.0 / n
     for i in eachindex(dirs)
@@ -73,14 +232,47 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
     end
 
     if cfg.all_in_turtle
-        sun_dir = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
-        scores = [max(dot(-sun_dir, -turtle.sectors[i].direction), 0.0) for i in sky_ids]
-        ssum = sum(scores)
-        if ssum > 0.0
+        # Java Turtle.directInTurtle parity:
+        # distribute direct irradiance by angular overlap between a sun halo and each sector.
+        dir_count = length(sky_ids)
+        if dir_count > 0
+            sun_dir = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
+            # incoming -> upward to match Java Direction vectors
+            sun_up = -sun_dir
+            sector_radius = acos((dir_count - 1) / max(dir_count, 1))
+            sun_halo_radius = sector_radius / 2.0
+
+            raw = zeros(Float64, dir_count)
+            horiz = zeros(Float64, dir_count)
+            total_horiz = 0.0
+
             for (k, i) in enumerate(sky_ids)
-                w = scores[k] / ssum
-                par[i] += par_dir * w
-                nir[i] += nir_dir * w
+                sec_up = -turtle.sectors[i].direction
+                angle = acos(clamp(dot(sun_up, sec_up), -1.0, 1.0))
+                w = _circle_lumen_area(angle, sector_radius, sun_halo_radius)
+                raw[k] = w
+
+                # horizontal-plane conversion as in Java (multiply by cos(zenith))
+                coeff = max(-turtle.sectors[i].direction[3], 0.0)
+                horiz[k] = w * coeff
+                total_horiz += horiz[k]
+            end
+
+            if total_horiz > 0.0
+                par_scale = par_dir / total_horiz
+                nir_scale = nir_dir / total_horiz
+                for (k, i) in enumerate(sky_ids)
+                    par[i] += horiz[k] * par_scale
+                    nir[i] += horiz[k] * nir_scale
+                end
+            elseif sum(raw) > 0.0
+                # Defensive fallback if all sectors are numerically near-horizon.
+                wsum = sum(raw)
+                for (k, i) in enumerate(sky_ids)
+                    w = raw[k] / wsum
+                    par[i] += par_dir * w
+                    nir[i] += nir_dir * w
+                end
             end
         end
     else
@@ -100,4 +292,3 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
 
     DirectionalFluxes([s.id for s in turtle.sectors], par, nir)
 end
-
