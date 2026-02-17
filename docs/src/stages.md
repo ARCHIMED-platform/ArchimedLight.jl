@@ -57,3 +57,4 @@ sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 - `compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
 - `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are available.
 - `compute_scattering(...; backend=RaycastScatteringBackend())` and `compute_scattering(...; backend=LinksScatteringBackend())` are also available.
+- Component output variable requests are checked in light-only mode: scattering variables need `scattering=true`; photosynthesis/energy-balance/TIR variables are rejected by design.

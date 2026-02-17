@@ -304,6 +304,55 @@ end
         )
     end
 
+    raw_scat = copy(cfg.raw)
+    raw_scat["component_variables"] = Dict("Ri_PAR_f" => true)
+    cfg_scat_off = ArchimedLight.LightConfig(
+        cfg.scene,
+        cfg.meteo,
+        cfg.all_in_turtle,
+        cfg.turtle_sectors,
+        cfg.pixel_size,
+        cfg.area_ratio,
+        false,
+        cfg.scattering_max_iter,
+        cfg.scattering_stop_ratio,
+        cfg.scattering_coeff_par,
+        cfg.scattering_coeff_nir,
+        cfg.cache_radiation,
+        raw_scat,
+    )
+    @test_throws ErrorException ArchimedLight.component_variable_names(cfg_scat_off)
+
+    raw_photo = copy(cfg.raw)
+    raw_photo["photosynthesis"] = true
+    raw_photo["component_variables"] = Dict("An_f" => true)
+    cfg_photo = with_raw_overrides(cfg, raw_photo)
+    @test_throws ErrorException ArchimedLight.component_variable_names(cfg_photo)
+
+    raw_enb = copy(cfg.raw)
+    raw_enb["photosynthesis"] = true
+    raw_enb["energy_balance"] = true
+    raw_enb["component_variables"] = Dict("Ri_TIR_f" => true)
+    cfg_enb = with_raw_overrides(cfg, raw_enb)
+    @test_throws ErrorException ArchimedLight.component_variable_names(cfg_enb)
+
+    raw_ok = copy(cfg.raw)
+    raw_ok["component_variables"] = Dict("Ri_PAR_0_f" => true, "Ra_PAR_0_f" => true)
+    cfg_ok = with_raw_overrides(cfg, raw_ok)
+    @test ArchimedLight.component_variable_names(cfg_ok) == ["Ri_PAR_0_f", "Ra_PAR_0_f"]
+
+    raw_default = copy(cfg.raw)
+    delete!(raw_default, "component_variables")
+    cfg_default = with_raw_overrides(cfg, raw_default)
+    cols_default = ArchimedLight.component_variable_names(cfg_default)
+    @test !("Ri_TIR_f" in cols_default)
+    @test !("Ri_TIR_q" in cols_default)
+    @test !("Ra_TIR_f" in cols_default)
+    @test !("Ra_TIR_q" in cols_default)
+
+    @test_throws ErrorException ArchimedLight.component_values_table(scene, step, cfg_enb; meteo_row=row, columns=["Ri_TIR_f"])
+    @test_throws ErrorException ArchimedLight.component_values_table(scene, step, cfg_photo; meteo_row=row, columns=["An_f"])
+
     mktempdir() do tmp
         out_base = joinpath(tmp, "output")
         raw_auto = copy(cfg.raw)

@@ -72,6 +72,44 @@ const _SUMMARY_VARIABLE_ORDER = [
 
 const _DEFAULT_SIM_COUNTER_DIGITS = 6
 
+const _SCATTERING_REQUIRED_COMPONENT_VARIABLES = Set([
+    "Ri_PAR_f",
+    "Ri_PAR_q",
+    "Ri_NIR_f",
+    "Ri_NIR_q",
+    "Ra_PAR_f",
+    "Ra_PAR_q",
+    "Ra_NIR_f",
+    "Ra_NIR_q",
+])
+
+const _PHOTOSYNTHESIS_REQUIRED_COMPONENT_VARIABLES = Set([
+    "An_f",
+    "An_q",
+    "Gs",
+])
+
+const _ENERGY_BALANCE_REQUIRED_COMPONENT_VARIABLES = Set([
+    "Ri_TIR_f",
+    "Ri_TIR_q",
+    "Ra_TIR_f",
+    "Ra_TIR_q",
+    "LE_f",
+    "LE_q",
+    "H_f",
+    "H_q",
+    "Rn_f",
+    "Rn_q",
+    "Tr_f",
+    "Tr_q",
+    "T",
+])
+
+const _OUT_OF_SCOPE_COMPONENT_VARIABLES = union(
+    _PHOTOSYNTHESIS_REQUIRED_COMPONENT_VARIABLES,
+    _ENERGY_BALANCE_REQUIRED_COMPONENT_VARIABLES,
+)
+
 function _canonical_component_variable_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_COMPONENT_VARIABLE_ORDER))
     sort(
@@ -112,6 +150,32 @@ function _canonical_summary_variable_order(names::Vector{String})
     )
 end
 
+function _default_light_component_variables(cfg::LightConfig)
+    cols = [c for c in _COMPONENT_VARIABLE_ORDER if !(c in _OUT_OF_SCOPE_COMPONENT_VARIABLES)]
+    if !cfg.scattering
+        cols = [c for c in cols if !(c in _SCATTERING_REQUIRED_COMPONENT_VARIABLES)]
+    end
+    return cols
+end
+
+function _require_supported_output_configuration(cfg::LightConfig, cols::Vector{String})
+    requested = Set(cols)
+    bad_scattering = !cfg.scattering ? sort!(collect(intersect(requested, _SCATTERING_REQUIRED_COMPONENT_VARIABLES))) : String[]
+    bad_scope = sort!(collect(intersect(requested, _OUT_OF_SCOPE_COMPONENT_VARIABLES)))
+
+    isempty(bad_scattering) && isempty(bad_scope) && return nothing
+
+    reasons = String[]
+    !isempty(bad_scattering) && push!(reasons, "require scattering=true: $(join(bad_scattering, ", "))")
+    if !isempty(bad_scope)
+        push!(
+            reasons,
+            "out of scope in light-only mode (compute with PlantBiophysics): $(join(bad_scope, ", "))",
+        )
+    end
+    error("Unsupported component output variables: $(join(reasons, " | "))")
+end
+
 """
     component_variable_names(cfg)::Vector{String}
 
@@ -120,14 +184,16 @@ Only variables with truthy values are kept.
 """
 function component_variable_names(cfg::LightConfig)
     d = get(cfg.raw, "component_variables", nothing)
-    d isa AbstractDict || return copy(_COMPONENT_VARIABLE_ORDER)
+    d isa AbstractDict || return _default_light_component_variables(cfg)
 
     vars = String[]
     for (k, v) in d
         _as_bool(v, false) || continue
         push!(vars, string(k))
     end
-    isempty(vars) ? copy(_COMPONENT_VARIABLE_ORDER) : _canonical_component_variable_order(vars)
+    cols = isempty(vars) ? _default_light_component_variables(cfg) : _canonical_component_variable_order(vars)
+    _require_supported_output_configuration(cfg, cols)
+    cols
 end
 
 """
@@ -475,6 +541,7 @@ function component_values_table(
     strict::Bool=false,
 )
     cols = columns === nothing ? component_variable_names(cfg) : String.(columns)
+    _require_supported_output_configuration(cfg, cols)
     step_duration = _step_duration_output_local(meteo_row, step_duration_seconds)
     node_ids = _node_ids_for_output(scene)
     rows = Vector{Dict{String,Any}}(undef, length(node_ids))
