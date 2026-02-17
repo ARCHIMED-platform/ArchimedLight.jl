@@ -20,4 +20,8 @@ write_component_values_csv
 scene_variable_names
 scene_values_table
 write_scene_values_csv
+sun_position_log_table
+write_sun_position_log_csv
+scattering_iteration_log_table
+write_scattering_iteration_log_csv
 ```

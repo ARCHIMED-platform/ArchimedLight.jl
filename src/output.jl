@@ -42,6 +42,24 @@ const _SCENE_VARIABLE_ORDER = [
     "plot_area",
 ]
 
+const _SUN_POSITION_LOG_ORDER = [
+    "stepNumber",
+    "stepStart",
+    "stepEnd",
+    "azimuthHalf",
+    "elevationHalf",
+    "azimuthWeighted",
+    "elevationWeighted",
+]
+
+const _SCATTERING_ITERATION_LOG_ORDER = [
+    "step",
+    "plantid",
+    "nodeid",
+    "iter",
+    "scat",
+]
+
 function _canonical_component_variable_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_COMPONENT_VARIABLE_ORDER))
     sort(
@@ -52,6 +70,22 @@ end
 
 function _canonical_scene_variable_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCENE_VARIABLE_ORDER))
+    sort(
+        unique(names);
+        by=n -> (get(idx, n, typemax(Int)), n),
+    )
+end
+
+function _canonical_sun_position_log_order(names::Vector{String})
+    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUN_POSITION_LOG_ORDER))
+    sort(
+        unique(names);
+        by=n -> (get(idx, n, typemax(Int)), n),
+    )
+end
+
+function _canonical_scattering_iteration_log_order(names::Vector{String})
+    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCATTERING_ITERATION_LOG_ORDER))
     sort(
         unique(names);
         by=n -> (get(idx, n, typemax(Int)), n),
@@ -145,6 +179,30 @@ function _group_type_hints(cfg::LightConfig)
     out
 end
 
+function _sky_fraction_per_node(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
+    pa_by_sector, _, _ = _build_sector_responses(scene, turtle, cfg)
+    sky_count = 0
+    visible_sum = Dict{Int,Float64}()
+    for (i, sector) in enumerate(turtle.sectors)
+        sector.source == :sun && continue
+        sky_count += 1
+        for (nid, a) in pa_by_sector[i]
+            visible_sum[nid] = get(visible_sum, nid, 0.0) + a
+        end
+    end
+
+    out = Dict{Int,Float64}()
+    for nid in keys(scene.total_area_per_node)
+        area = get(scene.total_area_per_node, nid, 0.0)
+        if area <= 0.0 || sky_count == 0
+            out[nid] = 0.0
+        else
+            out[nid] = get(visible_sum, nid, 0.0) / sky_count / area
+        end
+    end
+    out
+end
+
 function _ri_value(
     step::LightStepResult,
     nid::Int,
@@ -216,6 +274,7 @@ function _component_variable_value(
     step_number::Int,
     step_duration::Float64,
     absorptance_cache::Dict{String,Dict{Int,Float64}},
+    sky_fraction_per_node::Union{Nothing,Dict{Int,Float64}},
     group_type_hints::Dict{String,Vector{String}};
     unavailable::String="NA",
     strict::Bool=false,
@@ -253,7 +312,7 @@ function _component_variable_value(
     elseif variable == "barycentre_z"
         return get(scene.barycenter_per_node, nid, (NaN, NaN, NaN))[3]
     elseif variable == "sky_fraction"
-        return unavailable
+        return sky_fraction_per_node === nothing ? unavailable : get(sky_fraction_per_node, nid, 0.0)
     elseif variable == "Ri_TIR_f" || variable == "Ri_TIR_q" || variable == "Ra_TIR_f" || variable == "Ra_TIR_q"
         return unavailable
     end
@@ -320,6 +379,7 @@ function component_values_table(
     rows = Vector{Dict{String,Any}}(undef, length(node_ids))
     absorptance_cache = Dict{String,Dict{Int,Float64}}()
     group_type_hints = _group_type_hints(cfg)
+    sky_fraction_per_node = ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg) : nothing
 
     for (i, nid) in enumerate(node_ids)
         row = Dict{String,Any}()
@@ -333,6 +393,7 @@ function component_values_table(
                 step_number,
                 step_duration,
                 absorptance_cache,
+                sky_fraction_per_node,
                 group_type_hints;
                 unavailable=unavailable,
                 strict=strict,
@@ -399,6 +460,46 @@ function _scene_variable_value(
         error("Unsupported scene variable: $variable")
     end
     return unavailable
+end
+
+function _decimal_hour_to_hm_local(x::Float64)
+    h = floor(Int, x)
+    m = round(Int, (x - h) * 60)
+    if m >= 60
+        h += 1
+        m -= 60
+    end
+    return h, m
+end
+
+function _java_like_step_datetime_strings(row)
+    date = _row_date(row)
+    start_h, end_h = _row_step_hours(row)
+    start_day = floor(Int, start_h / 24.0)
+    end_day = floor(Int, end_h / 24.0)
+    sh, sm = _decimal_hour_to_hm_local(start_h - 24.0 * start_day)
+    eh, em = _decimal_hour_to_hm_local(end_h - 24.0 * end_day)
+    d0 = date + Dates.Day(start_day)
+    d1 = date + Dates.Day(end_day)
+    s0 = "$(Dates.year(d0))/$(Dates.month(d0))/$(Dates.day(d0))  $(sh):$(lpad(string(sm), 2, '0'))"
+    s1 = "$(Dates.year(d1))/$(Dates.month(d1))/$(Dates.day(d1))  $(eh):$(lpad(string(em), 2, '0'))"
+    return s0, s1
+end
+
+function _sun_position_log_values(row, sky::SkyState)
+    date = _row_date(row)
+    start_h, end_h = _row_step_hours(row)
+    lat_deg = _row_value(row, [:latitude, :lat], 0.0)
+    az_half_deg, el_half_deg = _midpoint_sun_position_deg(date, start_h, end_h, deg2rad(lat_deg))
+    step_start, step_end = _java_like_step_datetime_strings(row)
+    return (
+        stepStart=step_start,
+        stepEnd=step_end,
+        azimuthHalf=deg2rad(az_half_deg),
+        elevationHalf=deg2rad(el_half_deg),
+        azimuthWeighted=deg2rad(sky.sun_azimuth_deg),
+        elevationWeighted=deg2rad(sky.sun_elevation_deg),
+    )
 end
 
 """
@@ -480,6 +581,212 @@ function write_scene_values_csv(
         println(io, join(table.columns, ';'))
         for row in table.rows
             vals = [_csv_cell_local(get(row, c, unavailable)) for c in table.columns]
+            println(io, join(vals, ';'))
+        end
+    end
+    return path
+end
+
+"""
+    sun_position_log_table(steps, meteo_rows; start_step_number=0, columns=nothing)
+
+Build a Java-like `log-sun-position.csv` table represented as `(columns, rows)`.
+Angles are in radians, matching Java logs.
+"""
+function sun_position_log_table(
+    steps::AbstractVector{<:LightStepResult},
+    meteo_rows;
+    start_step_number::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    rows_in = collect(meteo_rows)
+    length(rows_in) == length(steps) || error("sun_position_log_table: `meteo_rows` length must match `steps` length.")
+    cols = columns === nothing ? copy(_SUN_POSITION_LOG_ORDER) : _canonical_sun_position_log_order(String.(columns))
+    rows = Vector{Dict{String,Any}}(undef, length(steps))
+    for i in eachindex(steps)
+        vals = _sun_position_log_values(rows_in[i], steps[i].sky)
+        row = Dict{String,Any}()
+        for c in cols
+            if c == "stepNumber"
+                row[c] = start_step_number + i - 1
+            elseif c == "stepStart"
+                row[c] = vals.stepStart
+            elseif c == "stepEnd"
+                row[c] = vals.stepEnd
+            elseif c == "azimuthHalf"
+                row[c] = vals.azimuthHalf
+            elseif c == "elevationHalf"
+                row[c] = vals.elevationHalf
+            elseif c == "azimuthWeighted"
+                row[c] = vals.azimuthWeighted
+            elseif c == "elevationWeighted"
+                row[c] = vals.elevationWeighted
+            else
+                row[c] = "NA"
+            end
+        end
+        rows[i] = row
+    end
+    return (columns=cols, rows=rows)
+end
+
+"""
+    write_sun_position_log_csv(path, steps, meteo_rows; start_step_number=0, columns=nothing)
+
+Write Java-like `log-sun-position.csv`.
+"""
+function write_sun_position_log_csv(
+    path::AbstractString,
+    steps::AbstractVector{<:LightStepResult},
+    meteo_rows;
+    start_step_number::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    table = sun_position_log_table(steps, meteo_rows; start_step_number=start_step_number, columns=columns)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, join(table.columns, ';'))
+        for row in table.rows
+            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
+            println(io, join(vals, ';'))
+        end
+    end
+    return path
+end
+
+function _scattering_iteration_history_one_band(
+    graph::ScatteringTransferGraph,
+    initial_power_per_node::Dict{Int,Float64},
+    cfg::LightConfig,
+    band_key::String,
+    default_coeff::Float64,
+)
+    node_ids = graph.node_ids
+    pair_counts = graph.pair_counts
+    all_hits = graph.all_hits
+    coeff_by_node = _coeff_by_node(graph, band_key, default_coeff)
+    current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
+    ref = _sum_dict_values(current)
+    thr = cfg.scattering_stop_ratio * max(ref, eps(Float64))
+    per_iter = Vector{Dict{Int,Float64}}()
+    iterations = 0
+    converged = false
+
+    for it in 1:cfg.scattering_max_iter
+        iterations = it
+        hit_energy = _dict_zero(node_ids)
+        for nid in node_ids
+            nh = get(all_hits, nid, 0)
+            if nh > 0
+                hit_energy[nid] = get(current, nid, 0.0) * get(coeff_by_node, nid, default_coeff) / nh / 2.0
+            end
+        end
+
+        next = _dict_zero(node_ids)
+        for ((to, from), cnt) in pair_counts
+            next[to] = get(next, to, 0.0) + cnt * get(hit_energy, from, 0.0)
+        end
+        push!(per_iter, next)
+
+        total_next = _sum_dict_values(next)
+        current = next
+        if total_next <= thr
+            converged = true
+            break
+        end
+    end
+    return per_iter, iterations, converged
+end
+
+"""
+    scattering_iteration_log_table(scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
+
+Build a Java-like `log-iteration-scat-<band>.csv` table represented as `(columns, rows)`.
+"""
+function scattering_iteration_log_table(
+    scene::SceneGeometry,
+    step::LightStepResult,
+    cfg::LightConfig;
+    meteo_row=nothing,
+    step_number::Int=0,
+    band::AbstractString="PAR",
+    mode::Symbol=:raycast,
+    backend::Union{Nothing,ScatteringBackend}=nothing,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    cols = columns === nothing ? copy(_SCATTERING_ITERATION_LOG_ORDER) : _canonical_scattering_iteration_log_order(String.(columns))
+    b = uppercase(String(band))
+    graph = build_scattering_transfer_graph(scene, step.turtle, step.first_order, cfg; mode=mode, backend=backend)
+    initial =
+        if b == "NIR"
+            Dict{Int,Float64}(nid => get(step.first_order.incident_nir_power_per_node, nid, 0.0) for nid in graph.node_ids)
+        else
+            Dict{Int,Float64}(nid => get(step.first_order.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
+        end
+    dflt = _default_band_coeff(cfg, b)
+    per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
+    dt = _step_duration_output_local(meteo_row, nothing)
+    w_to_mj = dt / 1e6
+    node_ids = _node_ids_for_output(scene)
+    rows = Dict{String,Any}[]
+    for (it, vals) in enumerate(per_iter)
+        iter_idx = it - 1
+        for nid in node_ids
+            row = Dict{String,Any}()
+            for c in cols
+                if c == "step"
+                    row[c] = step_number
+                elseif c == "plantid"
+                    row[c] = get(scene.java_item_id_per_node, nid, -1)
+                elseif c == "nodeid"
+                    row[c] = get(scene.java_component_id_per_node, nid, nid)
+                elseif c == "iter"
+                    row[c] = iter_idx
+                elseif c == "scat"
+                    row[c] = get(vals, nid, 0.0) * w_to_mj
+                else
+                    row[c] = "NA"
+                end
+            end
+            push!(rows, row)
+        end
+    end
+    return (columns=cols, rows=rows)
+end
+
+"""
+    write_scattering_iteration_log_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
+
+Write Java-like `log-iteration-scat-<band>.csv`.
+"""
+function write_scattering_iteration_log_csv(
+    path::AbstractString,
+    scene::SceneGeometry,
+    step::LightStepResult,
+    cfg::LightConfig;
+    meteo_row=nothing,
+    step_number::Int=0,
+    band::AbstractString="PAR",
+    mode::Symbol=:raycast,
+    backend::Union{Nothing,ScatteringBackend}=nothing,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    table = scattering_iteration_log_table(
+        scene,
+        step,
+        cfg;
+        meteo_row=meteo_row,
+        step_number=step_number,
+        band=band,
+        mode=mode,
+        backend=backend,
+        columns=columns,
+    )
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, join(table.columns, ';'))
+        for row in table.rows
+            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
             println(io, join(vals, ';'))
         end
     end

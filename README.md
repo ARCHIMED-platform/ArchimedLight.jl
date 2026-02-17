@@ -45,6 +45,10 @@ write_component_values_csv("output/component_values.csv", scene, step, cfg; mete
 
 # Java-style scene_values.csv export:
 write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
+
+# Java-style logs:
+write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
+write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=first(meteo.rows), band="PAR")
 ```
 
 ## Full Example

@@ -138,6 +138,7 @@ end
         "barycentre_x",
         "barycentre_y",
         "barycentre_z",
+        "sky_fraction",
         "Ri_PAR_0_f",
         "Ri_PAR_0_q",
         "Ra_PAR_0_f",
@@ -158,6 +159,7 @@ end
     @test all(isfinite(Float64(get(r, "barycentre_x", NaN))) for r in tbl.rows)
     @test all(isfinite(Float64(get(r, "barycentre_y", NaN))) for r in tbl.rows)
     @test all(isfinite(Float64(get(r, "barycentre_z", NaN))) for r in tbl.rows)
+    @test all(Float64(get(r, "sky_fraction", -1.0)) >= 0.0 for r in tbl.rows)
 
     mktempdir() do tmp
         out_csv = joinpath(tmp, "component_values.csv")
@@ -239,6 +241,43 @@ end
         got = Float64[getproperty(r, :RI_SW_f) for r in rows_csv]
         exp = Float64[s.sky.ri_sw_f for s in series]
         @test maximum(abs.(got .- exp)) < 1e-12
+    end
+
+    sun_tbl = ArchimedLight.sun_position_log_table(series, subset.rows; start_step_number=0)
+    @test length(sun_tbl.rows) == length(series)
+    @test "azimuthWeighted" in sun_tbl.columns
+    @test "elevationWeighted" in sun_tbl.columns
+    for i in eachindex(series)
+        r = sun_tbl.rows[i]
+        @test isapprox(Float64(r["azimuthWeighted"]), deg2rad(series[i].sky.sun_azimuth_deg); atol=1e-12, rtol=1e-12)
+        @test isapprox(Float64(r["elevationWeighted"]), deg2rad(series[i].sky.sun_elevation_deg); atol=1e-12, rtol=1e-12)
+    end
+
+    mktempdir() do tmp
+        sun_csv = joinpath(tmp, "log-sun-position.csv")
+        ArchimedLight.write_sun_position_log_csv(sun_csv, series, subset.rows; start_step_number=0)
+        @test isfile(sun_csv)
+        sun_rows = read_java_csv(sun_csv)
+        @test length(sun_rows) == length(series)
+        @test :azimuthWeighted in propertynames(first(sun_rows))
+    end
+
+    if cfg.scattering
+        scat_tbl = ArchimedLight.scattering_iteration_log_table(scene, step, cfg; meteo_row=row, step_number=0, band="PAR")
+        @test !isempty(scat_tbl.rows)
+        @test scat_tbl.columns == ["step", "plantid", "nodeid", "iter", "scat"]
+        scat_sum = sum(Float64(r["scat"]) for r in scat_tbl.rows)
+        expected_sum = sum(get(step.scattering.added_par_power_per_node, nid, 0.0) for nid in keys(scene.total_area_per_node)) * _step_duration_seconds(row) / 1e6
+        @test isapprox(scat_sum, expected_sum; atol=1e-12, rtol=1e-12)
+
+        mktempdir() do tmp
+            scat_csv = joinpath(tmp, "log-iteration-scat-par.csv")
+            ArchimedLight.write_scattering_iteration_log_csv(scat_csv, scene, step, cfg; meteo_row=row, step_number=0, band="PAR")
+            @test isfile(scat_csv)
+            scat_rows = read_java_csv(scat_csv)
+            @test !isempty(scat_rows)
+            @test :scat in propertynames(first(scat_rows))
+        end
     end
 end
 

@@ -41,5 +41,9 @@ export write_component_values_csv
 export scene_variable_names
 export scene_values_table
 export write_scene_values_csv
+export sun_position_log_table
+export write_sun_position_log_csv
+export scattering_iteration_log_table
+export write_scattering_iteration_log_csv
 
 end
