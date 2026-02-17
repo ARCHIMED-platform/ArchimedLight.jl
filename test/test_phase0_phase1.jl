@@ -135,6 +135,9 @@ end
         "group",
         "type",
         "area",
+        "barycentre_x",
+        "barycentre_y",
+        "barycentre_z",
         "Ri_PAR_0_f",
         "Ri_PAR_0_q",
         "Ra_PAR_0_f",
@@ -151,6 +154,10 @@ end
     @test all(haskey(r, "Ri_PAR_0_q") for r in tbl.rows)
     @test all(haskey(r, "Ra_PAR_0_q") for r in tbl.rows)
     @test all(haskey(r, "Ri_custom_q") for r in tbl.rows)
+    @test all(get(r, "type", "NA") != "NA" for r in tbl.rows)
+    @test all(isfinite(Float64(get(r, "barycentre_x", NaN))) for r in tbl.rows)
+    @test all(isfinite(Float64(get(r, "barycentre_y", NaN))) for r in tbl.rows)
+    @test all(isfinite(Float64(get(r, "barycentre_z", NaN))) for r in tbl.rows)
 
     mktempdir() do tmp
         out_csv = joinpath(tmp, "component_values.csv")
@@ -213,6 +220,25 @@ end
         @test max_abs_float_dict_diff(series[i].budget.ri_nir_q_per_node, series_bk[i].budget.ri_nir_q_per_node) == 0.0
         @test max_abs_float_dict_diff(series[i].budget.ri_par_q_per_node, series_lk[i].budget.ri_par_q_per_node) == 0.0
         @test max_abs_float_dict_diff(series[i].budget.ri_nir_q_per_node, series_lk[i].budget.ri_nir_q_per_node) == 0.0
+    end
+
+    scene_cols = ["step_number", "step_duration", "hour_start", "hour_end", "RI_SW_f", "plot_area"]
+    scene_tbl = ArchimedLight.scene_values_table(scene, series, cfg; meteo_rows=subset.rows, columns=scene_cols)
+    @test scene_tbl.columns == scene_cols
+    @test length(scene_tbl.rows) == length(series)
+    @test all(haskey(r, "RI_SW_f") for r in scene_tbl.rows)
+    @test all(Float64(r["plot_area"]) > 0 for r in scene_tbl.rows)
+
+    mktempdir() do tmp
+        out_csv = joinpath(tmp, "scene_values.csv")
+        ArchimedLight.write_scene_values_csv(out_csv, scene, series, cfg; meteo_rows=subset.rows, columns=scene_cols)
+        @test isfile(out_csv)
+        rows_csv = read_java_csv(out_csv)
+        @test length(rows_csv) == length(series)
+        @test :RI_SW_f in propertynames(first(rows_csv))
+        got = Float64[getproperty(r, :RI_SW_f) for r in rows_csv]
+        exp = Float64[s.sky.ri_sw_f for s in series]
+        @test maximum(abs.(got .- exp)) < 1e-12
     end
 end
 

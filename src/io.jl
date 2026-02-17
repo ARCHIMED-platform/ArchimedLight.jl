@@ -171,6 +171,23 @@ function _node_item_id(attrs, default::Int)
     return default
 end
 
+function _node_type_name(node, attrs, default::String="")
+    if attrs isa AbstractDict
+        for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
+            v = _dict_attr(attrs, key)
+            v === nothing && continue
+            s = strip(string(v))
+            isempty(s) || return s
+        end
+    end
+    s = try
+        string(MultiScaleTreeGraph.symbol(node))
+    catch
+        ""
+    end
+    isempty(s) ? default : s
+end
+
 function _node_component_id(node, default::Int)
     idv =
         try
@@ -250,6 +267,7 @@ function _collect_mesh_nodes!(
     meshes,
     node_ids,
     node_group,
+    node_type,
     node_item_id,
     node_component_id,
     component_id_hints,
@@ -261,6 +279,7 @@ function _collect_mesh_nodes!(
     attrs = _node_attrs(node)
     group = current_group
     item_id = _node_item_id(attrs, current_item_id)
+    type_name = _node_type_name(node, attrs, "")
     if attrs isa AbstractDict
         if haskey(attrs, :functional_group)
             group = string(attrs[:functional_group])
@@ -274,6 +293,7 @@ function _collect_mesh_nodes!(
         next_id[] += 1
         push!(node_ids, next_id[])
         node_group[next_id[]] = group
+        node_type[next_id[]] = type_name
         node_item_id[next_id[]] = item_id
 
         hinted = nothing
@@ -296,6 +316,7 @@ function _collect_mesh_nodes!(
                 meshes,
                 node_ids,
                 node_group,
+                node_type,
                 node_item_id,
                 node_component_id,
                 component_id_hints,
@@ -312,6 +333,7 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
     meshes = Any[]
     mesh_node_ids = Int[]
     node_group = Dict{Int,String}()
+    node_type = Dict{Int,String}()
     node_item_id = Dict{Int,Int}()
     node_component_id = Dict{Int,Int}()
     component_id_hint_cursor = Dict{Int,Int}(k => 1 for k in keys(component_id_hints))
@@ -321,6 +343,7 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
         meshes,
         mesh_node_ids,
         node_group,
+        node_type,
         node_item_id,
         node_component_id,
         component_id_hints,
@@ -337,7 +360,7 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
         nfaces = length(GeometryBasics.decompose(PlantGeom.Face3, mesh))
         append!(face2node, fill(mesh_node_ids[mi], nfaces))
     end
-    merged_mesh, face2node, node_group, node_item_id, node_component_id
+    merged_mesh, face2node, node_group, node_type, node_item_id, node_component_id
 end
 
 function _build_scene_geometry(mtg, source_path::AbstractString)
@@ -354,23 +377,43 @@ function _build_scene_geometry(
     scene_xy_bounds::Union{Nothing,NTuple{4,Float64}},
     component_id_hints::Dict{Int,Vector{Int}},
 )
-    merged_mesh, face2node, node_group, node_item_id, node_component_id =
+    merged_mesh, face2node, node_group, node_type, node_item_id, node_component_id =
         _build_merged_mesh_with_map_local(mtg; component_id_hints=component_id_hints)
 
     verts = GeometryBasics.decompose(PlantGeom.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
     node_area = Dict{Int,Float64}()
+    bary_acc = Dict{Int,NTuple{3,Float64}}()
     for (i, f) in enumerate(faces)
         n = face2node[i]
-        area = _triangle_area3d(verts[f[1]], verts[f[2]], verts[f[3]])
+        p1 = verts[f[1]]
+        p2 = verts[f[2]]
+        p3 = verts[f[3]]
+        area = _triangle_area3d(p1, p2, p3)
         node_area[n] = get(node_area, n, 0.0) + area
+        cx = (p1[1] + p2[1] + p3[1]) / 3.0
+        cy = (p1[2] + p2[2] + p3[2]) / 3.0
+        cz = (p1[3] + p2[3] + p3[3]) / 3.0
+        sx, sy, sz = get(bary_acc, n, (0.0, 0.0, 0.0))
+        bary_acc[n] = (sx + area * cx, sy + area * cy, sz + area * cz)
+    end
+    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    for (nid, area) in node_area
+        if area > 0
+            sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
+            barycenter_per_node[nid] = (sx / area, sy / area, sz / area)
+        else
+            barycenter_per_node[nid] = (NaN, NaN, NaN)
+        end
     end
     SceneGeometry(
         mtg,
         merged_mesh,
         face2node,
         node_area,
+        barycenter_per_node,
         node_group,
+        node_type,
         node_item_id,
         node_component_id,
         String(source_path),

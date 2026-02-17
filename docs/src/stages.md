@@ -33,6 +33,9 @@ step = run_light_step(scene, row, cfg; interception_backend=RasterCPUBackend(), 
 
 # Optional Java-style component output export:
 write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=row, step_number=1)
+
+# Optional Java-style scene output export (for a series):
+write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
 ```
 
 ## Caching Options

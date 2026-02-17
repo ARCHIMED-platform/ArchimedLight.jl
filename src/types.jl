@@ -34,7 +34,9 @@ struct SceneGeometry
     merged_mesh
     face2node::Vector{Int}
     total_area_per_node::Dict{Int,Float64}
+    barycenter_per_node::Dict{Int,NTuple{3,Float64}}
     node_group::Dict{Int,String}
+    node_type::Dict{Int,String}
     java_item_id_per_node::Dict{Int,Int}
     java_component_id_per_node::Dict{Int,Int}
     source_path::String

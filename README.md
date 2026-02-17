@@ -42,6 +42,9 @@ step = run_light_step(scene, first(meteo.rows), cfg; interception_backend=Raster
 
 # Java-style component_values.csv export:
 write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=first(meteo.rows), step_number=1)
+
+# Java-style scene_values.csv export:
+write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
 ```
 
 ## Full Example

@@ -17,4 +17,7 @@ run_light_series
 component_variable_names
 component_values_table
 write_component_values_csv
+scene_variable_names
+scene_values_table
+write_scene_values_csv
 ```

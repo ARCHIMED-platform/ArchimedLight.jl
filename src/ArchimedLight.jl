@@ -38,5 +38,8 @@ export run_light_series
 export component_variable_names
 export component_values_table
 export write_component_values_csv
+export scene_variable_names
+export scene_values_table
+export write_scene_values_csv
 
 end
