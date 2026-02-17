@@ -1,0 +1,4 @@
+step_number;step_duration;group;type;item_id;area;Ri_q
+0;1800.0;simple_plant;Internode;1;0.003259807825088501;49.183144870986034
+0;1800.0;simple_plant;Leaf;1;0.004212771775200963;150.36313832661665
+0;1800.0;pavement;Cobblestone;-1;0.25;9206.259146740325

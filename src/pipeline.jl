@@ -1,7 +1,8 @@
 """
-    integrate_light(first, scat, cfg; extra_0_q_per_band=..., extra_q_per_band=...)::LightBudget
+    integrate_light(first, scat, cfg; extra_0_q_per_band=..., extra_q_per_band=..., step_duration_seconds=1.0, component_area_per_node=nothing)::LightBudget
 
-Combine first-order and scattering results into per-node irradiance and power budgets.
+Combine first-order and scattering results into per-node irradiance (`*_f`, W m^-2)
+and energy (`*_q`, J component^-1 timestep^-1) budgets.
 """
 function integrate_light(
     first::FirstOrderResult,
@@ -9,6 +10,8 @@ function integrate_light(
     cfg::LightConfig;
     extra_0_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
     extra_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+    step_duration_seconds::Float64=1.0,
+    component_area_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
 )
     ri_par_f_per_node = Dict{Int,Float64}()
     ri_nir_f_per_node = Dict{Int,Float64}()
@@ -19,7 +22,13 @@ function integrate_light(
 
     node_ids = collect(keys(first.projected_area_per_node))
     for nid in node_ids
-        pa = max(get(first.projected_area_per_node, nid, 0.0), eps(Float64))
+        pa =
+            if component_area_per_node === nothing
+                get(first.projected_area_per_node, nid, 0.0)
+            else
+                get(component_area_per_node, nid, get(first.projected_area_per_node, nid, 0.0))
+            end
+        pa = max(pa, eps(Float64))
         p0 = get(first.incident_par_power_per_node, nid, 0.0)
         n0 = get(first.incident_nir_power_per_node, nid, 0.0)
         ps = scat === nothing ? 0.0 : get(scat.added_par_power_per_node, nid, 0.0)
@@ -28,11 +37,20 @@ function integrate_light(
         ri_par_f_per_node[nid] = (p0 + ps) / pa
         ri_nir_f_per_node[nid] = (n0 + ns) / pa
 
-        # Unit duration by default. The full time integration is performed by callers if needed.
-        ri_par_0_q_per_node[nid] = p0
-        ri_nir_0_q_per_node[nid] = n0
-        ri_par_q_per_node[nid] = p0 + ps
-        ri_nir_q_per_node[nid] = n0 + ns
+        ri_par_0_q_per_node[nid] = p0 * step_duration_seconds
+        ri_nir_0_q_per_node[nid] = n0 * step_duration_seconds
+        ri_par_q_per_node[nid] = (p0 + ps) * step_duration_seconds
+        ri_nir_q_per_node[nid] = (n0 + ns) * step_duration_seconds
+    end
+
+    scaled_extra_0_q = Dict{String,Dict{Int,Float64}}()
+    for (band, vals) in extra_0_q_per_band
+        scaled_extra_0_q[band] = Dict{Int,Float64}(nid => v * step_duration_seconds for (nid, v) in vals)
+    end
+
+    scaled_extra_q = Dict{String,Dict{Int,Float64}}()
+    for (band, vals) in extra_q_per_band
+        scaled_extra_q[band] = Dict{Int,Float64}(nid => v * step_duration_seconds for (nid, v) in vals)
     end
 
     LightBudget(
@@ -42,8 +60,8 @@ function integrate_light(
         ri_nir_0_q_per_node,
         ri_par_q_per_node,
         ri_nir_q_per_node,
-        extra_0_q_per_band,
-        extra_q_per_band,
+        scaled_extra_0_q,
+        scaled_extra_q,
     )
 end
 
@@ -129,6 +147,38 @@ function _row_number_local(row, name::Symbol, default::Float64=0.0)
         end
     end
     return default
+end
+
+function _parse_time_or_default_local(v)
+    s = strip(string(v))
+    if isempty(s)
+        return Dates.Time(0)
+    end
+    try
+        Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+    catch
+        try
+            Dates.Time(s, Dates.DateFormat("HH:MM"))
+        catch
+            Dates.Time(0)
+        end
+    end
+end
+
+function _step_duration_seconds_local(row)
+    names = propertynames(row)
+    if (:step_duration in names)
+        return _row_number_local(row, :step_duration, 1.0)
+    end
+    if (:hour_start in names) && (:hour_end in names)
+        t0 = _parse_time_or_default_local(getproperty(row, :hour_start))
+        t1 = _parse_time_or_default_local(getproperty(row, :hour_end))
+        dt0 = Dates.DateTime(Dates.Date(2000, 1, 1), t0)
+        dt1 = Dates.DateTime(Dates.Date(2000, 1, 1), t1)
+        dt1 < dt0 && (dt1 += Dates.Day(1))
+        return Dates.value(dt1 - dt0) / 1000.0
+    end
+    return 1.0
 end
 
 function _extra_band_irradiance(meteo_row)
@@ -237,6 +287,7 @@ function run_light_step(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     ib = _resolve_interception_backend(interception_backend)
+    dt_seconds = _step_duration_seconds_local(meteo_row)
     sky = compute_sky(meteo_row, cfg)
     turtle = build_turtle(cfg, sky)
     fluxes = compute_directional_fluxes(sky, turtle, cfg)
@@ -257,7 +308,15 @@ function run_light_step(
         scattering_mode=scattering_mode,
         scattering_backend=scattering_backend,
     )
-    budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
+    budget = integrate_light(
+        first,
+        scat,
+        cfg;
+        extra_0_q_per_band=extra_0_q,
+        extra_q_per_band=extra_q,
+        step_duration_seconds=dt_seconds,
+        component_area_per_node=scene.total_area_per_node,
+    )
     LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
 end
 
@@ -280,7 +339,9 @@ function run_light_series(
     cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
     out = Vector{LightStepResult}(undef, length(meteo.rows))
     for i in eachindex(meteo.rows)
-        sky = compute_sky(meteo.rows[i], cfg)
+        row = meteo.rows[i]
+        dt_seconds = _step_duration_seconds_local(row)
+        sky = compute_sky(row, cfg)
         turtle = build_turtle(cfg, sky)
         fluxes = compute_directional_fluxes(sky, turtle, cfg)
 
@@ -304,7 +365,7 @@ function run_light_series(
             end
         extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
             scene,
-            meteo.rows[i],
+            row,
             sky,
             turtle,
             cfg;
@@ -312,7 +373,15 @@ function run_light_series(
             scattering_mode=scattering_mode,
             scattering_backend=scattering_backend,
         )
-        budget = integrate_light(first, scat, cfg; extra_0_q_per_band=extra_0_q, extra_q_per_band=extra_q)
+        budget = integrate_light(
+            first,
+            scat,
+            cfg;
+            extra_0_q_per_band=extra_0_q,
+            extra_q_per_band=extra_q,
+            step_duration_seconds=dt_seconds,
+            component_area_per_node=scene.total_area_per_node,
+        )
         out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
     end
     out

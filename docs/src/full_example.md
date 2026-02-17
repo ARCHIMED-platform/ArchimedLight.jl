@@ -21,3 +21,5 @@ julia --project=. example/full_featured_example.jl
 - Pipeline API with backend kwargs: `run_light_step`, `run_light_series`
 - Extra waveband handling (custom band from `RI_custom_f`)
 - 3D visualization with PlantGeom + CairoMakie colored by intercepted PAR (saved to `example/output/scene_3d_par_intercepted.png`)
+- Java vs Julia per-component comparison using `example/output/000001/component_values.csv` (saved to `example/output/component_values_java_vs_julia.csv`)
+- 3D visualization colored by Java PAR (saved to `example/output/scene_3d_par_java.png`)

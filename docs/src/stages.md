@@ -20,7 +20,8 @@ fluxes = compute_directional_fluxes(sky, turtle, cfg)
 first = compute_first_order(scene, turtle, fluxes, cfg)
 graph = build_scattering_transfer_graph(scene, turtle, first, cfg)
 scat = compute_scattering(graph, first, cfg)
-budget = integrate_light(first, scat, cfg)
+step_seconds = 1800.0 # use your meteo timestep duration in seconds
+budget = integrate_light(first, scat, cfg; step_duration_seconds=step_seconds, component_area_per_node=scene.total_area_per_node)
 ```
 
 ## Single-Call Pipeline

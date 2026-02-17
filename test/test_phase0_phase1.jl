@@ -85,7 +85,13 @@ end
         else
             nothing
         end
-    budget = ArchimedLight.integrate_light(first_order, scat, cfg)
+    budget = ArchimedLight.integrate_light(
+        first_order,
+        scat,
+        cfg;
+        step_duration_seconds=_step_duration_seconds(row),
+        component_area_per_node=scene.total_area_per_node,
+    )
 
     @test abs(step.sky.ri_sw_f - sky.ri_sw_f) < 1e-12
     @test abs(step.sky.direct_fraction - sky.direct_fraction) < 1e-12
@@ -607,6 +613,7 @@ end
         cfg = ArchimedLight.read_light_config(fx.config_path)
         scene = ArchimedLight.read_scene(cfg.scene)
         row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        dt_seconds = _step_duration_seconds(row)
         step = ArchimedLight.run_light_step(scene, row, cfg)
         @test !isempty(step.budget.ri_par_0_q_per_node)
 
@@ -623,15 +630,16 @@ end
         @test expected_path !== nothing
         expected_rows = read_java_csv(expected_path)
         expected = Float64[
-            Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR)) for r in expected_rows if to_int(getproperty(r, :item_id)) == -1
+            Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR)) * Float64(getproperty(r, :area)) * dt_seconds for
+            r in expected_rows if to_int(getproperty(r, :item_id)) == -1
         ]
         @test length(expected) == 100
         exp_mean, exp_std = mean_std(expected)
 
-        # Java intent: pavement irradiance is effectively uniform with area-ratio correction.
+        # Java intent: pavement intercepted energy is effectively uniform with area-ratio correction.
         @test got_std / max(abs(got_mean), eps(Float64)) < 1e-8
         @test exp_std / max(abs(exp_mean), eps(Float64)) < 1e-5
-        # Java sky conversion is now matched closely.
+        # Java sky conversion and units are matched closely.
         @test relerr(got_mean, exp_mean) < 1e-5
 
         area_ratio_metrics[area_name] = (got_mean, got_std, exp_mean, exp_std)
@@ -836,10 +844,10 @@ end
 
     scene_incid_par = step_custom.sky.ri_par_f * plot_area * step_seconds
     scene_incid_custom = custom_irr * plot_area * step_seconds
-    scene_par_0 = sum(values(step_custom.budget.ri_par_0_q_per_node)) * step_seconds
-    scene_par_n = sum(values(step_custom.budget.ri_par_q_per_node)) * step_seconds
-    scene_custom_0 = sum(values(step_custom.budget.extra_0_q_per_band["CUSTOM"])) * step_seconds
-    scene_custom_n = sum(values(step_custom.budget.extra_q_per_band["CUSTOM"])) * step_seconds
+    scene_par_0 = sum(values(step_custom.budget.ri_par_0_q_per_node))
+    scene_par_n = sum(values(step_custom.budget.ri_par_q_per_node))
+    scene_custom_0 = sum(values(step_custom.budget.extra_0_q_per_band["CUSTOM"]))
+    scene_custom_n = sum(values(step_custom.budget.extra_q_per_band["CUSTOM"]))
 
     r_par_0 = scene_par_0 / max(scene_incid_par, eps(Float64))
     r_custom_0 = scene_custom_0 / max(scene_incid_custom, eps(Float64))
