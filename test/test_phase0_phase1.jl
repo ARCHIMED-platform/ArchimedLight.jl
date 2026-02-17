@@ -92,6 +92,7 @@ end
         step_duration_seconds=_step_duration_seconds(row),
         component_area_per_node=scene.total_area_per_node,
     )
+    dt_seconds = _step_duration_seconds(row)
 
     @test abs(step.sky.ri_sw_f - sky.ri_sw_f) < 1e-12
     @test abs(step.sky.direct_fraction - sky.direct_fraction) < 1e-12
@@ -111,6 +112,56 @@ end
     @test max_abs_int_dict_diff(first_order.hits_per_node, first_order_cpu_obj.hits_per_node) == 0
     @test max_abs_float_dict_diff(step.budget.ri_par_q_per_node, budget.ri_par_q_per_node) == 0.0
     @test max_abs_float_dict_diff(step.budget.ri_nir_q_per_node, budget.ri_nir_q_per_node) == 0.0
+    for nid in keys(step.budget.ri_par_q_per_node)
+        area = get(scene.total_area_per_node, nid, 0.0)
+        area > 0 || continue
+        @test isapprox(step.budget.ri_par_0_q_per_node[nid], step.budget.ri_par_0_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ri_par_q_per_node[nid], step.budget.ri_par_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ri_nir_0_q_per_node[nid], step.budget.ri_nir_0_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ri_nir_q_per_node[nid], step.budget.ri_nir_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ra_par_0_q_per_node[nid], step.budget.ra_par_0_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ra_par_q_per_node[nid], step.budget.ra_par_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ra_nir_0_q_per_node[nid], step.budget.ra_nir_0_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test isapprox(step.budget.ra_nir_q_per_node[nid], step.budget.ra_nir_f_per_node[nid] * area * dt_seconds; atol=1e-12, rtol=1e-12)
+        @test step.budget.ra_par_q_per_node[nid] <= step.budget.ri_par_q_per_node[nid] + 1e-12
+        @test step.budget.ra_nir_q_per_node[nid] <= step.budget.ri_nir_q_per_node[nid] + 1e-12
+    end
+
+    out_cols = [
+        "step_number",
+        "step_duration",
+        "item_id",
+        "component_id",
+        "group",
+        "type",
+        "area",
+        "Ri_PAR_0_f",
+        "Ri_PAR_0_q",
+        "Ra_PAR_0_f",
+        "Ra_PAR_0_q",
+        "Ri_NIR_f",
+        "Ri_NIR_q",
+        "Ra_NIR_f",
+        "Ra_NIR_q",
+        "Ri_custom_q",
+    ]
+    tbl = ArchimedLight.component_values_table(scene, step, cfg; meteo_row=row, step_number=1, columns=out_cols)
+    @test tbl.columns == out_cols
+    @test length(tbl.rows) == length(scene.total_area_per_node)
+    @test all(haskey(r, "Ri_PAR_0_q") for r in tbl.rows)
+    @test all(haskey(r, "Ra_PAR_0_q") for r in tbl.rows)
+    @test all(haskey(r, "Ri_custom_q") for r in tbl.rows)
+
+    mktempdir() do tmp
+        out_csv = joinpath(tmp, "component_values.csv")
+        ArchimedLight.write_component_values_csv(out_csv, scene, step, cfg; meteo_row=row, step_number=1, columns=out_cols)
+        @test isfile(out_csv)
+        rows_csv = read_java_csv(out_csv)
+        @test length(rows_csv) == length(scene.total_area_per_node)
+        @test :Ri_PAR_0_q in propertynames(first(rows_csv))
+        @test :Ra_PAR_0_q in propertynames(first(rows_csv))
+    end
+
     @test_throws ErrorException ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg; backend=:gpu)
     if cfg.scattering
         @test step.scattering !== nothing

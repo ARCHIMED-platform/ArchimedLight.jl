@@ -30,6 +30,9 @@ step = run_light_step(scene, row, cfg)
 series = run_light_series(scene, meteo, cfg)
 # Optional backend kwargs:
 step = run_light_step(scene, row, cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
+
+# Optional Java-style component output export:
+write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=row, step_number=1)
 ```
 
 ## Caching Options

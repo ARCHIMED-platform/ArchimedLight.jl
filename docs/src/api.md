@@ -14,4 +14,7 @@ compute_scattering
 integrate_light
 run_light_step
 run_light_series
+component_variable_names
+component_values_table
+write_component_values_csv
 ```

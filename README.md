@@ -29,12 +29,19 @@ step_seconds = 1800.0 # use your meteo timestep duration in seconds
 budget = integrate_light(first_order, scat, cfg; step_duration_seconds=step_seconds, component_area_per_node=scene.total_area_per_node)
 ```
 
+`LightBudget` now includes Java-style PAR/NIR intercepted and absorbed outputs in both:
+- `*_f`: irradiance (`W m^-2`)
+- `*_q`: per-component energy per timestep (`J`)
+
 ## Single-call pipeline
 ```julia
 step = run_light_step(scene, first(meteo.rows), cfg)
 series = run_light_series(scene, meteo, cfg)
 # Optional backend kwargs:
 step = run_light_step(scene, first(meteo.rows), cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
+
+# Java-style component_values.csv export:
+write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=first(meteo.rows), step_number=1)
 ```
 
 ## Full Example

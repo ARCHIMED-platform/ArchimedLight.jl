@@ -108,12 +108,22 @@ struct ScatteringTransferGraph
 end
 
 struct LightBudget
+    ri_par_0_f_per_node::Dict{Int,Float64}
+    ri_nir_0_f_per_node::Dict{Int,Float64}
     ri_par_f_per_node::Dict{Int,Float64}
     ri_nir_f_per_node::Dict{Int,Float64}
     ri_par_0_q_per_node::Dict{Int,Float64}
     ri_nir_0_q_per_node::Dict{Int,Float64}
     ri_par_q_per_node::Dict{Int,Float64}
     ri_nir_q_per_node::Dict{Int,Float64}
+    ra_par_0_f_per_node::Dict{Int,Float64}
+    ra_nir_0_f_per_node::Dict{Int,Float64}
+    ra_par_f_per_node::Dict{Int,Float64}
+    ra_nir_f_per_node::Dict{Int,Float64}
+    ra_par_0_q_per_node::Dict{Int,Float64}
+    ra_nir_0_q_per_node::Dict{Int,Float64}
+    ra_par_q_per_node::Dict{Int,Float64}
+    ra_nir_q_per_node::Dict{Int,Float64}
     extra_0_q_per_band::Dict{String,Dict{Int,Float64}}
     extra_q_per_band::Dict{String,Dict{Int,Float64}}
 end

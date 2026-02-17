@@ -7,6 +7,7 @@ include("turtle.jl")
 include("interception.jl")
 include("scattering.jl")
 include("pipeline.jl")
+include("output.jl")
 
 export LightConfig
 export MeteoTable
@@ -34,5 +35,8 @@ export compute_scattering
 export integrate_light
 export run_light_step
 export run_light_series
+export component_variable_names
+export component_values_table
+export write_component_values_csv
 
 end
