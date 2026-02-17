@@ -1,10 +1,11 @@
 name = "ArchimedLight"
 uuid = "ca362a0f-208d-4994-8e0e-d922fd0d438a"
-authors = ["Rémi Vezy <VEZY@users.noreply.github.com> and contributors"]
 version = "1.0.0-DEV"
+authors = ["Rémi Vezy <VEZY@users.noreply.github.com> and contributors"]
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -20,6 +21,7 @@ YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [compat]
 CSV = "0.10.15"
+CairoMakie = "0.15.8"
 GeometryBasics = "0.5"
 MultiScaleTreeGraph = "0.14.4"
 PlantGeom = "0.14.0"

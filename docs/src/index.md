@@ -28,5 +28,6 @@ step = run_light_step(scene, row, cfg)
 ```
 
 ## Navigation
+- See [Full Example](full_example.md) for a complete runnable workflow with bundled input files.
 - See [Composable Stages](@ref) for stage-by-stage usage.
 - See [API Reference](@ref) for public signatures.

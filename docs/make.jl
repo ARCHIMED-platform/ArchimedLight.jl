@@ -14,6 +14,7 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Full Example" => "full_example.md",
         "Composable Stages" => "stages.md",
         "API Reference" => "api.md",
     ],

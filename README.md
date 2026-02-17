@@ -36,6 +36,14 @@ series = run_light_series(scene, meteo, cfg)
 step = run_light_step(scene, first(meteo.rows), cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
 ```
 
+## Full Example
+- Self-contained files and script are under `example/`.
+- Run with:
+
+```bash
+julia --project=. example/full_featured_example.jl
+```
+
 ## Stage flexibility
 - You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, ...).
 - You can prebuild scattering transfers via `build_scattering_transfer_graph(...)` and reuse them with `compute_scattering(graph, ...)`.
