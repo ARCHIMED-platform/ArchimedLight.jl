@@ -60,6 +60,18 @@ const _SCATTERING_ITERATION_LOG_ORDER = [
     "scat",
 ]
 
+const _SUMMARY_VARIABLE_ORDER = [
+    "step_number",
+    "step_duration",
+    "group",
+    "type",
+    "item_id",
+    "area",
+    "Ri_q",
+]
+
+const _DEFAULT_SIM_COUNTER_DIGITS = 6
+
 function _canonical_component_variable_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_COMPONENT_VARIABLE_ORDER))
     sort(
@@ -86,6 +98,14 @@ end
 
 function _canonical_scattering_iteration_log_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCATTERING_ITERATION_LOG_ORDER))
+    sort(
+        unique(names);
+        by=n -> (get(idx, n, typemax(Int)), n),
+    )
+end
+
+function _canonical_summary_variable_order(names::Vector{String})
+    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUMMARY_VARIABLE_ORDER))
     sort(
         unique(names);
         by=n -> (get(idx, n, typemax(Int)), n),
@@ -126,6 +146,87 @@ function scene_variable_names(cfg::LightConfig)
         push!(vars, string(k))
     end
     isempty(vars) ? copy(_SCENE_VARIABLE_ORDER) : _canonical_scene_variable_order(vars)
+end
+
+function _config_wants_component_outputs(cfg::LightConfig)
+    d = get(cfg.raw, "component_variables", nothing)
+    d isa AbstractDict || return false
+    for (_, v) in d
+        _as_bool(v, false) && return true
+    end
+    return false
+end
+
+function _config_debug_enabled(cfg::LightConfig)
+    raw = cfg.raw
+    for key in ("log_debug", "debug")
+        haskey(raw, key) || continue
+        _as_bool(raw[key], false) && return true
+    end
+    return false
+end
+
+"""
+    output_directory(cfg)::String
+
+Resolve absolute output directory from config (`output_directory`, default `"output"`).
+"""
+function output_directory(cfg::LightConfig)
+    out_rel = haskey(cfg.raw, "output_directory") ? string(cfg.raw["output_directory"]) : "output"
+    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    isabspath(out_rel) ? normpath(out_rel) : normpath(joinpath(base, out_rel))
+end
+
+function _next_simulation_counter_dirname(base_dir::AbstractString; counter_digits::Int=_DEFAULT_SIM_COUNTER_DIGITS)
+    max_counter = 0
+    re = Regex("^\\d{$counter_digits}\$")
+    if isdir(base_dir)
+        for entry in readdir(base_dir)
+            occursin(re, entry) || continue
+            p = joinpath(base_dir, entry)
+            isdir(p) || continue
+            v = try
+                parse(Int, entry)
+            catch
+                0
+            end
+            max_counter = max(max_counter, v)
+        end
+    end
+    return lpad(string(max_counter + 1), counter_digits, '0')
+end
+
+"""
+    simulation_output_directory(cfg; base_output=nothing, counter_digits=6, create=true, clean_existing=true)::String
+
+Resolve Java-style simulation output directory:
+- `<output_directory>/<simulation_directory>` when `simulation_directory` is set in config;
+- otherwise `<output_directory>/<counter>` with zero-padded numeric counter (default 6 digits).
+
+When `create=true`, directories are created. If `simulation_directory` is set and the target exists,
+`clean_existing=true` removes it first (Java behavior).
+"""
+function simulation_output_directory(
+    cfg::LightConfig;
+    base_output::Union{Nothing,AbstractString}=nothing,
+    counter_digits::Int=_DEFAULT_SIM_COUNTER_DIGITS,
+    create::Bool=true,
+    clean_existing::Bool=true,
+)
+    out_base = base_output === nothing ? output_directory(cfg) : normpath(String(base_output))
+    create && mkpath(out_base)
+
+    sim_name = haskey(cfg.raw, "simulation_directory") ? strip(string(cfg.raw["simulation_directory"])) : ""
+    if isempty(sim_name)
+        sim_name = _next_simulation_counter_dirname(out_base; counter_digits=counter_digits)
+    end
+
+    out = normpath(joinpath(out_base, sim_name))
+    if create && clean_existing && haskey(cfg.raw, "simulation_directory") && isdir(out)
+        rm(out; recursive=true, force=true)
+    end
+    create && mkpath(out)
+    return out
 end
 
 function _step_duration_output_local(meteo_row, step_duration_seconds)
@@ -412,6 +513,21 @@ function _csv_cell_local(v)
         return replace(v, ';' => ",")
     end
     return string(v)
+end
+
+function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::Vector{<:AbstractDict}; append::Bool=false)
+    mkpath(dirname(path))
+    mode = append && isfile(path) && filesize(path) > 0 ? "a" : "w"
+    open(path, mode) do io
+        if mode == "w"
+            println(io, join(columns, ';'))
+        end
+        for row in rows
+            vals = [_csv_cell_local(get(row, c, "NA")) for c in columns]
+            println(io, join(vals, ';'))
+        end
+    end
+    return path
 end
 
 function _row_field_string_local(row, sym::Symbol, default::String="NA")
@@ -791,6 +907,207 @@ function write_scattering_iteration_log_csv(
         end
     end
     return path
+end
+
+"""
+    summary_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
+
+Build a Java-like `summary.csv` table represented as `(columns, rows)`.
+Rows are grouped by `(item_id, group, type)` for each step.
+"""
+function summary_values_table(
+    scene::SceneGeometry,
+    steps::AbstractVector{<:LightStepResult},
+    cfg::LightConfig;
+    meteo_rows=nothing,
+    start_step_number::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+    unavailable::String="NA",
+)
+    rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
+    length(rows_in) == length(steps) || error("summary_values_table: `meteo_rows` length must match `steps` length.")
+    cols = columns === nothing ? copy(_SUMMARY_VARIABLE_ORDER) : _canonical_summary_variable_order(String.(columns))
+    rows = Dict{String,Any}[]
+    node_ids = _node_ids_for_output(scene)
+
+    for i in eachindex(steps)
+        step = steps[i]
+        dt = _step_duration_output_local(rows_in[i], nothing)
+        step_no = start_step_number + i - 1
+        acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
+        for nid in node_ids
+            item = get(scene.java_item_id_per_node, nid, -1)
+            group = get(scene.node_group, nid, "")
+            type = get(scene.node_type, nid, unavailable)
+            area = get(scene.total_area_per_node, nid, 0.0)
+            ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
+            k = (item, group, type)
+            a0, r0 = get(acc, k, (0.0, 0.0))
+            acc[k] = (a0 + area, r0 + ri_q)
+        end
+
+        keys_sorted = sort(collect(keys(acc)); by=k -> (k[1], k[2], k[3]))
+        for k in keys_sorted
+            area, ri_q = acc[k]
+            row = Dict{String,Any}()
+            for c in cols
+                if c == "step_number"
+                    row[c] = step_no
+                elseif c == "step_duration"
+                    row[c] = dt
+                elseif c == "group"
+                    row[c] = k[2]
+                elseif c == "type"
+                    row[c] = k[3]
+                elseif c == "item_id"
+                    row[c] = k[1]
+                elseif c == "area"
+                    row[c] = area
+                elseif c == "Ri_q"
+                    row[c] = ri_q
+                else
+                    row[c] = unavailable
+                end
+            end
+            push!(rows, row)
+        end
+    end
+    return (columns=cols, rows=rows)
+end
+
+"""
+    write_summary_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
+
+Write Java-like `summary.csv`.
+"""
+function write_summary_csv(
+    path::AbstractString,
+    scene::SceneGeometry,
+    steps::AbstractVector{<:LightStepResult},
+    cfg::LightConfig;
+    meteo_rows=nothing,
+    start_step_number::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+    unavailable::String="NA",
+)
+    table = summary_values_table(
+        scene,
+        steps,
+        cfg;
+        meteo_rows=meteo_rows,
+        start_step_number=start_step_number,
+        columns=columns,
+        unavailable=unavailable,
+    )
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
+end
+
+"""
+    write_light_outputs(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, outdir=nothing, write_component=nothing, write_scene=nothing, write_summary=nothing, write_sun_position_log=nothing, write_scattering_log=nothing, scattering_log_bands=["PAR"])
+
+High-level Java-style output writer driven by config defaults and optional debug-log toggles.
+Returns a dictionary mapping output kind to written path.
+"""
+function write_light_outputs(
+    scene::SceneGeometry,
+    steps::AbstractVector{<:LightStepResult},
+    cfg::LightConfig;
+    meteo_rows=nothing,
+    start_step_number::Int=0,
+    outdir::Union{Nothing,AbstractString}=nothing,
+    write_component::Union{Nothing,Bool}=nothing,
+    write_scene::Union{Nothing,Bool}=nothing,
+    write_summary::Union{Nothing,Bool}=nothing,
+    write_sun_position_log::Union{Nothing,Bool}=nothing,
+    write_scattering_log::Union{Nothing,Bool}=nothing,
+    scattering_log_bands::AbstractVector{<:AbstractString}=["PAR"],
+)
+    rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
+    length(rows_in) == length(steps) || error("write_light_outputs: `meteo_rows` length must match `steps` length.")
+    out = Dict{String,String}()
+    outroot = outdir === nothing ? simulation_output_directory(cfg) : String(outdir)
+    mkpath(outroot)
+    out["output_directory"] = outroot
+
+    do_component = isnothing(write_component) ? _config_wants_component_outputs(cfg) : Bool(write_component)
+    do_scene = isnothing(write_scene) ? true : Bool(write_scene)
+    do_summary = isnothing(write_summary) ? _as_bool(get(cfg.raw, "write_summary", false), false) : Bool(write_summary)
+    debug_default = _config_debug_enabled(cfg)
+    do_sun_log = isnothing(write_sun_position_log) ? debug_default : Bool(write_sun_position_log)
+    do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.scattering) : Bool(write_scattering_log)
+
+    if do_component
+        path = joinpath(outroot, "component_values.csv")
+        cols = component_variable_names(cfg)
+        first_write = true
+        for i in eachindex(steps)
+            t = component_values_table(
+                scene,
+                steps[i],
+                cfg;
+                meteo_row=rows_in[i],
+                step_number=start_step_number + i - 1,
+                columns=cols,
+            )
+            _write_csv_rows(path, t.columns, t.rows; append=!first_write)
+            first_write = false
+        end
+        out["component_values"] = path
+    end
+
+    if do_scene
+        path = joinpath(outroot, "scene_values.csv")
+        write_scene_values_csv(path, scene, steps, cfg; meteo_rows=rows_in, start_step_number=start_step_number)
+        out["scene_values"] = path
+    end
+
+    if do_summary
+        path = joinpath(outroot, "summary.csv")
+        write_summary_csv(path, scene, steps, cfg; meteo_rows=rows_in, start_step_number=start_step_number)
+        out["summary"] = path
+    end
+
+    if do_sun_log
+        path = joinpath(outroot, "log-sun-position.csv")
+        write_sun_position_log_csv(path, steps, rows_in; start_step_number=start_step_number)
+        out["log_sun_position"] = path
+    end
+
+    if do_scat_log && cfg.scattering
+        for b in scattering_log_bands
+            band = uppercase(String(b))
+            path = joinpath(outroot, "log-iteration-scat-$(lowercase(band)).csv")
+            cols = copy(_SCATTERING_ITERATION_LOG_ORDER)
+            first_write = true
+            for i in eachindex(steps)
+                t = scattering_iteration_log_table(
+                    scene,
+                    steps[i],
+                    cfg;
+                    meteo_row=rows_in[i],
+                    step_number=start_step_number + i - 1,
+                    band=band,
+                    columns=cols,
+                )
+                _write_csv_rows(path, t.columns, t.rows; append=!first_write)
+                first_write = false
+            end
+            out["log_iteration_scat_$(lowercase(band))"] = path
+        end
+    end
+
+    out
+end
+
+function write_light_outputs(
+    scene::SceneGeometry,
+    step::LightStepResult,
+    cfg::LightConfig;
+    meteo_row=nothing,
+    step_number::Int=0,
+    kwargs...,
+)
+    write_light_outputs(scene, [step], cfg; meteo_rows=[meteo_row], start_step_number=step_number, kwargs...)
 end
 
 """

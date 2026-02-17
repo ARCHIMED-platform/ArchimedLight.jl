@@ -24,4 +24,9 @@ sun_position_log_table
 write_sun_position_log_csv
 scattering_iteration_log_table
 write_scattering_iteration_log_csv
+output_directory
+simulation_output_directory
+summary_values_table
+write_summary_csv
+write_light_outputs
 ```

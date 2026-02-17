@@ -49,6 +49,12 @@ write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows
 # Java-style logs:
 write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
 write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=first(meteo.rows), band="PAR")
+
+# High-level writer (component/scene/summary/logs from config defaults, overridable):
+write_light_outputs(scene, series, cfg; meteo_rows=meteo.rows, outdir="output")
+
+# Java-style simulation output path:
+sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 ```
 
 ## Full Example

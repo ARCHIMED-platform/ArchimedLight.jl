@@ -279,6 +279,94 @@ end
             @test :scat in propertynames(first(scat_rows))
         end
     end
+
+    function with_raw_overrides(cfg::ArchimedLight.LightConfig, raw_override::Dict{String,Any})
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw_override,
+        )
+    end
+
+    mktempdir() do tmp
+        out_base = joinpath(tmp, "output")
+        raw_auto = copy(cfg.raw)
+        raw_auto["output_directory"] = out_base
+        delete!(raw_auto, "simulation_directory")
+        cfg_auto = with_raw_overrides(cfg, raw_auto)
+
+        sim1 = ArchimedLight.simulation_output_directory(cfg_auto)
+        sim2 = ArchimedLight.simulation_output_directory(cfg_auto)
+        @test basename(sim1) == "000001"
+        @test basename(sim2) == "000002"
+        @test dirname(sim1) == out_base
+        @test dirname(sim2) == out_base
+
+        raw_named = copy(cfg.raw)
+        raw_named["output_directory"] = out_base
+        raw_named["simulation_directory"] = "simdir"
+        cfg_named = with_raw_overrides(cfg, raw_named)
+        sim_named = ArchimedLight.simulation_output_directory(cfg_named)
+        dummy = joinpath(sim_named, "dummy.txt")
+        write(dummy, "x")
+        @test isfile(dummy)
+        sim_named2 = ArchimedLight.simulation_output_directory(cfg_named)
+        @test sim_named2 == sim_named
+        @test !isfile(dummy)
+    end
+
+    mktempdir() do tmp
+        out_base = joinpath(tmp, "output")
+        raw_out = copy(cfg.raw)
+        raw_out["output_directory"] = out_base
+        delete!(raw_out, "simulation_directory")
+        cfg_out = with_raw_overrides(cfg, raw_out)
+        out_paths = ArchimedLight.write_light_outputs(
+            scene,
+            series,
+            cfg_out;
+            meteo_rows=subset.rows,
+            start_step_number=0,
+            write_component=true,
+            write_scene=true,
+            write_summary=true,
+            write_sun_position_log=true,
+            write_scattering_log=cfg_out.scattering,
+            scattering_log_bands=["PAR"],
+        )
+        @test haskey(out_paths, "output_directory")
+        @test basename(out_paths["output_directory"]) == "000001"
+        @test haskey(out_paths, "component_values")
+        @test haskey(out_paths, "scene_values")
+        @test haskey(out_paths, "summary")
+        @test haskey(out_paths, "log_sun_position")
+        @test isfile(out_paths["component_values"])
+        @test isfile(out_paths["scene_values"])
+        @test isfile(out_paths["summary"])
+        @test isfile(out_paths["log_sun_position"])
+        if cfg_out.scattering
+            @test haskey(out_paths, "log_iteration_scat_par")
+            @test isfile(out_paths["log_iteration_scat_par"])
+        end
+
+        comp_rows = read_java_csv(out_paths["component_values"])
+        @test !isempty(comp_rows)
+        @test maximum(Int[getproperty(r, :step_number) for r in comp_rows]) == length(series) - 1
+        scene_rows = read_java_csv(out_paths["scene_values"])
+        @test length(scene_rows) == length(series)
+        summary_rows = read_java_csv(out_paths["summary"])
+        @test !isempty(summary_rows)
+    end
 end
 
 @testset "OPS GWA scene load" begin
