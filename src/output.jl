@@ -458,7 +458,7 @@ function _component_variable_value(
 end
 
 """
-    component_values_table(scene, step, cfg; meteo_row=nothing, step_number=1, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
+    component_values_table(scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
 Build a Java-like component values table represented as `(columns, rows)`.
 `rows` is a vector of dictionaries keyed by column name.
@@ -468,7 +468,7 @@ function component_values_table(
     step::LightStepResult,
     cfg::LightConfig;
     meteo_row=nothing,
-    step_number::Int=1,
+    step_number::Int=0,
     step_duration_seconds=nothing,
     columns::Union{Nothing,AbstractVector}=nothing,
     unavailable::String="NA",
@@ -619,7 +619,7 @@ function _sun_position_log_values(row, sky::SkyState)
 end
 
 """
-    scene_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=1, columns=nothing, unavailable="NA", strict=false)
+    scene_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
 Build a Java-like scene values table represented as `(columns, rows)`.
 `rows` is a vector of dictionaries keyed by column name.
@@ -629,7 +629,7 @@ function scene_values_table(
     steps::AbstractVector{<:LightStepResult},
     cfg::LightConfig;
     meteo_rows=nothing,
-    start_step_number::Int=1,
+    start_step_number::Int=0,
     columns::Union{Nothing,AbstractVector}=nothing,
     unavailable::String="NA",
     strict::Bool=false,
@@ -667,7 +667,7 @@ function scene_values_table(
 end
 
 """
-    write_scene_values_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=1, columns=nothing, unavailable="NA", strict=false)
+    write_scene_values_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
 Write Java-like `scene_values.csv` output for one or many simulation steps.
 """
@@ -677,7 +677,7 @@ function write_scene_values_csv(
     steps::AbstractVector{<:LightStepResult},
     cfg::LightConfig;
     meteo_rows=nothing,
-    start_step_number::Int=1,
+    start_step_number::Int=0,
     columns::Union{Nothing,AbstractVector}=nothing,
     unavailable::String="NA",
     strict::Bool=false,
@@ -1111,7 +1111,7 @@ function write_light_outputs(
 end
 
 """
-    write_component_values_csv(path, scene, step, cfg; meteo_row=nothing, step_number=1, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
+    write_component_values_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
 Write Java-like `component_values.csv` output for one simulation step.
 """
@@ -1121,7 +1121,7 @@ function write_component_values_csv(
     step::LightStepResult,
     cfg::LightConfig;
     meteo_row=nothing,
-    step_number::Int=1,
+    step_number::Int=0,
     step_duration_seconds=nothing,
     columns::Union{Nothing,AbstractVector}=nothing,
     unavailable::String="NA",

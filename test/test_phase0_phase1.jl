@@ -161,6 +161,10 @@ end
     @test all(isfinite(Float64(get(r, "barycentre_z", NaN))) for r in tbl.rows)
     @test all(Float64(get(r, "sky_fraction", -1.0)) >= 0.0 for r in tbl.rows)
 
+    # Java parity: default step numbering is 0-based.
+    tbl_default_step = ArchimedLight.component_values_table(scene, step, cfg; meteo_row=row, columns=["step_number"])
+    @test all(Int(r["step_number"]) == 0 for r in tbl_default_step.rows)
+
     mktempdir() do tmp
         out_csv = joinpath(tmp, "component_values.csv")
         ArchimedLight.write_component_values_csv(out_csv, scene, step, cfg; meteo_row=row, step_number=1, columns=out_cols)
@@ -230,6 +234,8 @@ end
     @test length(scene_tbl.rows) == length(series)
     @test all(haskey(r, "RI_SW_f") for r in scene_tbl.rows)
     @test all(Float64(r["plot_area"]) > 0 for r in scene_tbl.rows)
+    scene_tbl_default_step = ArchimedLight.scene_values_table(scene, series, cfg; meteo_rows=subset.rows, columns=["step_number"])
+    @test [Int(r["step_number"]) for r in scene_tbl_default_step.rows] == collect(0:(length(series) - 1))
 
     mktempdir() do tmp
         out_csv = joinpath(tmp, "scene_values.csv")
