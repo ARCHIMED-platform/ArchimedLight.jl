@@ -668,6 +668,51 @@ function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
     isempty(pairs) ? row : merge(row, (; pairs...))
 end
 
+function _duration_seconds_or_nan(v)
+    v === missing && return NaN
+
+    if v isa Number
+        return Float64(v)
+    elseif v isa Dates.Time
+        return Float64(Dates.hour(v) * 3600 + Dates.minute(v) * 60 + Dates.second(v))
+    elseif v isa Dates.DateTime
+        t = Dates.Time(v)
+        return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60 + Dates.second(t))
+    elseif v isa Dates.Period
+        try
+            return Dates.value(Dates.Millisecond(v)) / 1000.0
+        catch
+        end
+    end
+
+    s = strip(string(v))
+    isempty(s) && return NaN
+    lowercase(s) in ("na", "nan", "missing") && return NaN
+
+    try
+        t = Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+        return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60 + Dates.second(t))
+    catch
+        try
+            t = Dates.Time(s, Dates.DateFormat("HH:MM"))
+            return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60)
+        catch
+        end
+    end
+
+    x = tryparse(Float64, s)
+    x === nothing && return NaN
+    return x
+end
+
+function _positive_duration_seconds(v; field_name::AbstractString="step_duration")
+    seconds = _duration_seconds_or_nan(v)
+    if !(isfinite(seconds) && seconds > 0.0)
+        error("Invalid $(field_name) value in meteo row: expected a positive duration, got $(repr(v))")
+    end
+    return seconds
+end
+
 function _forward_fill_row_date(rows::Vector{<:NamedTuple})
     out = Vector{NamedTuple}(undef, length(rows))
     last_date = nothing

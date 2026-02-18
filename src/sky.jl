@@ -93,6 +93,12 @@ function _row_step_hours(meteo_row)
     end_h < start_h && (end_h += 24.0)
 
     if end_h == start_h
+        names = propertynames(meteo_row)
+        if :step_duration in names
+            duration_seconds = _positive_duration_seconds(getproperty(meteo_row, :step_duration); field_name="step_duration")
+            end_h += duration_seconds / 3600.0
+            return start_h, end_h
+        end
         duration = _row_value(meteo_row, [:duration], NaN)
         if isfinite(duration) && duration > 0.0
             # Duration column is usually in hours; allow second-based values as a fallback.

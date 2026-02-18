@@ -220,7 +220,7 @@ end
 function _step_duration_seconds_local(row)
     names = propertynames(row)
     if (:step_duration in names)
-        return _row_number_local(row, :step_duration, 1.0)
+        return _positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
     end
     if (:hour_start in names) && (:hour_end in names)
         t0 = _parse_time_or_default_local(getproperty(row, :hour_start))
@@ -228,7 +228,9 @@ function _step_duration_seconds_local(row)
         dt0 = Dates.DateTime(Dates.Date(2000, 1, 1), t0)
         dt1 = Dates.DateTime(Dates.Date(2000, 1, 1), t1)
         dt1 < dt0 && (dt1 += Dates.Day(1))
-        return Dates.value(dt1 - dt0) / 1000.0
+        dt_seconds = Dates.value(dt1 - dt0) / 1000.0
+        dt_seconds > 0.0 || error("Invalid meteo timestep: non-positive duration from hour_start/hour_end.")
+        return dt_seconds
     end
     return 1.0
 end

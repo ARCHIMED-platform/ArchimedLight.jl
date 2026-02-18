@@ -1842,6 +1842,206 @@ end
         end
     end
 
+    function _light_cfg_with_meteo(cfg::ArchimedLight.LightConfig, meteo_path::String)
+        raw = copy(cfg.raw)
+        raw["meteo"] = meteo_path
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            meteo_path,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    # Java test-meteo-stepduration parity: hour_end and step_duration encodings are equivalent;
+    # malformed step_duration must fail.
+    meteo_step_root = joinpath(test_root, "test-meteo-stepduration")
+    cfg_meteo_base = ArchimedLight.read_light_config(joinpath(meteo_step_root, "config.yml"))
+    scene_meteo = ArchimedLight.read_scene(cfg_meteo_base.scene)
+
+    function _run_meteo_step(file_name::String)
+        cfg = _light_cfg_with_meteo(cfg_meteo_base, joinpath(meteo_step_root, file_name))
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        row = first(meteo.rows)
+        step = ArchimedLight.run_light_step(scene_meteo, row, cfg)
+        return row, step
+    end
+
+    row_m1, step_m1 = _run_meteo_step("meteo1.csv")
+    row_m2, step_m2 = _run_meteo_step("meteo2.csv")
+    @test isapprox(step_m1.sky.ri_sw_f, step_m2.sky.ri_sw_f; atol=1e-9, rtol=1e-9)
+    @test isapprox(ArchimedLight._step_duration_seconds_local(row_m1), 1800.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(ArchimedLight._step_duration_seconds_local(row_m2), 1800.0; atol=1e-12, rtol=1e-12)
+
+    cfg_m3 = _light_cfg_with_meteo(cfg_meteo_base, joinpath(meteo_step_root, "meteo3.csv"))
+    row_m3 = first(ArchimedLight.read_meteo(cfg_m3.meteo).rows)
+    @test_throws ErrorException ArchimedLight.run_light_step(scene_meteo, row_m3, cfg_m3)
+
+    # Java test-independant-steps2 parity: after dropping the first non-common step and
+    # renumbering, component outputs are identical.
+    indep_root = joinpath(test_root, "test-independant-steps2")
+    cfg_indep_base = ArchimedLight.read_light_config(joinpath(indep_root, "config.yml"))
+    cfg_indep_1 = _light_cfg_with_meteo(cfg_indep_base, joinpath(indep_root, "meteo1.csv"))
+    cfg_indep_2 = _light_cfg_with_meteo(cfg_indep_base, joinpath(indep_root, "meteo2.csv"))
+    scene_indep = ArchimedLight.read_scene(cfg_indep_base.scene)
+    meteo_indep_1 = ArchimedLight.read_meteo(cfg_indep_1.meteo)
+    meteo_indep_2 = ArchimedLight.read_meteo(cfg_indep_2.meteo)
+    series_indep_1 = ArchimedLight.run_light_series(scene_indep, meteo_indep_1, cfg_indep_1)
+    series_indep_2 = ArchimedLight.run_light_series(scene_indep, meteo_indep_2, cfg_indep_2)
+
+    component_cols = ArchimedLight.component_variable_names(cfg_indep_base)
+    function _stack_component_rows(scene, series, cfg, meteo_rows, cols)
+        out = Dict{String,Any}[]
+        for i in eachindex(series)
+            rows = ArchimedLight.component_values_table(
+                scene,
+                series[i],
+                cfg;
+                meteo_row=meteo_rows[i],
+                step_number=i - 1,
+                columns=cols,
+            ).rows
+            append!(out, rows)
+        end
+        sort!(out; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+        out
+    end
+    rows_indep_1 = _stack_component_rows(scene_indep, series_indep_1, cfg_indep_1, meteo_indep_1.rows, component_cols)
+    rows_indep_2_raw = _stack_component_rows(scene_indep, series_indep_2, cfg_indep_2, meteo_indep_2.rows, component_cols)
+    rows_indep_2 = Dict{String,Any}[]
+    for r in rows_indep_2_raw
+        step_no = Int(r["step_number"])
+        step_no == 0 && continue
+        rr = copy(r)
+        rr["step_number"] = step_no - 1
+        push!(rows_indep_2, rr)
+    end
+    sort!(rows_indep_2; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+    @test length(rows_indep_1) == length(rows_indep_2)
+    for i in eachindex(rows_indep_1)
+        for c in component_cols
+            @test _cell_equal(get(rows_indep_1[i], c, "NA"), get(rows_indep_2[i], c, "NA"))
+        end
+    end
+
+    # Java absorb tests parity: within a type/domain, absorbed over incident ratios are constant.
+    function _check_absorption_ratios(cfg_path::String; with_scattering::Bool)
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        suffix = with_scattering ? "" : "_0"
+        cols = [
+            "type",
+            "area",
+            "step_duration",
+            "Ri_PAR$(suffix)_f",
+            "Ri_NIR$(suffix)_f",
+            "Ra_PAR$(suffix)_f",
+            "Ra_NIR$(suffix)_f",
+            "Ra_PAR$(suffix)_q",
+            "Ra_NIR$(suffix)_q",
+        ]
+        rows = ArchimedLight.component_values_table(scene, step, cfg; meteo_row=row, columns=cols).rows
+        for tname in ("Metamer", "Leaf"), band in ("PAR", "NIR")
+            ri_f = "Ri_$(band)$(suffix)_f"
+            ra_f = "Ra_$(band)$(suffix)_f"
+            ra_q = "Ra_$(band)$(suffix)_q"
+
+            vals_irr = Float64[]
+            vals_energy = Float64[]
+            for r in rows
+                string(r["type"]) == tname || continue
+                ri = Float64(r[ri_f])
+                ri == 0.0 && continue
+                area = Float64(r["area"])
+                dt = Float64(r["step_duration"])
+                push!(vals_irr, Float64(r[ra_f]) / ri)
+                push!(vals_energy, Float64(r[ra_q]) / (ri * max(dt * area, eps(Float64))))
+            end
+            @test !isempty(vals_irr)
+            ref_irr = first(vals_irr)
+            ref_energy = first(vals_energy)
+            @test maximum(abs(v - ref_irr) for v in vals_irr; init=0.0) < 1e-6
+            @test maximum(abs(v - ref_energy) for v in vals_energy; init=0.0) < 1e-6
+        end
+    end
+    _check_absorption_ratios(joinpath(test_root, "test-absorb", "config.yml"); with_scattering=false)
+    _check_absorption_ratios(joinpath(test_root, "test-absorb2", "config.yml"); with_scattering=true)
+
+    # Java test-cached-radiation parity: cached and uncached runs match across irradiance and absorbed outputs.
+    cached_root = joinpath(test_root, "test-cached-radiation")
+    cfg_cached_1 = ArchimedLight.read_light_config(joinpath(cached_root, "config.yml"))
+    cfg_cached_2 = ArchimedLight.read_light_config(joinpath(cached_root, "config2.yml"))
+    scene_cached_1 = ArchimedLight.read_scene(cfg_cached_1.scene)
+    scene_cached_2 = ArchimedLight.read_scene(cfg_cached_2.scene)
+    meteo_cached_1 = ArchimedLight.read_meteo(cfg_cached_1.meteo)
+    meteo_cached_2 = ArchimedLight.read_meteo(cfg_cached_2.meteo)
+    series_cached_1 = ArchimedLight.run_light_series(scene_cached_1, meteo_cached_1, cfg_cached_1)
+    series_cached_2 = ArchimedLight.run_light_series(scene_cached_2, meteo_cached_2, cfg_cached_2)
+    @test length(series_cached_1) == length(series_cached_2)
+
+    function _cell_close(a, b; atol=1e-6, rtol=1e-3)
+        sa = strip(string(a))
+        sb = strip(string(b))
+        pa = tryparse(Float64, sa)
+        pb = tryparse(Float64, sb)
+        if pa !== nothing && pb !== nothing
+            return isapprox(pa, pb; atol=atol, rtol=rtol)
+        end
+        return sa == sb
+    end
+
+    cached_cols = [
+        "item_id",
+        "component_id",
+        "Ri_PAR_0_f",
+        "Ri_NIR_0_f",
+        "Ri_PAR_f",
+        "Ri_NIR_f",
+        "Ra_PAR_0_f",
+        "Ra_NIR_0_f",
+        "Ra_PAR_0_q",
+        "Ra_NIR_0_q",
+        "Ra_PAR_f",
+        "Ra_NIR_f",
+        "Ra_PAR_q",
+        "Ra_NIR_q",
+    ]
+    for i in eachindex(series_cached_1)
+        rows1 = ArchimedLight.component_values_table(
+            scene_cached_1,
+            series_cached_1[i],
+            cfg_cached_1;
+            meteo_row=meteo_cached_1.rows[i],
+            columns=cached_cols,
+        ).rows
+        rows2 = ArchimedLight.component_values_table(
+            scene_cached_2,
+            series_cached_2[i],
+            cfg_cached_2;
+            meteo_row=meteo_cached_2.rows[i],
+            columns=cached_cols,
+        ).rows
+        d1 = Dict((Int(r["item_id"]), Int(r["component_id"])) => r for r in rows1)
+        d2 = Dict((Int(r["item_id"]), Int(r["component_id"])) => r for r in rows2)
+        @test Set(keys(d1)) == Set(keys(d2))
+        for k in keys(d1)
+            for c in cached_cols[3:end]
+                @test _cell_close(d1[k][c], d2[k][c])
+            end
+        end
+    end
+
     for disk_name in ("test-save_on_disk1", "test-save_on_disk2", "test-save_on_disk3", "test-save_on_disk4", "test-save_on_disk5")
         f_disk = fixtures[disk_name]
         cfg_disk_base = ArchimedLight.read_light_config(f_disk.config_path)
