@@ -13,6 +13,13 @@ function _as_bool_local(x, default::Bool)
     return default
 end
 
+function _normalize_group_name_local(x)
+    s = strip(string(x))
+    isempty(s) && return s
+    s = replace(s, r"^#\[[^\]]+\]\s*" => "")
+    strip(s)
+end
+
 function _cfg_toricity(cfg::LightConfig)
     raw = cfg.raw
     if haskey(raw, "toricity")
@@ -65,7 +72,7 @@ function _virtual_sensor_groups(cfg::LightConfig)
         d isa AbstractDict || continue
         d = _to_string_dict(d)
 
-        group = haskey(d, "Group") ? strip(string(d["Group"])) : ""
+        group = haskey(d, "Group") ? _normalize_group_name_local(d["Group"]) : ""
         isempty(group) && continue
 
         types = get(d, "Type", nothing)
@@ -100,9 +107,71 @@ function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig
     isempty(groups) && return Set{Int}()
     out = Set{Int}()
     for (nid, g) in node_group
-        g in groups && push!(out, nid)
+        _normalize_group_name_local(g) in groups && push!(out, nid)
     end
     out
+end
+
+function _ignored_group_types(cfg::LightConfig)
+    models = get(cfg.raw, "models", nothing)
+    models isa AbstractVector || return Dict{String,Set{String}}()
+
+    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    out = Dict{String,Set{String}}()
+    for m in models
+        mp = String(m)
+        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
+        isfile(path) || continue
+        d = try
+            YAML.load_file(path)
+        catch
+            nothing
+        end
+        d isa AbstractDict || continue
+        d = _to_string_dict(d)
+
+        group = haskey(d, "Group") ? _normalize_group_name_local(d["Group"]) : ""
+        isempty(group) && continue
+
+        types = get(d, "Type", nothing)
+        types isa AbstractDict || continue
+        for (type_name0, tconf0) in types
+            tconf0 isa AbstractDict || continue
+            tconf = _to_string_dict(tconf0)
+            inter = get(tconf, "Interception", nothing)
+            inter isa AbstractDict || continue
+            inter = _to_string_dict(inter)
+            iuse = get(inter, "use", nothing)
+            iconf =
+                if iuse !== nothing && haskey(inter, string(iuse))
+                    inter[string(iuse)]
+                else
+                    inter
+                end
+            iconf isa AbstractDict || continue
+            iconf = _to_string_dict(iconf)
+            model = lowercase(strip(string(get(iconf, "model", ""))))
+            model == "ignore" || continue
+            tname = strip(string(type_name0))
+            isempty(tname) && continue
+            s = get!(out, group) do
+                Set{String}()
+            end
+            push!(s, tname)
+        end
+    end
+    out
+end
+
+function _is_ignored_node(
+    node_id::Int,
+    scene::SceneGeometry,
+    ignored::Dict{String,Set{String}},
+)
+    isempty(ignored) && return false
+    g = _normalize_group_name_local(get(scene.node_group, node_id, ""))
+    t = strip(get(scene.node_type, node_id, ""))
+    return haskey(ignored, g) && (t in ignored[g])
 end
 
 function _group_light_emitters(cfg::LightConfig)
@@ -796,12 +865,24 @@ end
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
     raw_vertices = GeometryBasics.decompose(PlantGeom.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
-    face2node = collect(scene.face2node)
+    all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
+    all_face2node = collect(scene.face2node)
+
+    ignored = _ignored_group_types(cfg)
+    faces = PlantGeom.Face3[]
+    face2node = Int[]
+    for i in eachindex(all_faces)
+        node_id = all_face2node[i]
+        _is_ignored_node(node_id, scene, ignored) && continue
+        push!(faces, all_faces[i])
+        push!(face2node, node_id)
+    end
+    isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
+
     plotbox = _plotbox(scene, vertices, cfg.pixel_size)
 
     node_ids = unique(face2node)
-    node_group = Dict{Int,String}(k => v for (k, v) in scene.node_group)
+    node_group = Dict{Int,String}(nid => get(scene.node_group, nid, "") for nid in node_ids)
     plot_paving = _cfg_plot_paving(cfg)
     if plot_paving > 0
         first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)

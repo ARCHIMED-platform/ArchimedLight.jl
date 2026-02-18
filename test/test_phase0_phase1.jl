@@ -962,6 +962,39 @@ end
     got_means = [v[1] for v in values(area_ratio_metrics)]
     @test maximum(got_means) - minimum(got_means) < 1e-9
 
+    # Java test-ignore parity: Interception model=ignore drops ignored types from outputs,
+    # and explicit/aliased ignore configurations are equivalent.
+    ignore_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-ignore")
+    cfg_ignore0 = ArchimedLight.read_light_config(joinpath(ignore_root, "config.yml"))
+    cfg_ignore1 = ArchimedLight.read_light_config(joinpath(ignore_root, "config_ignore1.yml"))
+    cfg_ignore2 = ArchimedLight.read_light_config(joinpath(ignore_root, "config_ignore2.yml"))
+
+    scene_ignore = ArchimedLight.read_scene(cfg_ignore0.scene)
+    _, _, _, node_ids_ignore0, _, _ = ArchimedLight._scene_geometry_for_interception(scene_ignore, cfg_ignore0)
+    _, _, _, node_ids_ignore1, _, _ = ArchimedLight._scene_geometry_for_interception(scene_ignore, cfg_ignore1)
+    _, _, _, node_ids_ignore2, _, _ = ArchimedLight._scene_geometry_for_interception(scene_ignore, cfg_ignore2)
+
+    @test any(get(scene_ignore.node_type, nid, "") == "Metamer" for nid in node_ids_ignore0)
+    @test all(get(scene_ignore.node_type, nid, "") != "Metamer" for nid in node_ids_ignore1)
+    @test length(node_ids_ignore1) < length(node_ids_ignore0)
+    @test sort(node_ids_ignore1) == sort(node_ids_ignore2)
+
+    keys_ignore1 = ArchimedLight._interception_java_keys(scene_ignore, cfg_ignore1)
+    keys_ignore2 = ArchimedLight._interception_java_keys(scene_ignore, cfg_ignore2)
+    @test keys_ignore1 == keys_ignore2
+
+    # Java test-pavement parity: plot_paving creates synthetic pavement components.
+    pavement_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-pavement")
+    cfg_pav_yes = ArchimedLight.read_light_config(joinpath(pavement_root, "config.yml"))
+    cfg_pav_no = ArchimedLight.read_light_config(joinpath(pavement_root, "config-nopavement.yml"))
+    scene_pav = ArchimedLight.read_scene(cfg_pav_yes.scene)
+    _, _, _, node_ids_yes, _, node_group_yes = ArchimedLight._scene_geometry_for_interception(scene_pav, cfg_pav_yes)
+    _, _, _, node_ids_no, _, node_group_no = ArchimedLight._scene_geometry_for_interception(scene_pav, cfg_pav_no)
+    pav_yes = Int[nid for nid in node_ids_yes if get(node_group_yes, nid, "") == "pavement"]
+    pav_no = Int[nid for nid in node_ids_no if get(node_group_no, nid, "") == "pavement"]
+    @test !isempty(pav_yes)
+    @test isempty(pav_no)
+
     f_links_stats = fixtures["test-links"]
     cfg_ls = ArchimedLight.read_light_config(f_links_stats.config_path)
     scene_ls = ArchimedLight.read_scene(cfg_ls.scene)
