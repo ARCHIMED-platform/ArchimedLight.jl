@@ -1280,6 +1280,206 @@ end
     @test m_links_017.links == m_links_003.links
     @test m_links_017.perdir_links == m_links_003.perdir_links
 
+    function _with_raw(cfg::ArchimedLight.LightConfig, raw::Dict{String,Any})
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    function _counter_dirs(outdir::String)
+        d = isdir(outdir) ? readdir(outdir) : String[]
+        sort([x for x in d if occursin(r"^\d{6}$", x)])
+    end
+
+    function _model_radiance(path::String)
+        txt = read(path, String)
+        m = match(r"radiance\s*:\s*([-+0-9.eE]+)", txt)
+        m === nothing && error("No radiance found in $path")
+        parse(Float64, m.captures[1])
+    end
+
+    test_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests")
+
+    # Java run-test parity: output counter directories keep incrementing even when gaps exist.
+    for cfg_path in (
+        joinpath(test_root, "test-output-path", "config.yml"),
+        joinpath(test_root, "test-output-path2", "project", "config.yml"),
+    )
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        mktempdir() do tmp
+            out = joinpath(tmp, "output")
+            raw = copy(cfg.raw)
+            raw["output_directory"] = out
+            haskey(raw, "simulation_directory") && delete!(raw, "simulation_directory")
+            cfg2 = _with_raw(cfg, raw)
+
+            @test basename(ArchimedLight.simulation_output_directory(cfg2)) == "000001"
+            @test basename(ArchimedLight.simulation_output_directory(cfg2)) == "000002"
+            @test length(_counter_dirs(out)) == 2
+
+            rm(joinpath(out, "000002"); recursive=true, force=true)
+            @test basename(ArchimedLight.simulation_output_directory(cfg2)) == "000002"
+            @test basename(ArchimedLight.simulation_output_directory(cfg2)) == "000003"
+
+            rm(joinpath(out, "000002"); recursive=true, force=true)
+            @test basename(ArchimedLight.simulation_output_directory(cfg2)) == "000004"
+            @test _counter_dirs(out) == ["000001", "000003", "000004"]
+        end
+    end
+
+    # Java run-test parity: simulation_directory is reused and cleaned between runs.
+    cfg_simdir = ArchimedLight.read_light_config(joinpath(test_root, "test-simulation-dir", "config.yml"))
+    mktempdir() do tmp
+        out = joinpath(tmp, "output")
+        raw = copy(cfg_simdir.raw)
+        raw["output_directory"] = out
+        cfg2 = _with_raw(cfg_simdir, raw)
+
+        sim1 = ArchimedLight.simulation_output_directory(cfg2)
+        @test basename(sim1) == "simdir"
+        dummy = joinpath(sim1, "dummy.txt")
+        write(dummy, "x")
+        @test isfile(dummy)
+
+        sim2 = ArchimedLight.simulation_output_directory(cfg2)
+        @test sim2 == sim1
+        @test !isfile(dummy)
+        @test count(==("simdir"), readdir(out)) == 1
+    end
+
+    function _run_fixture_step(cfg_path::String)
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        return cfg, scene, row, step
+    end
+
+    # Java test-lightsource1/2 parity: sky-only run and emitter-only run match on receiver components.
+    for (fx_name, tol) in (("test-lightsource1", 0.1), ("test-lightsource2", 0.16))
+        cfg1, scene1, row1, step1 = _run_fixture_step(joinpath(test_root, fx_name, "config1.yml"))
+        cfg2, scene2, row2, step2 = _run_fixture_step(joinpath(test_root, fx_name, "config2.yml"))
+
+        rows1 = ArchimedLight.component_values_table(
+            scene1,
+            step1,
+            cfg1;
+            meteo_row=row1,
+            columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+        ).rows
+        rows2 = ArchimedLight.component_values_table(
+            scene2,
+            step2,
+            cfg2;
+            meteo_row=row2,
+            columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+        ).rows
+
+        d1 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows1)
+        d2 = Dict(
+            (Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows2 if
+            Int(r["item_id"]) != 2
+        )
+        ks = intersect(keys(d1), keys(d2))
+        @test !isempty(ks)
+        @test maximum(abs(d1[k] - d2[k]) for k in ks; init=0.0) < tol
+    end
+
+    # Java test-lightsource3 parity: linear additivity of sky and emitter contributions.
+    cfg_l1, scene_l3, row_l1, step_l1 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config1.yml"))
+    cfg_l2, _, row_l2, step_l2 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config2.yml"))
+    cfg_l3, _, row_l3, step_l3 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config3.yml"))
+    t1 = ArchimedLight.component_values_table(
+        scene_l3,
+        step_l1,
+        cfg_l1;
+        meteo_row=row_l1,
+        columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"],
+    ).rows
+    t2 = ArchimedLight.component_values_table(
+        scene_l3,
+        step_l2,
+        cfg_l2;
+        meteo_row=row_l2,
+        columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"],
+    ).rows
+    t3 = ArchimedLight.component_values_table(
+        scene_l3,
+        step_l3,
+        cfg_l3;
+        meteo_row=row_l3,
+        columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"],
+    ).rows
+    for col in ("Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f")
+        d1 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t1)
+        d2 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t2)
+        d3 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t3)
+        ks = intersect(intersect(keys(d1), keys(d2)), keys(d3))
+        @test !isempty(ks)
+        @test maximum(abs((d1[k] + d2[k]) - d3[k]) for k in ks; init=0.0) < 1e-5
+    end
+
+    # Java test-lightsource4/5/6 parity: emitted source power equals intercepted order-0 power.
+    for (fx_name, model_name, strict_one_node) in (
+        ("test-lightsource4", "model_pave2.yml", true),
+        ("test-lightsource5", "model_lamp.yml", false),
+        ("test-lightsource6", "model_lamp.yml", false),
+    )
+        cfg, scene, row, step = _run_fixture_step(joinpath(test_root, fx_name, "config.yml"))
+        rows = ArchimedLight.component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            columns=["item_id", "component_id", "area", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+        ).rows
+        source_power = _model_radiance(joinpath(test_root, fx_name, model_name))
+
+        if strict_one_node
+            vals = [Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows if Int(r["item_id"]) == 1]
+            @test !isempty(vals)
+            @test relerr(maximum(vals), source_power) < 0.1
+        else
+            tot = sum(Float64(r["area"]) * Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows; init=0.0)
+            @test relerr(tot, source_power) < 0.1
+        end
+    end
+
+    # Java test-lightsource7/8/9 parity: absorbed power from Ri_f and scat_factor matches source power.
+    for (fx_name, model_name) in (
+        ("test-lightsource7", "model_pave2.yml"),
+        ("test-lightsource8", "model_lamp.yml"),
+        ("test-lightsource9", "model_lamp.yml"),
+    )
+        cfg, scene, row, step = _run_fixture_step(joinpath(test_root, fx_name, "config.yml"))
+        rows = ArchimedLight.component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            columns=["area", "Ri_PAR_f", "Ri_NIR_f", "scat_factor_PAR", "scat_factor_NIR"],
+        ).rows
+        source_power = _model_radiance(joinpath(test_root, fx_name, model_name))
+        tot_abs = sum(
+            (Float64(r["Ri_PAR_f"]) * (1.0 - Float64(r["scat_factor_PAR"])) +
+            Float64(r["Ri_NIR_f"]) * (1.0 - Float64(r["scat_factor_NIR"]))) * Float64(r["area"]) for r in rows;
+            init=0.0,
+        )
+        @test relerr(tot_abs, source_power) < 0.1
+    end
+
     f_div = fixtures["test-scattering-divergence"]
     cfg_div = ArchimedLight.read_light_config(f_div.config_path)
     scene_div = ArchimedLight.read_scene(cfg_div.scene)

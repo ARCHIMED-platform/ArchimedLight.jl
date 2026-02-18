@@ -239,14 +239,27 @@ function _default_scattering_factor_local(cfg::LightConfig, band::String)
     return cfg.scattering_coeff_par
 end
 
+function _interception_area_per_node_local(scene::SceneGeometry, cfg::LightConfig)
+    vertices, faces, face2node, node_ids, _, _ = _scene_geometry_for_interception(scene, cfg)
+    area = Dict{Int,Float64}(nid => 0.0 for nid in node_ids)
+    @inbounds for i in eachindex(faces)
+        f = faces[i]
+        nid = face2node[i]
+        a = _triangle_area3d(vertices[f[1]], vertices[f[2]], vertices[f[3]])
+        area[nid] = get(area, nid, 0.0) + a
+    end
+    return area
+end
+
 function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band::String)
     coeffs_by_group = _group_optical_coeffs(cfg)
     virtual_groups = _virtual_sensor_groups(cfg)
     b = uppercase(band)
     sf_default = _default_scattering_factor_local(cfg, b)
     out = Dict{Int,Float64}()
-    for nid in keys(scene.total_area_per_node)
-        group = get(scene.node_group, nid, "")
+    _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
+    for nid in node_ids
+        group = get(node_group, nid, get(scene.node_group, nid, ""))
         if group in virtual_groups
             out[nid] = 0.0
             continue
@@ -365,6 +378,7 @@ function run_light_step(
 )
     ib = _resolve_interception_backend(interception_backend)
     dt_seconds = _step_duration_seconds_local(meteo_row)
+    area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
     abs_nir = _node_absorptance_per_band(scene, cfg, "NIR")
     sky = compute_sky(meteo_row, cfg)
@@ -394,7 +408,7 @@ function run_light_step(
         extra_0_q_per_band=extra_0_q,
         extra_q_per_band=extra_q,
         step_duration_seconds=dt_seconds,
-        component_area_per_node=scene.total_area_per_node,
+        component_area_per_node=area_per_node,
         absorption_par_per_node=abs_par,
         absorption_nir_per_node=abs_nir,
     )
@@ -416,6 +430,7 @@ function run_light_series(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     ib = _resolve_interception_backend(interception_backend)
+    area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
     abs_nir = _node_absorptance_per_band(scene, cfg, "NIR")
     use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
@@ -463,7 +478,7 @@ function run_light_series(
             extra_0_q_per_band=extra_0_q,
             extra_q_per_band=extra_q,
             step_duration_seconds=dt_seconds,
-            component_area_per_node=scene.total_area_per_node,
+            component_area_per_node=area_per_node,
             absorption_par_per_node=abs_par,
             absorption_nir_per_node=abs_nir,
         )

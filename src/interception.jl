@@ -105,6 +105,171 @@ function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig
     out
 end
 
+function _group_light_emitters(cfg::LightConfig)
+    models = get(cfg.raw, "models", nothing)
+    models isa AbstractVector || return Dict{String,NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+
+    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    out = Dict{String,NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+    for m in models
+        mp = String(m)
+        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
+        isfile(path) || continue
+        d = try
+            YAML.load_file(path)
+        catch
+            nothing
+        end
+        d isa AbstractDict || continue
+        d = _to_string_dict(d)
+
+        group = haskey(d, "Group") ? strip(string(d["Group"])) : ""
+        isempty(group) && continue
+
+        types = get(d, "Type", nothing)
+        types isa AbstractDict || continue
+
+        par_sum = 0.0
+        nir_sum = 0.0
+        for (_, tconf0) in types
+            tconf0 isa AbstractDict || continue
+            tconf = _to_string_dict(tconf0)
+            em0 = get(tconf, "LightEmitter", nothing)
+            em0 isa AbstractDict || continue
+            em = _to_string_dict(em0)
+            model = lowercase(strip(string(get(em, "model", ""))))
+            model == "lambertianemitter" || continue
+
+            radiance = try
+                Float64(em["radiance"])
+            catch
+                try
+                    parse(Float64, string(get(em, "radiance", "0")))
+                catch
+                    0.0
+                end
+            end
+            radiance > 0.0 || continue
+
+            gpar = 0.48
+            gnir = 0.52
+            g0 = get(em, "gamma", nothing)
+            if g0 isa AbstractDict
+                g = _to_string_dict(g0)
+                gpar = try
+                    Float64(get(g, "PAR", gpar))
+                catch
+                    gpar
+                end
+                gnir = try
+                    Float64(get(g, "NIR", gnir))
+                catch
+                    gnir
+                end
+            end
+            gpar = max(gpar, 0.0)
+            gnir = max(gnir, 0.0)
+            gsum = gpar + gnir
+            if gsum > 0.0
+                gpar /= gsum
+                gnir /= gsum
+            else
+                gpar = 0.48
+                gnir = 0.52
+            end
+
+            par_sum += radiance * gpar
+            nir_sum += radiance * gnir
+        end
+
+        if par_sum > 0.0 || nir_sum > 0.0
+            cur = get(out, group, (par=0.0, nir=0.0))
+            out[group] = (par=cur.par + par_sum, nir=cur.nir + nir_sum)
+        end
+    end
+    out
+end
+
+function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
+    by_group = _group_light_emitters(cfg)
+    isempty(by_group) && return Dict{Int,Float64}(), Dict{Int,Float64}()
+
+    par = Dict{Int,Float64}()
+    nir = Dict{Int,Float64}()
+    for (group, pwr) in by_group
+        nids = Int[nid for (nid, g) in scene.node_group if g == group]
+        isempty(nids) && continue
+
+        atot = sum(get(scene.total_area_per_node, nid, 0.0) for nid in nids)
+        if atot > 0.0
+            for nid in nids
+                w = get(scene.total_area_per_node, nid, 0.0) / atot
+                par[nid] = get(par, nid, 0.0) + pwr.par * w
+                nir[nid] = get(nir, nid, 0.0) + pwr.nir * w
+            end
+        else
+            w = 1.0 / length(nids)
+            for nid in nids
+                par[nid] = get(par, nid, 0.0) + pwr.par * w
+                nir[nid] = get(nir, nid, 0.0) + pwr.nir * w
+            end
+        end
+    end
+    return par, nir
+end
+
+function _emitter_transfer_weights(
+    vertices,
+    faces,
+    face2node,
+    turtle::TurtleGrid,
+    cfg::LightConfig,
+    plotbox,
+    emitter_nodes::Set{Int},
+    cache_ctx,
+)
+    isempty(emitter_nodes) && return Dict{Tuple{Int,Int},Float64}()
+
+    pair_counts = Dict{Tuple{Int,Int},Int}()
+    total_from = Dict{Int,Int}()
+
+    for sector in turtle.sectors
+        sector.source == :sun && continue
+        pixel_hits, _, _, _ =
+            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+
+        for stack in values(pixel_hits)
+            length(stack) <= 1 && continue
+            sort!(stack, by=x -> x[1], rev=true)
+
+            for i in eachindex(stack)
+                src = stack[i][2]
+                src in emitter_nodes || continue
+
+                to = 0
+                for j in (i + 1):length(stack)
+                    nid = stack[j][2]
+                    nid in emitter_nodes && continue
+                    to = nid
+                    break
+                end
+                to == 0 && continue
+
+                pair_counts[(to, src)] = get(pair_counts, (to, src), 0) + 1
+                total_from[src] = get(total_from, src, 0) + 1
+            end
+        end
+    end
+
+    weights = Dict{Tuple{Int,Int},Float64}()
+    for ((to, src), c) in pair_counts
+        n = get(total_from, src, 0)
+        n > 0 || continue
+        weights[(to, src)] = c / n
+    end
+    weights
+end
+
 function _cfg_cache_pixel_table(cfg::LightConfig)
     raw = cfg.raw
     if haskey(raw, "cache_pixel_table")
@@ -753,6 +918,16 @@ function compute_first_order(
             projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
             incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + par_flux * pa
             incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nir_flux * pa
+        end
+    end
+
+    emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
+    emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
+    if !isempty(emitter_nodes)
+        w = _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
+        for ((to, src), ww) in w
+            incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + ww * get(emit_par, src, 0.0)
+            incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + ww * get(emit_nir, src, 0.0)
         end
     end
 
