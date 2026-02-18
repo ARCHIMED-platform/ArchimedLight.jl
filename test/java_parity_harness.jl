@@ -55,6 +55,7 @@ function light_parity_fixtures()
         "test-cafeier_sensor",
         "test-cafeier_sensor2",
         "test-cafeier_sensor3",
+        "test-cafeier_sensor4",
         "test-scattering-one-plate",
         "test-scattering-two-plates",
         "test-scattering-divergence",
@@ -65,8 +66,14 @@ function light_parity_fixtures()
         "test-links-stats",
         "test-links-pixeltable",
         "test-links-pixeltable2",
+        "test-links-sensor-plates",
+        "test-links-sensor-plates2",
         "test-cached-radiation2",
         "test-cached-radiation3",
+        "test-save_on_disk2",
+        "test-save_on_disk3",
+        "test-save_on_disk4",
+        "test-save_on_disk5",
         "test-customband",
     ]
     [_fixture_row(n) for n in names]

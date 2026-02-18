@@ -241,11 +241,16 @@ end
 
 function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band::String)
     coeffs_by_group = _group_optical_coeffs(cfg)
+    virtual_groups = _virtual_sensor_groups(cfg)
     b = uppercase(band)
     sf_default = _default_scattering_factor_local(cfg, b)
     out = Dict{Int,Float64}()
     for nid in keys(scene.total_area_per_node)
         group = get(scene.node_group, nid, "")
+        if group in virtual_groups
+            out[nid] = 0.0
+            continue
+        end
         group_coeffs = get(coeffs_by_group, group, Dict{String,Float64}())
         sf = get(group_coeffs, b, sf_default)
         out[nid] = clamp(1.0 - sf, 0.0, 1.0)

@@ -851,24 +851,42 @@ end
         @test expected_path !== nothing
         expected_rows = read_java_csv(expected_path)
         exp_total = 0.0
+        exp_keys = Set{Tuple{Int,Int}}()
         for r in expected_rows
             names = propertynames(r)
-            (:area in names && :irradiance_withoutScattering_PAR_NIR in names) || continue
+            (:area in names && :irradiance_withoutScattering_PAR_NIR in names && :item_id in names && :component_id in names) || continue
+            push!(exp_keys, (to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id))))
             exp_total += Float64(getproperty(r, :area)) * Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR))
         end
         cfg = ArchimedLight.read_light_config(fx.config_path)
         scene = ArchimedLight.read_scene(cfg.scene)
         row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
         step = ArchimedLight.run_light_step(scene, row, cfg)
-        got_total = sum(values(step.first_order.incident_par_power_per_node)) + sum(values(step.first_order.incident_nir_power_per_node))
+        key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
+        got_total = 0.0
+        for (nid, key) in key_by_node
+            key in exp_keys || continue
+            got_total += get(step.first_order.incident_par_power_per_node, nid, 0.0)
+            got_total += get(step.first_order.incident_nir_power_per_node, nid, 0.0)
+        end
         @test relerr(got_total, exp_total) < max_rel_err
 
         summary_path = _expected_summary_path(fx)
         if summary_path !== nothing
             expected_summary = read_java_csv(summary_path)
-            exp_riq = _sum_float_col(expected_summary, :Ri_q)
             got_summary = ArchimedLight.summary_values_table(scene, [step], cfg; meteo_rows=[row], start_step_number=0)
-            got_riq = sum(Float64(r["Ri_q"]) for r in got_summary.rows)
+            exp_by_item = Dict{Int,Float64}()
+            for r in expected_summary
+                item = to_int(getproperty(r, :item_id))
+                exp_by_item[item] = get(exp_by_item, item, 0.0) + Float64(getproperty(r, :Ri_q))
+            end
+            got_by_item = Dict{Int,Float64}()
+            for r in got_summary.rows
+                item = Int(r["item_id"])
+                got_by_item[item] = get(got_by_item, item, 0.0) + Float64(r["Ri_q"])
+            end
+            exp_riq = sum(values(exp_by_item))
+            got_riq = sum(get(got_by_item, k, 0.0) for k in keys(exp_by_item))
             @test relerr(got_riq, exp_riq) < 2e-3
         end
     end
@@ -1022,6 +1040,158 @@ end
         @test metrics.hits == expected_hits
         @test metrics.edge_counts == expected_edge_counts
     end
+
+    function _node_links_stats_tuples(rows)
+        sort([(Int(getproperty(r, :plantid)), Int(getproperty(r, :nodeid)), Int(getproperty(r, :links)), Int(getproperty(r, :hits))) for r in rows])
+    end
+    function _node_links_dir_tuples(rows)
+        sort([(Int(getproperty(r, :dir)), Int(getproperty(r, :plantid1)), Int(getproperty(r, :id1)), Int(getproperty(r, :plantid2)), Int(getproperty(r, :id2)), Int(getproperty(r, :n))) for r in rows])
+    end
+    function _node_links_stats_tuples_tbl(rows)
+        sort([(Int(r["plantid"]), Int(r["nodeid"]), Int(r["links"]), Int(r["hits"])) for r in rows])
+    end
+    function _node_links_dir_tuples_tbl(rows)
+        sort([(Int(r["dir"]), Int(r["plantid1"]), Int(r["id1"]), Int(r["plantid2"]), Int(r["id2"]), Int(r["n"])) for r in rows])
+    end
+
+    for links_name in ("test-links", "test-links2", "test-links3", "test-links4")
+        fx = fixtures[links_name]
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        sky = ArchimedLight.compute_sky(row, cfg)
+        turtle = ArchimedLight.build_turtle(cfg, sky)
+
+        got_stats = ArchimedLight.node_links_stats_alldirs_table(scene, turtle, cfg)
+        exp_stats_path = joinpath(fixture_path(fx), "expected", "log-nodelinks-stats-alldirs.csv")
+        @test isfile(exp_stats_path)
+        exp_stats = read_java_csv(exp_stats_path)
+        @test _node_links_stats_tuples_tbl(got_stats.rows) == _node_links_stats_tuples(exp_stats)
+
+        got_dir0 = ArchimedLight.node_links_dir_table(scene, turtle, cfg; direction_index=0)
+        exp_dir_path = joinpath(fixture_path(fx), "expected", "log-nodelinks-dir00.csv")
+        @test isfile(exp_dir_path)
+        exp_dir = read_java_csv(exp_dir_path)
+        @test _node_links_dir_tuples_tbl(got_dir0.rows) == _node_links_dir_tuples(exp_dir)
+    end
+
+    function _component_par_by_item(scene, step, cfg, row)
+        t = ArchimedLight.component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            columns=["item_id", "component_id", "group", "Ri_PAR_0_f", "Ri_PAR_f"],
+        )
+        return t.rows
+    end
+
+    function _sum_item(rows, item_id::Int, col::String)
+        s = 0.0
+        for r in rows
+            Int(r["item_id"]) == item_id || continue
+            s += Float64(r[col])
+        end
+        s
+    end
+
+    for links_name in ("test-links-sensor-plates", "test-links-sensor-plates2")
+        fx = fixtures[links_name]
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+
+        step_pix = ArchimedLight.run_light_step(
+            scene,
+            row,
+            cfg;
+            scattering_backend=ArchimedLight.RaycastScatteringBackend(),
+        )
+        step_lnk = ArchimedLight.run_light_step(
+            scene,
+            row,
+            cfg;
+            scattering_backend=ArchimedLight.LinksScatteringBackend(),
+        )
+
+        rows_pix = _component_par_by_item(scene, step_pix, cfg, row)
+        rows_lnk = _component_par_by_item(scene, step_lnk, cfg, row)
+        @test length(rows_pix) == length(rows_lnk)
+
+        map_pix_0 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_0_f"]) for r in rows_pix)
+        map_lnk_0 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_0_f"]) for r in rows_lnk)
+        map_pix_n = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_f"]) for r in rows_pix)
+        map_lnk_n = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_f"]) for r in rows_lnk)
+        @test maximum(abs(map_pix_0[k] - map_lnk_0[k]) for k in keys(map_pix_0); init=0.0) < 1e-12
+        @test maximum(abs(map_pix_n[k] - map_lnk_n[k]) for k in keys(map_pix_n); init=0.0) < 1e-12
+
+        if links_name == "test-links-sensor-plates"
+            plate_scat = sum(
+                Float64(r["Ri_PAR_f"] - r["Ri_PAR_0_f"]) for r in rows_pix if string(r["group"]) == "plates";
+                init=0.0,
+            )
+            sensor_meas = sum(Float64(r["Ri_PAR_f"]) for r in rows_pix if string(r["group"]) == "sensors"; init=0.0)
+            @test sensor_meas > 0.0
+            @test abs(plate_scat - sensor_meas) / max(abs(plate_scat), eps(Float64)) < 0.047
+        else
+            coeffs = ArchimedLight._group_optical_coeffs(cfg)
+            ro = get(get(coeffs, "plates", Dict{String,Float64}()), "PAR", cfg.scattering_coeff_par) / 2.0
+
+            ip1 = _sum_item(rows_pix, 4, "Ri_PAR_f")
+            ip2 = _sum_item(rows_pix, 1, "Ri_PAR_f")
+            is2 = _sum_item(rows_pix, 2, "Ri_PAR_f")
+            is1 = _sum_item(rows_pix, 3, "Ri_PAR_f")
+
+            v_plate2 = ip1 * ro
+            @test abs(v_plate2 - ip2) / max(abs(v_plate2), eps(Float64)) < 0.91
+
+            v_sensor = ip1 * ro + ip2 * ro
+            @test abs(is2 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.86
+            @test abs(is1 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.046
+        end
+    end
+
+    f_sensor4 = fixtures["test-cafeier_sensor4"]
+    cfg_sensor4 = ArchimedLight.read_light_config(f_sensor4.config_path)
+    scene_sensor4 = ArchimedLight.read_scene(cfg_sensor4.scene)
+    row_sensor4 = first(ArchimedLight.read_meteo(cfg_sensor4.meteo).rows)
+    step_sensor4 = ArchimedLight.run_light_step(scene_sensor4, row_sensor4, cfg_sensor4)
+
+    summary4 = ArchimedLight.summary_values_table(
+        scene_sensor4,
+        [step_sensor4],
+        cfg_sensor4;
+        meteo_rows=[row_sensor4],
+        start_step_number=0,
+    )
+    comp4 = ArchimedLight.component_values_table(
+        scene_sensor4,
+        step_sensor4,
+        cfg_sensor4;
+        meteo_row=row_sensor4,
+        columns=["Ra_PAR_0_q", "Ra_NIR_0_q"],
+    )
+
+    ground_area = sum(
+        Float64(r["area"]) for r in summary4.rows if Int(r["item_id"]) == -1;
+        init=0.0,
+    )
+    @test ground_area > 0.0
+
+    sky_irr = step_sensor4.sky.ri_sw_f
+    stepdur = _step_duration_seconds(row_sensor4)
+    tot_abs_energy = sum(Float64(r["Ra_PAR_0_q"] + r["Ra_NIR_0_q"]) for r in comp4.rows; init=0.0)
+    abs_irr = tot_abs_energy / stepdur / ground_area
+    @test sky_irr - abs_irr > 0.0
+
+    vs_intercep = sum(Float64(r["Ri_q"]) for r in summary4.rows if string(r["group"]) == "sensors"; init=0.0)
+    @test vs_intercep > 0.0
+    vs_irr = vs_intercep / stepdur / ground_area
+    @test abs(sky_irr - vs_irr) < 0.01
+
+    scene_intercep = sum(Float64(r["Ri_q"]) for r in summary4.rows if string(r["group"]) != "sensors"; init=0.0)
+    scene_irr = scene_intercep / stepdur / ground_area
+    @test abs(sky_irr - scene_irr) < 0.77
 
     # Java fixture `test-links-stats` compares node-link counts across two pixel sizes.
     # It does not compare our internal all-direction hit count proxy.
@@ -1177,34 +1347,42 @@ end
         end
     end
 
-    f_disk = fixtures["test-save_on_disk1"]
-    cfg_disk_base = ArchimedLight.read_light_config(f_disk.config_path)
-    cfg_disk_on = with_cache_pixel_table(cfg_disk_base, true)
-    cfg_disk_off = with_cache_pixel_table(cfg_disk_base, false)
-    cache_dir = ArchimedLight._projection_cache_dir(cfg_disk_on)
-    isdir(cache_dir) && rm(cache_dir; recursive=true, force=true)
+    for disk_name in ("test-save_on_disk1", "test-save_on_disk2", "test-save_on_disk3", "test-save_on_disk4", "test-save_on_disk5")
+        f_disk = fixtures[disk_name]
+        cfg_disk_base = ArchimedLight.read_light_config(f_disk.config_path)
+        cfg_disk_on = with_cache_pixel_table(cfg_disk_base, true)
+        cfg_disk_off = with_cache_pixel_table(cfg_disk_base, false)
+        cache_dir = ArchimedLight._projection_cache_dir(cfg_disk_on)
+        isdir(cache_dir) && rm(cache_dir; recursive=true, force=true)
 
-    scene_disk = ArchimedLight.read_scene(cfg_disk_on.scene)
-    row_disk = first(ArchimedLight.read_meteo(cfg_disk_on.meteo).rows)
+        scene_disk = ArchimedLight.read_scene(cfg_disk_on.scene)
+        row_disk = first(ArchimedLight.read_meteo(cfg_disk_on.meteo).rows)
 
-    step_disk_1 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
-    @test isdir(cache_dir)
-    files_1 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
-    @test !isempty(files_1)
-    mtimes_1 = Dict(f => stat(f).mtime for f in files_1)
+        step_disk_1 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
+        @test isdir(cache_dir)
+        files_1 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
+        @test !isempty(files_1)
+        mtimes_1 = Dict(f => stat(f).mtime for f in files_1)
 
-    step_disk_2 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
-    files_2 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
-    @test basename.(files_2) == basename.(files_1)
-    mtimes_2 = Dict(f => stat(f).mtime for f in files_2)
-    @test all(mtimes_2[f] == mtimes_1[f] for f in files_1)
+        step_disk_2 = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_on)
+        files_2 = sort(filter(f -> endswith(f, ".jls"), readdir(cache_dir; join=true)))
+        @test basename.(files_2) == basename.(files_1)
+        mtimes_2 = Dict(f => stat(f).mtime for f in files_2)
+        @test all(mtimes_2[f] == mtimes_1[f] for f in files_1)
 
-    step_mem = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_off)
-    @test max_abs_float_dict_diff(step_disk_2.first_order.projected_area_per_node, step_mem.first_order.projected_area_per_node) == 0.0
-    @test max_abs_int_dict_diff(step_disk_2.first_order.hits_per_node, step_mem.first_order.hits_per_node) == 0
-    @test max_abs_float_dict_diff(step_disk_2.budget.ri_par_q_per_node, step_mem.budget.ri_par_q_per_node) == 0.0
-    @test max_abs_float_dict_diff(step_disk_2.budget.ri_nir_q_per_node, step_mem.budget.ri_nir_q_per_node) == 0.0
-    rm(cache_dir; recursive=true, force=true)
+        step_mem = ArchimedLight.run_light_step(scene_disk, row_disk, cfg_disk_off)
+        @test max_abs_float_dict_diff(step_disk_2.first_order.projected_area_per_node, step_mem.first_order.projected_area_per_node) == 0.0
+        @test max_abs_int_dict_diff(step_disk_2.first_order.hits_per_node, step_mem.first_order.hits_per_node) == 0
+        @test max_abs_float_dict_diff(step_disk_2.budget.ri_par_q_per_node, step_mem.budget.ri_par_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(step_disk_2.budget.ri_nir_q_per_node, step_mem.budget.ri_nir_q_per_node) == 0.0
+        if cfg_disk_on.scattering
+            @test step_disk_2.scattering !== nothing
+            @test step_mem.scattering !== nothing
+            @test max_abs_float_dict_diff(step_disk_2.scattering.added_par_power_per_node, step_mem.scattering.added_par_power_per_node) == 0.0
+            @test max_abs_float_dict_diff(step_disk_2.scattering.added_nir_power_per_node, step_mem.scattering.added_nir_power_per_node) == 0.0
+        end
+        rm(cache_dir; recursive=true, force=true)
+    end
 
     f_scat_cache = fixtures["test-scattering-one-plate"]
     cfg_scat_base = ArchimedLight.read_light_config(f_scat_cache.config_path)

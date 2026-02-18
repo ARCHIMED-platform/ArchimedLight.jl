@@ -70,6 +70,22 @@ const _SUMMARY_VARIABLE_ORDER = [
     "Ri_q",
 ]
 
+const _NODE_LINKS_STATS_ALLDIRS_ORDER = [
+    "plantid",
+    "nodeid",
+    "links",
+    "hits",
+]
+
+const _NODE_LINKS_DIR_ORDER = [
+    "dir",
+    "plantid1",
+    "id1",
+    "plantid2",
+    "id2",
+    "n",
+]
+
 const _DEFAULT_SIM_COUNTER_DIGITS = 6
 
 const _SCATTERING_REQUIRED_COMPONENT_VARIABLES = Set([
@@ -144,6 +160,22 @@ end
 
 function _canonical_summary_variable_order(names::Vector{String})
     idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUMMARY_VARIABLE_ORDER))
+    sort(
+        unique(names);
+        by=n -> (get(idx, n, typemax(Int)), n),
+    )
+end
+
+function _canonical_node_links_stats_order(names::Vector{String})
+    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_STATS_ALLDIRS_ORDER))
+    sort(
+        unique(names);
+        by=n -> (get(idx, n, typemax(Int)), n),
+    )
+end
+
+function _canonical_node_links_dir_order(names::Vector{String})
+    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_DIR_ORDER))
     sort(
         unique(names);
         by=n -> (get(idx, n, typemax(Int)), n),
@@ -383,6 +415,17 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         group_per_node=group_per_node,
         type_per_node=type_per_node,
     )
+end
+
+function _java_id_maps(scene::SceneGeometry, cfg::LightConfig)
+    keys_by_node = _interception_java_keys(scene, cfg)
+    item_per_node = Dict{Int,Int}()
+    comp_per_node = Dict{Int,Int}()
+    for (nid, key) in keys_by_node
+        item_per_node[nid] = key[1]
+        comp_per_node[nid] = key[2]
+    end
+    return item_per_node, comp_per_node
 end
 
 function _group_type_hints(cfg::LightConfig)
@@ -1069,6 +1112,160 @@ function write_scattering_iteration_log_csv(
         end
     end
     return path
+end
+
+"""
+    node_links_stats_alldirs_table(scene, turtle, cfg; columns=nothing)
+
+Build Java-like `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
+"""
+function node_links_stats_alldirs_table(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    cfg::LightConfig;
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    cols = columns === nothing ? copy(_NODE_LINKS_STATS_ALLDIRS_ORDER) : _canonical_node_links_stats_order(String.(columns))
+    pair_counts, _, _, _ = _pair_counts_for_scattering(scene, turtle, cfg)
+    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
+
+    neighbours_by_node = Dict{Int,Set{Int}}()
+    hits_by_node = Dict{Int,Int}()
+    for ((to, from), c) in pair_counts
+        c > 0 || continue
+        if to == from
+            s = get!(neighbours_by_node, to) do
+                Set{Int}()
+            end
+            push!(s, from)
+            hits_by_node[to] = get(hits_by_node, to, 0) + c
+            continue
+        end
+        s = get!(neighbours_by_node, to) do
+            Set{Int}()
+        end
+        push!(s, from)
+        hits_by_node[to] = get(hits_by_node, to, 0) + c
+    end
+
+    node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(item_per_node, nid, -1), get(comp_per_node, nid, nid), nid))
+    rows = Dict{String,Any}[]
+    for nid in node_ids
+        row = Dict{String,Any}()
+        for c in cols
+            if c == "plantid"
+                row[c] = get(item_per_node, nid, -1)
+            elseif c == "nodeid"
+                row[c] = get(comp_per_node, nid, nid)
+            elseif c == "links"
+                row[c] = length(get(neighbours_by_node, nid, Set{Int}()))
+            elseif c == "hits"
+                row[c] = get(hits_by_node, nid, 0)
+            else
+                row[c] = "NA"
+            end
+        end
+        push!(rows, row)
+    end
+    return (columns=cols, rows=rows)
+end
+
+"""
+    write_node_links_stats_alldirs_csv(path, scene, turtle, cfg; columns=nothing)
+
+Write Java-like `log-nodelinks-stats-alldirs.csv`.
+"""
+function write_node_links_stats_alldirs_csv(
+    path::AbstractString,
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    cfg::LightConfig;
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    table = node_links_stats_alldirs_table(scene, turtle, cfg; columns=columns)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
+end
+
+"""
+    node_links_dir_table(scene, turtle, cfg; direction_index=0, columns=nothing)
+
+Build Java-like `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
+"""
+function node_links_dir_table(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    cfg::LightConfig;
+    direction_index::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    0 <= direction_index < length(turtle.sectors) || error("direction_index out of bounds")
+    cols = columns === nothing ? copy(_NODE_LINKS_DIR_ORDER) : _canonical_node_links_dir_order(String.(columns))
+    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
+    vertices, faces, face2node, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    sector = turtle.sectors[direction_index + 1]
+    pixel_hits, _, _, _ = _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+
+    counts = Dict{Tuple{Int,Int},Int}()
+    for stack in values(pixel_hits)
+        length(stack) <= 1 && continue
+        sort!(stack, by=x -> x[1], rev=true)
+        for h in 1:(length(stack) - 1)
+            n1 = stack[h][2]
+            n2 = stack[h + 1][2]
+            k1 = (get(item_per_node, n1, -1), get(comp_per_node, n1, n1))
+            k2 = (get(item_per_node, n2, -1), get(comp_per_node, n2, n2))
+            a, b = k1 <= k2 ? (n1, n2) : (n2, n1)
+            counts[(a, b)] = get(counts, (a, b), 0) + 1
+        end
+    end
+
+    keys_sorted = sort(collect(keys(counts)); by=k -> (
+        get(item_per_node, k[1], -1),
+        get(comp_per_node, k[1], k[1]),
+        get(item_per_node, k[2], -1),
+        get(comp_per_node, k[2], k[2]),
+    ))
+    rows = Dict{String,Any}[]
+    for (n1, n2) in keys_sorted
+        row = Dict{String,Any}()
+        for c in cols
+            if c == "dir"
+                row[c] = direction_index
+            elseif c == "plantid1"
+                row[c] = get(item_per_node, n1, -1)
+            elseif c == "id1"
+                row[c] = get(comp_per_node, n1, n1)
+            elseif c == "plantid2"
+                row[c] = get(item_per_node, n2, -1)
+            elseif c == "id2"
+                row[c] = get(comp_per_node, n2, n2)
+            elseif c == "n"
+                row[c] = get(counts, (n1, n2), 0)
+            else
+                row[c] = "NA"
+            end
+        end
+        push!(rows, row)
+    end
+    return (columns=cols, rows=rows)
+end
+
+"""
+    write_node_links_dir_csv(path, scene, turtle, cfg; direction_index=0, columns=nothing)
+
+Write Java-like `log-nodelinks-dirXX.csv` for one direction.
+"""
+function write_node_links_dir_csv(
+    path::AbstractString,
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    cfg::LightConfig;
+    direction_index::Int=0,
+    columns::Union{Nothing,AbstractVector}=nothing,
+)
+    table = node_links_dir_table(scene, turtle, cfg; direction_index=direction_index, columns=columns)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """

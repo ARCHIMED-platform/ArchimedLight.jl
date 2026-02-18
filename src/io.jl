@@ -272,6 +272,7 @@ function _collect_mesh_nodes!(
     node_component_id,
     component_id_hints,
     component_id_hint_cursor,
+    per_item_component_counter,
     next_id::Base.RefValue{Int},
     current_group::String="",
     current_item_id::Int=1,
@@ -305,7 +306,16 @@ function _collect_mesh_nodes!(
                 component_id_hint_cursor[item_id] = cursor + 1
             end
         end
-        node_component_id[next_id[]] = hinted === nothing ? _node_component_id(node, next_id[] + 1) : Int(hinted)
+        if hinted !== nothing
+            node_component_id[next_id[]] = Int(hinted)
+        elseif haskey(component_id_hints, item_id)
+            node_component_id[next_id[]] = _node_component_id(node, next_id[] + 1)
+        else
+            # Java .gwa-like fallback: component ids are local to each item and start at 2.
+            k = get(per_item_component_counter, item_id, 0) + 1
+            per_item_component_counter[item_id] = k
+            node_component_id[next_id[]] = k + 1
+        end
     end
 
     children = _node_children(node)
@@ -321,6 +331,7 @@ function _collect_mesh_nodes!(
                 node_component_id,
                 component_id_hints,
                 component_id_hint_cursor,
+                per_item_component_counter,
                 next_id,
                 group,
                 item_id,
@@ -337,6 +348,7 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
     node_item_id = Dict{Int,Int}()
     node_component_id = Dict{Int,Int}()
     component_id_hint_cursor = Dict{Int,Int}(k => 1 for k in keys(component_id_hints))
+    per_item_component_counter = Dict{Int,Int}()
     next_id = Ref(0)
     _collect_mesh_nodes!(
         mtg,
@@ -348,6 +360,7 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
         node_component_id,
         component_id_hints,
         component_id_hint_cursor,
+        per_item_component_counter,
         next_id,
     )
 

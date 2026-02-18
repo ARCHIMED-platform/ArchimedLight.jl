@@ -45,6 +45,10 @@ export sun_position_log_table
 export write_sun_position_log_csv
 export scattering_iteration_log_table
 export write_scattering_iteration_log_csv
+export node_links_stats_alldirs_table
+export write_node_links_stats_alldirs_csv
+export node_links_dir_table
+export write_node_links_dir_csv
 export output_directory
 export simulation_output_directory
 export summary_values_table

@@ -24,6 +24,10 @@ sun_position_log_table
 write_sun_position_log_csv
 scattering_iteration_log_table
 write_scattering_iteration_log_csv
+node_links_stats_alldirs_table
+write_node_links_stats_alldirs_csv
+node_links_dir_table
+write_node_links_dir_csv
 output_directory
 simulation_output_directory
 summary_values_table

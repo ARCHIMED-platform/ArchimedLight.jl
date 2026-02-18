@@ -12,6 +12,7 @@ end
 
 function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
     vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
@@ -30,11 +31,52 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
             sort!(stack, by=x -> x[1], rev=true)
-            for h in 1:(length(stack) - 1)
-                above = stack[h][2]
-                below = stack[h + 1][2]
+
+            non_virtual_idx = Int[]
+            for i in eachindex(stack)
+                nid = stack[i][2]
+                !(nid in virtual_nodes) && push!(non_virtual_idx, i)
+            end
+
+            # Link non-virtual nodes as if virtual sensors were absent.
+            for h in 1:(length(non_virtual_idx) - 1)
+                above = stack[non_virtual_idx[h]][2]
+                below = stack[non_virtual_idx[h + 1]][2]
                 pair_counts[(above, below)] = get(pair_counts, (above, below), 0) + 1
                 pair_counts[(below, above)] = get(pair_counts, (below, above), 0) + 1
+            end
+
+            # Virtual sensors receive from closest non-virtual neighbours above/below.
+            for i in eachindex(stack)
+                vid = stack[i][2]
+                vid in virtual_nodes || continue
+
+                above = 0
+                for j in (i - 1):-1:1
+                    nid = stack[j][2]
+                    if !(nid in virtual_nodes)
+                        above = nid
+                        break
+                    end
+                end
+
+                below = 0
+                for j in (i + 1):length(stack)
+                    nid = stack[j][2]
+                    if !(nid in virtual_nodes)
+                        below = nid
+                        break
+                    end
+                end
+
+                if above != 0
+                    pair_counts[(vid, above)] = get(pair_counts, (vid, above), 0) + 1
+                    pair_counts[(above, vid)] = get(pair_counts, (above, vid), 0) + 1
+                end
+                if below != 0
+                    pair_counts[(vid, below)] = get(pair_counts, (vid, below), 0) + 1
+                    pair_counts[(below, vid)] = get(pair_counts, (below, vid), 0) + 1
+                end
             end
         end
     end
@@ -93,11 +135,16 @@ function _group_optical_coeffs(cfg::LightConfig)
             else
                 inter
             end
-        iconf isa AbstractDict || continue
-        iconf = _to_string_dict(iconf)
-        op = get(iconf, "optical_properties", nothing)
-        op isa AbstractDict || continue
-        op = _to_string_dict(op)
+            iconf isa AbstractDict || continue
+            iconf = _to_string_dict(iconf)
+            model = lowercase(strip(string(get(iconf, "model", ""))))
+            if model == "virtualsensor"
+                coeffs[group] = Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                continue
+            end
+            op = get(iconf, "optical_properties", nothing)
+            op isa AbstractDict || continue
+            op = _to_string_dict(op)
 
         c = Dict{String,Float64}()
         for (k, v) in op

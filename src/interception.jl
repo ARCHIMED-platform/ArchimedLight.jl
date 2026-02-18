@@ -95,6 +95,16 @@ function _virtual_sensor_groups(cfg::LightConfig)
     out
 end
 
+function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig)
+    groups = _virtual_sensor_groups(cfg)
+    isempty(groups) && return Set{Int}()
+    out = Set{Int}()
+    for (nid, g) in node_group
+        g in groups && push!(out, nid)
+    end
+    out
+end
+
 function _cfg_cache_pixel_table(cfg::LightConfig)
     raw = cfg.raw
     if haskey(raw, "cache_pixel_table")
@@ -460,7 +470,16 @@ function _project_triangle!(
     projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
 end
 
-function _rasterize_direction_java(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; cache_ctx=nothing)
+function _rasterize_direction_java(
+    vertices,
+    faces,
+    face2node,
+    direction,
+    cfg::LightConfig,
+    plotbox;
+    cache_ctx=nothing,
+    virtual_nodes=Set{Int}(),
+)
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
         _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx)
 
@@ -479,9 +498,23 @@ function _rasterize_direction_java(vertices, faces, face2node, direction, cfg::L
         isempty(stack) && continue
         sort!(stack, by=x -> x[1], rev=true)
 
-        # Current Julia light-only scope keeps nodes opaque.
-        nid = stack[1][2]
-        visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)
+        # VirtualSensor nodes are transparent: they receive without occluding other nodes.
+        non_virtual_seen = false
+        first_non_virtual = 0
+        for (_, nid) in stack
+            if nid in virtual_nodes
+                if !non_virtual_seen
+                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)
+                end
+            else
+                first_non_virtual = nid
+                non_virtual_seen = true
+                break
+            end
+        end
+        if first_non_virtual != 0
+            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * get(ratios, first_non_virtual, 1.0)
+        end
     end
 
     return visible_area, node_hits
@@ -597,24 +630,8 @@ end
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
     raw_vertices = GeometryBasics.decompose(PlantGeom.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    faces0 = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
-    face2node0 = collect(scene.face2node)
-
-    virtual_groups = _virtual_sensor_groups(cfg)
-    faces = PlantGeom.Face3[]
-    face2node = Int[]
-    if isempty(virtual_groups)
-        faces = faces0
-        face2node = face2node0
-    else
-        for i in eachindex(faces0)
-            nid = face2node0[i]
-            group = get(scene.node_group, nid, "")
-            group in virtual_groups && continue
-            push!(faces, faces0[i])
-            push!(face2node, nid)
-        end
-    end
+    faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
+    face2node = collect(scene.face2node)
     plotbox = _plotbox(scene, vertices, cfg.pixel_size)
 
     node_ids = unique(face2node)
@@ -699,7 +716,8 @@ function compute_first_order(
     ::RasterCPUBackend,
 )
 
-    vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
+    vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
 
     projected_area_per_node = Dict(id => 0.0 for id in node_ids)
@@ -717,6 +735,7 @@ function compute_first_order(
                 cfg,
                 plotbox;
                 cache_ctx=cache_ctx,
+                virtual_nodes=virtual_nodes,
             )
 
         for (nid, h) in node_hits

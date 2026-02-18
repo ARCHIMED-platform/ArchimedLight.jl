@@ -40,6 +40,8 @@ write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows
 # Optional Java-style logs:
 write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
 write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=row, band="PAR")
+write_node_links_stats_alldirs_csv("output/log-nodelinks-stats-alldirs.csv", scene, turtle, cfg)
+write_node_links_dir_csv("output/log-nodelinks-dir00.csv", scene, turtle, cfg; direction_index=0)
 
 # High-level Java-style output writer (config-driven defaults, overridable):
 write_light_outputs(scene, series, cfg; meteo_rows=meteo.rows, outdir="output")
