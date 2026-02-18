@@ -571,7 +571,7 @@ function compute_sky(meteo_row, cfg::LightConfig)
     SkyState(
         sun_azimuth,
         sun_elevation,
-        max(ri_sw, 0.0),
+        ri_sw,
         max(ri_par, 0.0),
         max(ri_nir, 0.0),
         direct_fraction,

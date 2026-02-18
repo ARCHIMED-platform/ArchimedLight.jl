@@ -1842,6 +1842,25 @@ end
         end
     end
 
+    # Java test-cached-radiation4 parity (light-only subset): cached and uncached
+    # runs must match on light outputs even when photo/energy sections are enabled.
+    cached4_root = joinpath(test_root, "test-cached-radiation4")
+    cfg4_1 = joinpath(cached4_root, "config.yml")
+    cfg4_2 = joinpath(cached4_root, "config2.yml")
+    @test isfile(cfg4_1)
+    @test isfile(cfg4_2)
+    s4_1 = run_fixture_series(cfg4_1)
+    s4_2 = run_fixture_series(cfg4_2)
+    @test length(s4_1) == length(s4_2)
+    for i in eachindex(s4_1)
+        @test max_abs_float_dict_diff(s4_1[i].first_order.projected_area_per_node, s4_2[i].first_order.projected_area_per_node) == 0.0
+        @test max_abs_int_dict_diff(s4_1[i].first_order.hits_per_node, s4_2[i].first_order.hits_per_node) == 0
+        @test max_abs_float_dict_diff(s4_1[i].budget.ri_par_q_per_node, s4_2[i].budget.ri_par_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(s4_1[i].budget.ri_nir_q_per_node, s4_2[i].budget.ri_nir_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(s4_1[i].budget.ra_par_q_per_node, s4_2[i].budget.ra_par_q_per_node) == 0.0
+        @test max_abs_float_dict_diff(s4_1[i].budget.ra_nir_q_per_node, s4_2[i].budget.ra_nir_q_per_node) == 0.0
+    end
+
     function _light_cfg_with_meteo(cfg::ArchimedLight.LightConfig, meteo_path::String)
         raw = copy(cfg.raw)
         raw["meteo"] = meteo_path
@@ -1930,6 +1949,70 @@ end
     for i in eachindex(rows_indep_1)
         for c in component_cols
             @test _cell_equal(get(rows_indep_1[i], c, "NA"), get(rows_indep_2[i], c, "NA"))
+        end
+    end
+
+    # Java test-independant-steps parity (light-only subset): after dropping the first
+    # non-common step and renumbering, overlapping light outputs are identical.
+    indep_root_light = joinpath(test_root, "test-independant-steps")
+    cfg_indep_light_base = ArchimedLight.read_light_config(joinpath(indep_root_light, "config.yml"))
+    cfg_indep_light_1 = _light_cfg_with_meteo(cfg_indep_light_base, joinpath(indep_root_light, "meteo1.csv"))
+    cfg_indep_light_2 = _light_cfg_with_meteo(cfg_indep_light_base, joinpath(indep_root_light, "meteo2.csv"))
+    scene_indep_light = ArchimedLight.read_scene(cfg_indep_light_base.scene)
+    meteo_indep_light_1 = ArchimedLight.read_meteo(cfg_indep_light_1.meteo)
+    meteo_indep_light_2 = ArchimedLight.read_meteo(cfg_indep_light_2.meteo)
+    series_indep_light_1 = ArchimedLight.run_light_series(scene_indep_light, meteo_indep_light_1, cfg_indep_light_1)
+    series_indep_light_2 = ArchimedLight.run_light_series(scene_indep_light, meteo_indep_light_2, cfg_indep_light_2)
+
+    cols_indep_light = [
+        "step_number",
+        "item_id",
+        "component_id",
+        "sky_fraction",
+        "Ri_PAR_0_f",
+        "Ri_NIR_0_f",
+        "Ri_PAR_0_q",
+        "Ri_NIR_0_q",
+        "Ri_PAR_f",
+        "Ri_NIR_f",
+        "Ri_PAR_q",
+        "Ri_NIR_q",
+        "Ra_PAR_0_f",
+        "Ra_NIR_0_f",
+        "Ra_PAR_0_q",
+        "Ra_NIR_0_q",
+        "Ra_PAR_f",
+        "Ra_NIR_f",
+        "Ra_PAR_q",
+        "Ra_NIR_q",
+    ]
+    rows_indep_light_1 = _stack_component_rows(
+        scene_indep_light,
+        series_indep_light_1,
+        cfg_indep_light_1,
+        meteo_indep_light_1.rows,
+        cols_indep_light,
+    )
+    rows_indep_light_2_raw = _stack_component_rows(
+        scene_indep_light,
+        series_indep_light_2,
+        cfg_indep_light_2,
+        meteo_indep_light_2.rows,
+        cols_indep_light,
+    )
+    rows_indep_light_2 = Dict{String,Any}[]
+    for r in rows_indep_light_2_raw
+        step_no = Int(r["step_number"])
+        step_no == 0 && continue
+        rr = copy(r)
+        rr["step_number"] = step_no - 1
+        push!(rows_indep_light_2, rr)
+    end
+    sort!(rows_indep_light_2; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+    @test length(rows_indep_light_1) == length(rows_indep_light_2)
+    for i in eachindex(rows_indep_light_1)
+        for c in cols_indep_light
+            @test _cell_equal(get(rows_indep_light_1[i], c, "NA"), get(rows_indep_light_2[i], c, "NA"))
         end
     end
 
@@ -2041,6 +2124,34 @@ end
             end
         end
     end
+
+    # Java test-timestep{1,2,3} parity: one large meteo step and many small steps
+    # must yield comparable average RI_SW_f.
+    function _run_timestep_fixture(root_dir::String)
+        cfg_one = ArchimedLight.read_light_config(joinpath(root_dir, "onestep", "config.yml"))
+        cfg_many = ArchimedLight.read_light_config(joinpath(root_dir, "manysteps", "config.yml"))
+        scene_one = ArchimedLight.read_scene(cfg_one.scene)
+        scene_many = ArchimedLight.read_scene(cfg_many.scene)
+        meteo_one = ArchimedLight.read_meteo(cfg_one.meteo)
+        meteo_many = ArchimedLight.read_meteo(cfg_many.meteo)
+        series_one = ArchimedLight.run_light_series(scene_one, meteo_one, cfg_one)
+        series_many = ArchimedLight.run_light_series(scene_many, meteo_many, cfg_many)
+        sv_one = ArchimedLight.scene_values_table(scene_one, series_one, cfg_one; meteo_rows=meteo_one.rows, columns=["RI_SW_f"]).rows
+        sv_many = ArchimedLight.scene_values_table(scene_many, series_many, cfg_many; meteo_rows=meteo_many.rows, columns=["RI_SW_f"]).rows
+        @test length(sv_one) == 1
+        @test !isempty(sv_many)
+        val_one = Float64(sv_one[1]["RI_SW_f"])
+        val_many = mean(Float64(r["RI_SW_f"]) for r in sv_many)
+        rel = relerr(val_many, val_one)
+        return val_one, val_many, rel
+    end
+
+    _, _, rel_ts1 = _run_timestep_fixture(joinpath(test_root, "test-timestep1"))
+    _, _, rel_ts2 = _run_timestep_fixture(joinpath(test_root, "test-timestep2"))
+    _, _, rel_ts3 = _run_timestep_fixture(joinpath(test_root, "test-timestep3"))
+    @test rel_ts1 < 0.001
+    @test rel_ts2 < 0.001
+    @test rel_ts3 < 0.1
 
     for disk_name in ("test-save_on_disk1", "test-save_on_disk2", "test-save_on_disk3", "test-save_on_disk4", "test-save_on_disk5")
         f_disk = fixtures[disk_name]
