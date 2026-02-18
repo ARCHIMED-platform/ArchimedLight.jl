@@ -50,6 +50,11 @@ function light_parity_fixtures()
         "test-area_ratio3",
         "test-area_ratio4",
         "test-area_ratio5",
+        "test-cafeier",
+        "test-cafeier2",
+        "test-cafeier_sensor",
+        "test-cafeier_sensor2",
+        "test-cafeier_sensor3",
         "test-scattering-one-plate",
         "test-scattering-two-plates",
         "test-scattering-divergence",
@@ -155,6 +160,14 @@ function _expected_scattering_log_path(fx::ParityFixture)
     fx.expected_dir === nothing && return nothing
     p = joinpath(fx.expected_dir, "log-iteration-scat-par.csv")
     isfile(p) ? p : nothing
+end
+
+function _expected_summary_path(fx::ParityFixture)
+    fx.expected_dir === nothing && return nothing
+    p = joinpath(fx.expected_dir, "summary.csv")
+    isfile(p) && return p
+    nested = collect(filter(isfile, [joinpath(root, "summary.csv") for (root, _, _) in walkdir(fx.expected_dir)]))
+    isempty(nested) ? nothing : first(sort(nested))
 end
 
 function _sum_float_col(rows, col::Symbol)

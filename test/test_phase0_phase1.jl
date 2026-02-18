@@ -150,8 +150,9 @@ end
         "Ri_custom_q",
     ]
     tbl = ArchimedLight.component_values_table(scene, step, cfg; meteo_row=row, step_number=1, columns=out_cols)
+    expected_component_count = length(ArchimedLight._interception_java_keys(scene, cfg))
     @test tbl.columns == out_cols
-    @test length(tbl.rows) == length(scene.total_area_per_node)
+    @test length(tbl.rows) == expected_component_count
     @test all(haskey(r, "Ri_PAR_0_q") for r in tbl.rows)
     @test all(haskey(r, "Ra_PAR_0_q") for r in tbl.rows)
     @test all(haskey(r, "Ri_custom_q") for r in tbl.rows)
@@ -170,7 +171,7 @@ end
         ArchimedLight.write_component_values_csv(out_csv, scene, step, cfg; meteo_row=row, step_number=1, columns=out_cols)
         @test isfile(out_csv)
         rows_csv = read_java_csv(out_csv)
-        @test length(rows_csv) == length(scene.total_area_per_node)
+        @test length(rows_csv) == expected_component_count
         @test :Ri_PAR_0_q in propertynames(first(rows_csv))
         @test :Ra_PAR_0_q in propertynames(first(rows_csv))
     end
@@ -836,6 +837,40 @@ end
         rel_err = abs_err ./ max.(abs.(expected_sw), eps(Float64))
         @test maximum(abs_err) < max_abs_err
         @test mean(rel_err) < max_mean_rel_err
+    end
+
+    for (fx_name, max_rel_err) in (
+        ("test-cafeier", 5e-4),
+        ("test-cafeier2", 5e-4),
+        ("test-cafeier_sensor", 8e-3),
+        ("test-cafeier_sensor2", 8e-3),
+        ("test-cafeier_sensor3", 2e-3),
+    )
+        fx = fixtures[fx_name]
+        expected_path = _expected_component_values_path(fx)
+        @test expected_path !== nothing
+        expected_rows = read_java_csv(expected_path)
+        exp_total = 0.0
+        for r in expected_rows
+            names = propertynames(r)
+            (:area in names && :irradiance_withoutScattering_PAR_NIR in names) || continue
+            exp_total += Float64(getproperty(r, :area)) * Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR))
+        end
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        got_total = sum(values(step.first_order.incident_par_power_per_node)) + sum(values(step.first_order.incident_nir_power_per_node))
+        @test relerr(got_total, exp_total) < max_rel_err
+
+        summary_path = _expected_summary_path(fx)
+        if summary_path !== nothing
+            expected_summary = read_java_csv(summary_path)
+            exp_riq = _sum_float_col(expected_summary, :Ri_q)
+            got_summary = ArchimedLight.summary_values_table(scene, [step], cfg; meteo_rows=[row], start_step_number=0)
+            got_riq = sum(Float64(r["Ri_q"]) for r in got_summary.rows)
+            @test relerr(got_riq, exp_riq) < 2e-3
+        end
     end
 
     f_scat = fixtures["test-scattering-one-plate"]

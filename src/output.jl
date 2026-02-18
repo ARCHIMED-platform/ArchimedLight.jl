@@ -316,6 +316,75 @@ function _node_ids_for_output(scene::SceneGeometry)
     ids
 end
 
+function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
+    vertices, faces, face2node, _, _, node_group_geom = _scene_geometry_for_interception(scene, cfg)
+    area_per_node = Dict{Int,Float64}()
+    bary_sum_per_node = Dict{Int,NTuple{3,Float64}}()
+    for (i, f) in enumerate(faces)
+        nid = face2node[i]
+        p1 = vertices[f[1]]
+        p2 = vertices[f[2]]
+        p3 = vertices[f[3]]
+        a = _triangle_area3d(p1, p2, p3)
+        area_per_node[nid] = get(area_per_node, nid, 0.0) + a
+        cx = (p1[1] + p2[1] + p3[1]) / 3.0
+        cy = (p1[2] + p2[2] + p3[2]) / 3.0
+        cz = (p1[3] + p2[3] + p3[3]) / 3.0
+        sx, sy, sz = get(bary_sum_per_node, nid, (0.0, 0.0, 0.0))
+        bary_sum_per_node[nid] = (sx + a * cx, sy + a * cy, sz + a * cz)
+    end
+    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    for (nid, a) in area_per_node
+        if a > 0.0
+            sx, sy, sz = get(bary_sum_per_node, nid, (0.0, 0.0, 0.0))
+            barycenter_per_node[nid] = (sx / a, sy / a, sz / a)
+        else
+            barycenter_per_node[nid] = (NaN, NaN, NaN)
+        end
+    end
+
+    key_by_node = _interception_java_keys(scene, cfg)
+    node_ids = collect(keys(key_by_node))
+    sort!(
+        node_ids;
+        by=nid -> begin
+            item_id, component_id = key_by_node[nid]
+            (item_id, component_id, nid)
+        end,
+    )
+
+    item_per_node = Dict{Int,Int}()
+    component_per_node = Dict{Int,Int}()
+    group_per_node = Dict{Int,String}()
+    type_per_node = Dict{Int,String}()
+    for nid in node_ids
+        item_id, component_id = key_by_node[nid]
+        item_per_node[nid] = item_id
+        component_per_node[nid] = component_id
+        g = haskey(node_group_geom, nid) ? node_group_geom[nid] : get(scene.node_group, nid, "")
+        group_per_node[nid] = g
+        t = strip(get(scene.node_type, nid, ""))
+        if isempty(t)
+            if g == "pavement"
+                t = "Cobblestone"
+            elseif g == "sensors"
+                t = "Sensor"
+            end
+        end
+        type_per_node[nid] = t
+    end
+
+    return (
+        node_ids=node_ids,
+        area_per_node=area_per_node,
+        barycenter_per_node=barycenter_per_node,
+        item_per_node=item_per_node,
+        component_per_node=component_per_node,
+        group_per_node=group_per_node,
+        type_per_node=type_per_node,
+    )
+end
+
 function _group_type_hints(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
     models isa AbstractVector || return Dict{String,Vector{String}}()
@@ -346,7 +415,13 @@ function _group_type_hints(cfg::LightConfig)
     out
 end
 
-function _sky_fraction_per_node(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
+function _sky_fraction_per_node(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    cfg::LightConfig,
+    area_per_node::Dict{Int,Float64},
+    node_ids::Vector{Int},
+)
     pa_by_sector, _, _ = _build_sector_responses(scene, turtle, cfg)
     sky_count = 0
     visible_sum = Dict{Int,Float64}()
@@ -359,8 +434,8 @@ function _sky_fraction_per_node(scene::SceneGeometry, turtle::TurtleGrid, cfg::L
     end
 
     out = Dict{Int,Float64}()
-    for nid in keys(scene.total_area_per_node)
-        area = get(scene.total_area_per_node, nid, 0.0)
+    for nid in node_ids
+        area = get(area_per_node, nid, 0.0)
         if area <= 0.0 || sky_count == 0
             out[nid] = 0.0
         else
@@ -440,13 +515,19 @@ function _component_variable_value(
     variable::String,
     step_number::Int,
     step_duration::Float64,
+    area_per_node::Dict{Int,Float64},
+    barycenter_per_node::Dict{Int,NTuple{3,Float64}},
+    item_per_node::Dict{Int,Int},
+    component_per_node::Dict{Int,Int},
+    group_per_node::Dict{Int,String},
+    type_per_node::Dict{Int,String},
     absorptance_cache::Dict{String,Dict{Int,Float64}},
     sky_fraction_per_node::Union{Nothing,Dict{Int,Float64}},
     group_type_hints::Dict{String,Vector{String}};
     unavailable::String="NA",
     strict::Bool=false,
 )
-    area = get(scene.total_area_per_node, nid, 0.0)
+    area = get(area_per_node, nid, 0.0)
     hits = get(step.first_order.hits_per_node, nid, 0)
 
     if variable == "step_number"
@@ -454,15 +535,15 @@ function _component_variable_value(
     elseif variable == "step_duration"
         return step_duration
     elseif variable == "item_id"
-        return get(scene.java_item_id_per_node, nid, -1)
+        return get(item_per_node, nid, -1)
     elseif variable == "component_id"
-        return get(scene.java_component_id_per_node, nid, nid)
+        return get(component_per_node, nid, nid)
     elseif variable == "group"
-        return get(scene.node_group, nid, "")
+        return get(group_per_node, nid, "")
     elseif variable == "type"
-        t = strip(get(scene.node_type, nid, ""))
+        t = strip(get(type_per_node, nid, ""))
         return if isempty(t)
-            g = get(scene.node_group, nid, "")
+            g = get(group_per_node, nid, "")
             ts = get(group_type_hints, g, String[])
             length(ts) == 1 ? ts[1] : unavailable
         else
@@ -473,11 +554,11 @@ function _component_variable_value(
     elseif variable == "surface_hits"
         return area > 0 ? hits / area : 0.0
     elseif variable == "barycentre_x"
-        return get(scene.barycenter_per_node, nid, (NaN, NaN, NaN))[1]
+        return get(barycenter_per_node, nid, (NaN, NaN, NaN))[1]
     elseif variable == "barycentre_y"
-        return get(scene.barycenter_per_node, nid, (NaN, NaN, NaN))[2]
+        return get(barycenter_per_node, nid, (NaN, NaN, NaN))[2]
     elseif variable == "barycentre_z"
-        return get(scene.barycenter_per_node, nid, (NaN, NaN, NaN))[3]
+        return get(barycenter_per_node, nid, (NaN, NaN, NaN))[3]
     elseif variable == "sky_fraction"
         return sky_fraction_per_node === nothing ? unavailable : get(sky_fraction_per_node, nid, 0.0)
     elseif variable == "Ri_TIR_f" || variable == "Ri_TIR_q" || variable == "Ra_TIR_f" || variable == "Ra_TIR_q"
@@ -543,11 +624,19 @@ function component_values_table(
     cols = columns === nothing ? component_variable_names(cfg) : String.(columns)
     _require_supported_output_configuration(cfg, cols)
     step_duration = _step_duration_output_local(meteo_row, step_duration_seconds)
-    node_ids = _node_ids_for_output(scene)
+    meta = _output_node_metadata(scene, cfg)
+    node_ids = meta.node_ids
+    area_per_node = meta.area_per_node
+    barycenter_per_node = meta.barycenter_per_node
+    item_per_node = meta.item_per_node
+    component_per_node = meta.component_per_node
+    group_per_node = meta.group_per_node
+    type_per_node = meta.type_per_node
     rows = Vector{Dict{String,Any}}(undef, length(node_ids))
     absorptance_cache = Dict{String,Dict{Int,Float64}}()
     group_type_hints = _group_type_hints(cfg)
-    sky_fraction_per_node = ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg) : nothing
+    sky_fraction_per_node =
+        ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg, area_per_node, node_ids) : nothing
 
     for (i, nid) in enumerate(node_ids)
         row = Dict{String,Any}()
@@ -560,6 +649,12 @@ function component_values_table(
                 var,
                 step_number,
                 step_duration,
+                area_per_node,
+                barycenter_per_node,
+                item_per_node,
+                component_per_node,
+                group_per_node,
+                type_per_node,
                 absorptance_cache,
                 sky_fraction_per_node,
                 group_type_hints;
@@ -995,7 +1090,12 @@ function summary_values_table(
     length(rows_in) == length(steps) || error("summary_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUMMARY_VARIABLE_ORDER) : _canonical_summary_variable_order(String.(columns))
     rows = Dict{String,Any}[]
-    node_ids = _node_ids_for_output(scene)
+    meta = _output_node_metadata(scene, cfg)
+    node_ids = meta.node_ids
+    area_per_node = meta.area_per_node
+    item_per_node = meta.item_per_node
+    group_per_node = meta.group_per_node
+    type_per_node = meta.type_per_node
 
     for i in eachindex(steps)
         step = steps[i]
@@ -1003,10 +1103,10 @@ function summary_values_table(
         step_no = start_step_number + i - 1
         acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
         for nid in node_ids
-            item = get(scene.java_item_id_per_node, nid, -1)
-            group = get(scene.node_group, nid, "")
-            type = get(scene.node_type, nid, unavailable)
-            area = get(scene.total_area_per_node, nid, 0.0)
+            item = get(item_per_node, nid, -1)
+            group = get(group_per_node, nid, "")
+            type = get(type_per_node, nid, unavailable)
+            area = get(area_per_node, nid, 0.0)
             ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
             k = (item, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))

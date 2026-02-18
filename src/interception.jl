@@ -1,6 +1,7 @@
 import GeometryBasics
 import StaticArrays
 import PlantGeom
+import YAML
 import LinearAlgebra: norm, cross
 import Serialization
 
@@ -44,6 +45,54 @@ function _cfg_plot_paving(cfg::LightConfig)
         end
     end
     best
+end
+
+function _virtual_sensor_groups(cfg::LightConfig)
+    models = get(cfg.raw, "models", nothing)
+    models isa AbstractVector || return Set{String}()
+
+    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    out = Set{String}()
+    for m in models
+        mp = String(m)
+        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
+        isfile(path) || continue
+        d = try
+            YAML.load_file(path)
+        catch
+            nothing
+        end
+        d isa AbstractDict || continue
+        d = _to_string_dict(d)
+
+        group = haskey(d, "Group") ? strip(string(d["Group"])) : ""
+        isempty(group) && continue
+
+        types = get(d, "Type", nothing)
+        types isa AbstractDict || continue
+        for (_, tconf0) in types
+            tconf0 isa AbstractDict || continue
+            tconf = _to_string_dict(tconf0)
+            inter = get(tconf, "Interception", nothing)
+            inter isa AbstractDict || continue
+            inter = _to_string_dict(inter)
+            iuse = get(inter, "use", nothing)
+            iconf =
+                if iuse !== nothing && haskey(inter, string(iuse))
+                    inter[string(iuse)]
+                else
+                    inter
+                end
+            iconf isa AbstractDict || continue
+            iconf = _to_string_dict(iconf)
+            model = lowercase(strip(string(get(iconf, "model", ""))))
+            if model == "virtualsensor"
+                push!(out, group)
+                break
+            end
+        end
+    end
+    out
 end
 
 function _cfg_cache_pixel_table(cfg::LightConfig)
@@ -548,15 +597,31 @@ end
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
     raw_vertices = GeometryBasics.decompose(PlantGeom.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
-    face2node = collect(scene.face2node)
+    faces0 = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
+    face2node0 = collect(scene.face2node)
+
+    virtual_groups = _virtual_sensor_groups(cfg)
+    faces = PlantGeom.Face3[]
+    face2node = Int[]
+    if isempty(virtual_groups)
+        faces = faces0
+        face2node = face2node0
+    else
+        for i in eachindex(faces0)
+            nid = face2node0[i]
+            group = get(scene.node_group, nid, "")
+            group in virtual_groups && continue
+            push!(faces, faces0[i])
+            push!(face2node, nid)
+        end
+    end
     plotbox = _plotbox(scene, vertices, cfg.pixel_size)
 
-    node_ids = collect(keys(scene.total_area_per_node))
+    node_ids = unique(face2node)
     node_group = Dict{Int,String}(k => v for (k, v) in scene.node_group)
     plot_paving = _cfg_plot_paving(cfg)
     if plot_paving > 0
-        first_node = isempty(node_ids) ? 1 : (maximum(node_ids) + 1)
+        first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
         paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
         v_offset = length(vertices)
         append!(vertices, paving_vertices)
