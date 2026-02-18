@@ -962,6 +962,102 @@ end
     got_means = [v[1] for v in values(area_ratio_metrics)]
     @test maximum(got_means) - minimum(got_means) < 1e-9
 
+    # Java test-area_ratio5 parity: area-ratio correction should keep leaf irradiance
+    # stdev relatively stable across pixel sizes; without correction, stdev decreases
+    # strongly with increased pixel resolution.
+    function with_pixel_size_area_ratio(cfg::ArchimedLight.LightConfig, pixel_size_cm::Float64, area_ratio::Bool)
+        raw = copy(cfg.raw)
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            pixel_size_cm / 100.0,
+            area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    f_area5 = fixtures["test-area_ratio5"]
+    cfg_area5 = ArchimedLight.read_light_config(f_area5.config_path)
+    scene_area5 = ArchimedLight.read_scene(cfg_area5.scene)
+    row_area5 = first(ArchimedLight.read_meteo(cfg_area5.meteo).rows)
+
+    pixel_sweep = [
+        (50000, 5.542562694341231),
+        (100000, 3.919183666320266),
+        (200000, 2.7712813471706156),
+        (500000, 1.7527122188397935),
+        (1000000, 1.2393546954101381),
+    ]
+
+    stdev_by_npix_ratio = Dict{Int,Float64}()
+    stdev_by_npix_noratio = Dict{Int,Float64}()
+
+    for (npix, px_cm) in pixel_sweep
+        cfg_ratio = with_pixel_size_area_ratio(cfg_area5, px_cm, true)
+        step_ratio = ArchimedLight.run_light_step(scene_area5, row_area5, cfg_ratio)
+        rows_ratio = ArchimedLight.component_values_table(
+            scene_area5,
+            step_ratio,
+            cfg_ratio;
+            meteo_row=row_area5,
+            columns=["type", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+        ).rows
+        irr_ratio = Float64[
+            Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows_ratio if string(get(r, "type", "")) == "Leaf"
+        ]
+        @test !isempty(irr_ratio)
+        stdev_by_npix_ratio[npix] = std(irr_ratio)
+
+        cfg_noratio = with_pixel_size_area_ratio(cfg_area5, px_cm, false)
+        step_noratio = ArchimedLight.run_light_step(scene_area5, row_area5, cfg_noratio)
+        rows_noratio = ArchimedLight.component_values_table(
+            scene_area5,
+            step_noratio,
+            cfg_noratio;
+            meteo_row=row_area5,
+            columns=["type", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+        ).rows
+        irr_noratio = Float64[
+            Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows_noratio if string(get(r, "type", "")) == "Leaf"
+        ]
+        @test !isempty(irr_noratio)
+        stdev_by_npix_noratio[npix] = std(irr_noratio)
+    end
+
+    expected_pix = read_java_csv(joinpath(fixture_path(f_area5), "expected", "pix.csv"))
+    expected_stdev_ratio = Dict{Int,Float64}()
+    expected_stdev_noratio = Dict{Int,Float64}()
+    for r in expected_pix
+        n = to_int(getproperty(r, :npix))
+        expected_stdev_ratio[n] = Float64(getproperty(r, :irradiance_stdev_ratio))
+        expected_stdev_noratio[n] = Float64(getproperty(r, :irradiance_stdev_noratio))
+    end
+    @test Set(keys(stdev_by_npix_ratio)) == Set(keys(expected_stdev_ratio))
+    @test Set(keys(stdev_by_npix_noratio)) == Set(keys(expected_stdev_noratio))
+
+    # Corrected branch is close to Java across the whole sweep.
+    for n in keys(expected_stdev_ratio)
+        @test abs(stdev_by_npix_ratio[n] - expected_stdev_ratio[n]) < 10.0
+    end
+    # Uncorrected branch converges close to Java on high-resolution runs.
+    for n in (500000, 1000000)
+        @test abs(stdev_by_npix_noratio[n] - expected_stdev_noratio[n]) < 10.0
+    end
+    # Behavioral gate from Java README/run-test: correction stabilizes stdev,
+    # while no-correction decreases stdev as resolution increases.
+    ratio_vals = [stdev_by_npix_ratio[n] for (n, _) in pixel_sweep]
+    noratio_vals = [stdev_by_npix_noratio[n] for (n, _) in pixel_sweep]
+    @test maximum(ratio_vals) - minimum(ratio_vals) < 40.0
+    @test first(noratio_vals) > 2.0 * last(noratio_vals)
+
     # Java test-ignore parity: Interception model=ignore drops ignored types from outputs,
     # and explicit/aliased ignore configurations are equivalent.
     ignore_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-ignore")
