@@ -107,10 +107,10 @@ end
 
 function _group_light_emitters(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{String,NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+    models isa AbstractVector || return Dict{Tuple{String,String},NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
 
     base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    out = Dict{String,NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+    out = Dict{Tuple{String,String},NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
     for m in models
         mp = String(m)
         path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
@@ -129,11 +129,10 @@ function _group_light_emitters(cfg::LightConfig)
         types = get(d, "Type", nothing)
         types isa AbstractDict || continue
 
-        par_sum = 0.0
-        nir_sum = 0.0
-        for (_, tconf0) in types
+        for (type_name0, tconf0) in types
             tconf0 isa AbstractDict || continue
             tconf = _to_string_dict(tconf0)
+            type_name = strip(string(type_name0))
             em0 = get(tconf, "LightEmitter", nothing)
             em0 isa AbstractDict || continue
             em = _to_string_dict(em0)
@@ -178,26 +177,28 @@ function _group_light_emitters(cfg::LightConfig)
                 gnir = 0.52
             end
 
-            par_sum += radiance * gpar
-            nir_sum += radiance * gnir
-        end
-
-        if par_sum > 0.0 || nir_sum > 0.0
-            cur = get(out, group, (par=0.0, nir=0.0))
-            out[group] = (par=cur.par + par_sum, nir=cur.nir + nir_sum)
+            key = (group, type_name)
+            cur = get(out, key, (par=0.0, nir=0.0))
+            out[key] = (par=cur.par + radiance * gpar, nir=cur.nir + radiance * gnir)
         end
     end
     out
 end
 
 function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
-    by_group = _group_light_emitters(cfg)
-    isempty(by_group) && return Dict{Int,Float64}(), Dict{Int,Float64}()
+    by_group_type = _group_light_emitters(cfg)
+    isempty(by_group_type) && return Dict{Int,Float64}(), Dict{Int,Float64}()
 
     par = Dict{Int,Float64}()
     nir = Dict{Int,Float64}()
-    for (group, pwr) in by_group
-        nids = Int[nid for (nid, g) in scene.node_group if g == group]
+    for ((group, type_name), pwr) in by_group_type
+        nids = Int[
+            nid for (nid, g) in scene.node_group if g == group && get(scene.node_type, nid, "") == type_name
+        ]
+        if isempty(nids)
+            # Fallback for scenes where type labels are unavailable.
+            nids = Int[nid for (nid, g) in scene.node_group if g == group]
+        end
         isempty(nids) && continue
 
         atot = sum(get(scene.total_area_per_node, nid, 0.0) for nid in nids)

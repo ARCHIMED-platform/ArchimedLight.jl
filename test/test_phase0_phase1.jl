@@ -1359,6 +1359,181 @@ end
         @test count(==("simdir"), readdir(out)) == 1
     end
 
+    function _run_fixture_series(cfg_path::String)
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
+        return cfg, scene, meteo, series
+    end
+
+    function _xml_tag_value(path::String, tag::String)
+        txt = read(path, String)
+        m = match(Regex("<$(tag)>([^<]+)</$(tag)>"), txt)
+        m === nothing && error("Missing tag <$tag> in $path")
+        parse(Float64, strip(m.captures[1]))
+    end
+
+    # Java test-ops-output parity: export_ops selector and filenames.
+    for (cfg_name, expected_count, expected_one_name) in (
+        ("config1.yml", 1, "scene-step00004.ops"),
+        ("config2.yml", 0, nothing),
+        ("config3.yml", 4, nothing),
+        ("config4.yml", 1, "scene-step00003.ops"),
+    )
+        cfg, scene, meteo, series = _run_fixture_series(joinpath(test_root, "test-ops-output", cfg_name))
+        mktempdir() do out
+            ArchimedLight.write_light_outputs(
+                scene,
+                series,
+                cfg;
+                meteo_rows=meteo.rows,
+                outdir=out,
+                write_component=false,
+                write_scene=false,
+                write_summary=false,
+                write_sun_position_log=false,
+                write_scattering_log=false,
+            )
+            ops_files = sort(filter(f -> endswith(f, ".ops"), readdir(out; join=true)))
+            @test length(ops_files) == expected_count
+            if expected_one_name !== nothing
+                @test basename(only(ops_files)) == expected_one_name
+            end
+        end
+    end
+
+    for cfg_name in ("config5.yml", "config6.yml")
+        cfg, scene, meteo, series = _run_fixture_series(joinpath(test_root, "test-ops-output", cfg_name))
+        mktempdir() do out
+            threw = false
+            msg = ""
+            try
+                ArchimedLight.write_light_outputs(
+                    scene,
+                    series,
+                    cfg;
+                    meteo_rows=meteo.rows,
+                    outdir=out,
+                    write_component=false,
+                    write_scene=false,
+                    write_summary=false,
+                    write_sun_position_log=false,
+                    write_scattering_log=false,
+                )
+            catch e
+                threw = e isa ErrorException
+                msg = sprint(showerror, e)
+            end
+            @test threw
+            @test occursin("invalid export_ops parameter", msg)
+        end
+    end
+
+    # Java test-ops-output2/3/4 parity: exported GWA irradiance tags follow requested step(s).
+    for (fx_name, expected_first_zero) in (("test-ops-output2", true), ("test-ops-output3", false))
+        cfg, scene, meteo, series = _run_fixture_series(joinpath(test_root, fx_name, "config.yml"))
+        mktempdir() do out
+            ArchimedLight.write_light_outputs(
+                scene,
+                series,
+                cfg;
+                meteo_rows=meteo.rows,
+                outdir=out,
+                write_component=false,
+                write_scene=false,
+                write_summary=false,
+                write_sun_position_log=false,
+                write_scattering_log=false,
+            )
+            gwa_files = sort(filter(f -> endswith(lowercase(f), ".gwa"), readdir(out; join=true)))
+            @test length(gwa_files) == 1
+            ri_par = _xml_tag_value(only(gwa_files), "Ri_PAR_0_f")
+            ri_nir = _xml_tag_value(only(gwa_files), "Ri_NIR_0_f")
+            if expected_first_zero
+                @test abs(ri_par) < 1e-9
+                @test abs(ri_nir) < 1e-9
+            else
+                @test abs(ri_par) > 1e-9
+                @test abs(ri_nir) > 1e-9
+            end
+        end
+    end
+
+    cfg_ops_all, scene_ops_all, meteo_ops_all, series_ops_all =
+        _run_fixture_series(joinpath(test_root, "test-ops-output4", "config.yml"))
+    mktempdir() do out
+        ArchimedLight.write_light_outputs(
+            scene_ops_all,
+            series_ops_all,
+            cfg_ops_all;
+            meteo_rows=meteo_ops_all.rows,
+            outdir=out,
+            write_component=false,
+            write_scene=false,
+            write_summary=false,
+            write_sun_position_log=false,
+            write_scattering_log=false,
+        )
+        gwa_files = filter(f -> endswith(lowercase(f), ".gwa"), readdir(out; join=true))
+        step_of(path) = parse(Int, only(match(r"step([0-9]+)", basename(path)).captures))
+        ordered = sort(gwa_files; by=step_of)
+        @test length(ordered) == length(meteo_ops_all.rows)
+        @test [step_of(f) for f in ordered] == collect(1:length(ordered))
+
+        for (i, f) in enumerate(ordered)
+            ri_par = _xml_tag_value(f, "Ri_PAR_0_f")
+            ri_nir = _xml_tag_value(f, "Ri_NIR_0_f")
+            if i == 1
+                @test abs(ri_par) < 1e-9
+                @test abs(ri_nir) < 1e-9
+            else
+                @test abs(ri_par) > 1e-9
+                @test abs(ri_nir) > 1e-9
+            end
+        end
+    end
+
+    # Java test-sortcsv parity.
+    sortcsv_dir = joinpath(test_root, "test-sortcsv")
+    sort_input = joinpath(sortcsv_dir, "input.csv")
+    sort_expected = joinpath(sortcsv_dir, "expected.csv")
+    _cell_equal(a, b) = begin
+        sa = strip(string(a))
+        sb = strip(string(b))
+        pa = tryparse(Float64, sa)
+        pb = tryparse(Float64, sb)
+        if pa !== nothing && pb !== nothing
+            return isapprox(pa, pb; atol=1e-9, rtol=1e-9)
+        end
+        sa == sb
+    end
+    mktempdir() do tmp
+        out_sort = joinpath(tmp, "out.csv")
+        ArchimedLight.sort_csv_file(sort_input, out_sort; sort_columns="stepNumber;plantId;nodeId")
+        got_rows = read_java_csv(out_sort)
+        exp_rows = read_java_csv(sort_expected)
+        @test length(got_rows) == length(exp_rows)
+        @test !isempty(got_rows)
+        cols = propertynames(first(exp_rows))
+        @test cols == propertynames(first(got_rows))
+        for i in eachindex(exp_rows)
+            for c in cols
+                @test _cell_equal(getproperty(got_rows[i], c), getproperty(exp_rows[i], c))
+            end
+        end
+
+        out_sort2 = joinpath(tmp, "out2.csv")
+        ArchimedLight.sort_csv_file(sort_input, out_sort2; sort_columns="stepNumber,plantId,nodeId")
+        got_rows2 = read_java_csv(out_sort2)
+        @test length(got_rows2) == length(exp_rows)
+        for i in eachindex(exp_rows)
+            for c in cols
+                @test _cell_equal(getproperty(got_rows2[i], c), getproperty(exp_rows[i], c))
+            end
+        end
+    end
+
     function _run_fixture_step(cfg_path::String)
         cfg = ArchimedLight.read_light_config(cfg_path)
         scene = ArchimedLight.read_scene(cfg.scene)
@@ -1478,6 +1653,126 @@ end
             init=0.0,
         )
         @test relerr(tot_abs, source_power) < 0.1
+    end
+
+    # Java test-lightsource-box parity: closed box should intercept emitted lamp power.
+    cfg_box, scene_box, row_box, step_box = _run_fixture_step(joinpath(test_root, "test-lightsource-box", "config.yml"))
+    rows_box = ArchimedLight.component_values_table(
+        scene_box,
+        step_box,
+        cfg_box;
+        meteo_row=row_box,
+        columns=["area", "Ri_PAR_0_f", "Ri_NIR_0_f"],
+    ).rows
+    source_box = _model_radiance(joinpath(test_root, "test-lightsource-box", "model_box.yml"))
+    tot_box = sum(Float64(r["area"]) * (Float64(r["Ri_PAR_0_f"]) + Float64(r["Ri_NIR_0_f"])) for r in rows_box; init=0.0)
+    @test relerr(tot_box, source_box) < 0.1
+
+    # Java test-lightsource-box2 parity: absorbed power with scattering matches emitted lamp power.
+    cfg_box2, scene_box2, row_box2, step_box2 = _run_fixture_step(joinpath(test_root, "test-lightsource-box2", "config.yml"))
+    rows_box2 = ArchimedLight.component_values_table(
+        scene_box2,
+        step_box2,
+        cfg_box2;
+        meteo_row=row_box2,
+        columns=["area", "Ri_PAR_f", "Ri_NIR_f", "scat_factor_PAR", "scat_factor_NIR"],
+    ).rows
+    source_box2 = _model_radiance(joinpath(test_root, "test-lightsource-box2", "model_box.yml"))
+    tot_box2 = sum(
+        (
+            Float64(r["Ri_PAR_f"]) * (1.0 - Float64(r["scat_factor_PAR"]) / 2.0) +
+            Float64(r["Ri_NIR_f"]) * (1.0 - Float64(r["scat_factor_NIR"]) / 2.0)
+        ) * Float64(r["area"]) for r in rows_box2;
+        init=0.0,
+    )
+    @test relerr(tot_box2, source_box2) < 0.2
+
+    function _check_summary_component_parity(cfg_path::String; use_scattering::Bool, max_scene_rel::Union{Nothing,Float64}=nothing)
+        cfg = ArchimedLight.read_light_config(cfg_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
+        summary = ArchimedLight.summary_values_table(scene, series, cfg; meteo_rows=meteo.rows, start_step_number=0)
+
+        max_rel = 0.0
+        for i in eachindex(series)
+            step = series[i]
+            row = meteo.rows[i]
+            dt = _step_duration_seconds(row)
+            cols =
+                if use_scattering
+                    ["group", "type", "item_id", "area", "Ri_PAR_f", "Ri_NIR_f"]
+                else
+                    ["group", "type", "item_id", "area", "Ri_PAR_0_f", "Ri_NIR_0_f"]
+                end
+            crows = ArchimedLight.component_values_table(scene, step, cfg; meteo_row=row, columns=cols).rows
+
+            agg = Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}()
+            for r in crows
+                key = (string(r["group"]), string(r["type"]), Int(r["item_id"]))
+                area = Float64(r["area"])
+                riq =
+                    if use_scattering
+                        (Float64(r["Ri_PAR_f"]) + Float64(r["Ri_NIR_f"])) * area * dt
+                    else
+                        (Float64(r["Ri_PAR_0_f"]) + Float64(r["Ri_NIR_0_f"])) * area * dt
+                    end
+                cur = get(agg, key, (0.0, 0.0))
+                agg[key] = (cur[1] + area, cur[2] + riq)
+            end
+
+            srows = [r for r in summary.rows if Int(r["step_number"]) == i - 1]
+            for r in srows
+                key = (string(r["group"]), string(r["type"]), Int(r["item_id"]))
+                area_exp, riq_exp = get(agg, key, (0.0, 0.0))
+                area_got = Float64(r["area"])
+                riq_got = Float64(r["Ri_q"])
+                max_rel = max(max_rel, relerr(area_got, area_exp))
+                max_rel = max(max_rel, relerr(riq_got, riq_exp))
+            end
+        end
+        @test max_rel < 1e-4
+
+        if max_scene_rel !== nothing
+            ground = [
+                Float64(r["area"]) for r in summary.rows if
+                Int(r["step_number"]) == 0 && Int(r["item_id"]) == -1
+            ]
+            @test !isempty(ground)
+            ground_area = first(ground)
+            max_rel_scene = 0.0
+            for i in eachindex(series)
+                dt = _step_duration_seconds(meteo.rows[i])
+                srows = [r for r in summary.rows if Int(r["step_number"]) == i - 1]
+                ri_scene = sum(Float64(r["Ri_q"]) for r in srows) / dt / ground_area
+                max_rel_scene = max(max_rel_scene, relerr(ri_scene, series[i].sky.ri_sw_f))
+            end
+            @test max_rel_scene < max_scene_rel
+        end
+    end
+
+    # Java summary tests parity.
+    _check_summary_component_parity(joinpath(test_root, "test-summary", "config.yml"); use_scattering=false, max_scene_rel=0.07)
+    _check_summary_component_parity(joinpath(test_root, "test-summary2", "config.yml"); use_scattering=false, max_scene_rel=0.01)
+    _check_summary_component_parity(joinpath(test_root, "test-summary3", "config.yml"); use_scattering=true)
+    _check_summary_component_parity(joinpath(test_root, "test-summary4", "config.yml"); use_scattering=true)
+
+    # Java test-reducted-table parity: reduced and full pixel table paths must match Ri outputs.
+    cfg_red1 = ArchimedLight.read_light_config(joinpath(test_root, "test-reducted-table", "config1.yml"))
+    cfg_red2 = ArchimedLight.read_light_config(joinpath(test_root, "test-reducted-table", "config2.yml"))
+    scene_red1 = ArchimedLight.read_scene(cfg_red1.scene)
+    scene_red2 = ArchimedLight.read_scene(cfg_red2.scene)
+    row_red1 = first(ArchimedLight.read_meteo(cfg_red1.meteo).rows)
+    row_red2 = first(ArchimedLight.read_meteo(cfg_red2.meteo).rows)
+    step_red1 = ArchimedLight.run_light_step(scene_red1, row_red1, cfg_red1)
+    step_red2 = ArchimedLight.run_light_step(scene_red2, row_red2, cfg_red2)
+    cols_red = ["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"]
+    t_red1 = ArchimedLight.component_values_table(scene_red1, step_red1, cfg_red1; meteo_row=row_red1, columns=cols_red).rows
+    t_red2 = ArchimedLight.component_values_table(scene_red2, step_red2, cfg_red2; meteo_row=row_red2, columns=cols_red).rows
+    for col in cols_red[3:end]
+        d1 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t_red1)
+        d2 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t_red2)
+        @test maximum(abs(get(d1, k, 0.0) - get(d2, k, 0.0)) for k in union(keys(d1), keys(d2)); init=0.0) == 0.0
     end
 
     f_div = fixtures["test-scattering-divergence"]

@@ -1,3 +1,5 @@
+import CSV
+
 const _COMPONENT_VARIABLE_ORDER = [
     "step_number",
     "step_duration",
@@ -262,6 +264,217 @@ function _config_debug_enabled(cfg::LightConfig)
         _as_bool(raw[key], false) && return true
     end
     return false
+end
+
+function _export_ops_raw_value(cfg::LightConfig)
+    if haskey(cfg.raw, "export_ops")
+        return cfg.raw["export_ops"]
+    end
+    props = get(cfg.raw, "prop", nothing)
+    if props isa AbstractDict && haskey(props, "export_ops")
+        return props["export_ops"]
+    end
+    return nothing
+end
+
+function _available_export_step_numbers(start_step_number::Int, nsteps::Int)
+    nsteps <= 0 && return Int[]
+    collect((start_step_number + 1):(start_step_number + nsteps))
+end
+
+function _ops_export_step_numbers(cfg::LightConfig, start_step_number::Int, nsteps::Int)
+    raw_value = _export_ops_raw_value(cfg)
+    available = _available_export_step_numbers(start_step_number, nsteps)
+    isempty(available) && return Int[]
+
+    raw_value === nothing && return Int[]
+    raw_value isa Bool && return (raw_value ? [last(available)] : Int[])
+    lower = lowercase(strip(string(raw_value)))
+    if lower == "false"
+        return Int[]
+    elseif lower == "true"
+        return [last(available)]
+    elseif lower == "all"
+        return available
+    end
+
+    n = try
+        parse(Int, lower)
+    catch
+        error("invalid export_ops parameter: $(raw_value)")
+    end
+    n in available || error("invalid export_ops parameter: $(raw_value)")
+    return [n]
+end
+
+function _parse_ops_object_rows(path::AbstractString)
+    rows = NamedTuple[]
+    for (lineno, line) in enumerate(readlines(path))
+        s = strip(replace(line, '\r' => ""))
+        isempty(s) && continue
+        startswith(s, "#") && continue
+        startswith(s, "T") && continue
+        toks = split(s)
+        length(toks) >= 3 || continue
+        scene_id = try
+            parse(Int, toks[1])
+        catch
+            continue
+        end
+        plant_id = try
+            parse(Int, toks[2])
+        catch
+            continue
+        end
+        rel_path = toks[3]
+        ext = lowercase(splitext(rel_path)[2])
+        (ext == ".gwa" || ext == ".opf") || continue
+        push!(rows, (lineno=lineno, scene_id=scene_id, plant_id=plant_id, rel_path=rel_path, tokens=toks))
+    end
+    rows
+end
+
+function _ops_export_variables(cfg::LightConfig)
+    d = get(cfg.raw, "opf_variables", nothing)
+    d isa AbstractDict || return ["Ri_PAR_0_f", "Ri_NIR_0_f"]
+    vars = String[]
+    valid = Set(_COMPONENT_VARIABLE_ORDER)
+    for (k, v) in d
+        _as_bool(v, false) || continue
+        ks = string(k)
+        ks in valid || continue
+        push!(vars, ks)
+    end
+    isempty(vars) ? ["Ri_PAR_0_f", "Ri_NIR_0_f"] : _canonical_component_variable_order(vars)
+end
+
+function _float_or_zero(v)
+    if v isa Number
+        return Float64(v)
+    end
+    try
+        parse(Float64, string(v))
+    catch
+        return 0.0
+    end
+end
+
+function _ops_component_value_map(scene::SceneGeometry, step::LightStepResult, cfg::LightConfig, meteo_row, vars::Vector{String})
+    cols = String["item_id", "component_id"]
+    append!(cols, vars)
+    rows = component_values_table(scene, step, cfg; meteo_row=meteo_row, columns=cols, unavailable="0").rows
+    out = Dict{Tuple{Int,Int},Dict{String,Float64}}()
+    for r in rows
+        key = (Int(r["item_id"]), Int(r["component_id"]))
+        vals = Dict{String,Float64}()
+        for v in vars
+            vals[v] = _float_or_zero(get(r, v, 0.0))
+        end
+        out[key] = vals
+    end
+    out
+end
+
+function _write_gwa_with_ops_variables(
+    src::AbstractString,
+    dst::AbstractString,
+    plant_id::Int,
+    vars::Vector{String},
+    val_map::Dict{Tuple{Int,Int},Dict{String,Float64}},
+)
+    lines = readlines(src)
+    out = String[]
+    current_mesh_id = nothing
+    for line in lines
+        s = strip(line)
+        m = match(r"<mesh\b[^>]*\bid=\"([0-9]+)\"", s)
+        if m !== nothing
+            current_mesh_id = parse(Int, m.captures[1])
+        end
+        if occursin("</mesh>", s) && current_mesh_id !== nothing
+            vals = get(val_map, (plant_id, current_mesh_id), Dict{String,Float64}())
+            for v in vars
+                push!(out, "    <$v>$(get(vals, v, 0.0))</$v>")
+            end
+            current_mesh_id = nothing
+        end
+        push!(out, line)
+    end
+    mkpath(dirname(dst))
+    write(dst, join(out, "\n") * "\n")
+    return dst
+end
+
+function _write_ops_for_step(source_ops::AbstractString, dst_ops::AbstractString, exported_names_by_line::Dict{Int,String})
+    lines = readlines(source_ops)
+    out = String[]
+    for (lineno, line) in enumerate(lines)
+        if haskey(exported_names_by_line, lineno)
+            toks = split(strip(replace(line, '\r' => "")))
+            if length(toks) >= 3
+                toks[3] = exported_names_by_line[lineno]
+                push!(out, join(toks, '\t'))
+                continue
+            end
+        end
+        push!(out, line)
+    end
+    mkpath(dirname(dst_ops))
+    write(dst_ops, join(out, "\n") * "\n")
+    return dst_ops
+end
+
+function _write_export_ops_outputs(
+    scene::SceneGeometry,
+    steps::AbstractVector{<:LightStepResult},
+    cfg::LightConfig,
+    meteo_rows,
+    outroot::AbstractString,
+    start_step_number::Int,
+)
+    selected_step_numbers = _ops_export_step_numbers(cfg, start_step_number, length(steps))
+    isempty(selected_step_numbers) && return Dict{String,String}()
+
+    source_scene = scene.source_path
+    ext = lowercase(splitext(source_scene)[2])
+    ext == ".ops" || error("export_ops currently requires an OPS scene source, got: $(source_scene)")
+    object_rows = _parse_ops_object_rows(source_scene)
+    isempty(object_rows) && error("export_ops: no OPF/GWA objects found in scene: $(source_scene)")
+
+    vars = _ops_export_variables(cfg)
+    step_by_number = Dict((start_step_number + i) => i for i in eachindex(steps))
+    out = Dict{String,String}()
+    for step_number in selected_step_numbers
+        idx = get(step_by_number, step_number, 0)
+        idx > 0 || continue
+        step = steps[idx]
+        row = meteo_rows[idx]
+        val_map = _ops_component_value_map(scene, step, cfg, row, vars)
+
+        exported_names_by_line = Dict{Int,String}()
+        for obj in object_rows
+            src_obj = isabspath(obj.rel_path) ? obj.rel_path : normpath(joinpath(dirname(source_scene), obj.rel_path))
+            obj_ext = lowercase(splitext(src_obj)[2])
+            stem = splitext(basename(src_obj))[1]
+            step_tag = lpad(string(step_number), 5, '0')
+            dst_name = "$(stem)-step$(step_tag)$(obj_ext)"
+            dst_path = joinpath(outroot, dst_name)
+            if obj_ext == ".gwa"
+                _write_gwa_with_ops_variables(src_obj, dst_path, obj.plant_id, vars, val_map)
+            else
+                mkpath(dirname(dst_path))
+                cp(src_obj, dst_path; force=true)
+            end
+            exported_names_by_line[obj.lineno] = dst_name
+        end
+
+        scene_stem = splitext(basename(source_scene))[1]
+        step_tag = lpad(string(step_number), 5, '0')
+        dst_ops = joinpath(outroot, "$(scene_stem)-step$(step_tag).ops")
+        _write_ops_for_step(source_scene, dst_ops, exported_names_by_line)
+        out["ops_step_$(step_tag)"] = dst_ops
+    end
+    return out
 end
 
 """
@@ -733,6 +946,72 @@ function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::Ve
         end
     end
     return path
+end
+
+function _parse_sort_columns(sort_columns)
+    if sort_columns isa AbstractString
+        parts = split(String(sort_columns), r"[;,]")
+        cols = String[strip(p) for p in parts if !isempty(strip(p))]
+        isempty(cols) && error("sort_csv_file: no sort columns provided.")
+        return cols
+    elseif sort_columns isa AbstractVector
+        cols = String[strip(string(c)) for c in sort_columns if !isempty(strip(string(c)))]
+        isempty(cols) && error("sort_csv_file: no sort columns provided.")
+        return cols
+    else
+        error("sort_csv_file: `sort_columns` must be a string or vector of column names.")
+    end
+end
+
+function _csv_sort_key_value(v)
+    if v === missing || v === nothing
+        return (2, 0.0, "")
+    elseif v isa Number
+        return (0, Float64(v), "")
+    end
+    s = strip(string(v))
+    n = tryparse(Float64, s)
+    if n === nothing
+        return (1, 0.0, lowercase(s))
+    end
+    return (0, n, "")
+end
+
+"""
+    sort_csv_file(input_path, output_path; sort_columns)::String
+
+Sort a `;`-separated CSV file by one or more columns and write the sorted file to `output_path`.
+`sort_columns` accepts a vector of column names, or a single string with names separated by `;` or `,`.
+"""
+function sort_csv_file(
+    input_path::AbstractString,
+    output_path::AbstractString;
+    sort_columns,
+)
+    f = CSV.File(input_path; delim=';', comment="#", normalizenames=false)
+    cols = String.(propertynames(f))
+    rows = collect(Tables.rowtable(f))
+
+    sort_cols = _parse_sort_columns(sort_columns)
+    colset = Set(cols)
+    missing_cols = String[c for c in sort_cols if !(c in colset)]
+    isempty(missing_cols) || error("sort_csv_file: unknown sort column(s): $(join(missing_cols, ", "))")
+
+    sort_syms = Symbol.(sort_cols)
+    sort!(
+        rows;
+        by=row -> Tuple(_csv_sort_key_value(getproperty(row, s)) for s in sort_syms),
+    )
+
+    mkpath(dirname(output_path))
+    open(output_path, "w") do io
+        println(io, join(cols, ';'))
+        for row in rows
+            vals = [_csv_cell_local(getproperty(row, Symbol(c))) for c in cols]
+            println(io, join(vals, ';'))
+        end
+    end
+    return output_path
 end
 
 function _row_field_string_local(row, sym::Symbol, default::String="NA")
@@ -1384,6 +1663,7 @@ function write_light_outputs(
     write_summary::Union{Nothing,Bool}=nothing,
     write_sun_position_log::Union{Nothing,Bool}=nothing,
     write_scattering_log::Union{Nothing,Bool}=nothing,
+    write_export_ops::Union{Nothing,Bool}=nothing,
     scattering_log_bands::AbstractVector{<:AbstractString}=["PAR"],
 )
     rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
@@ -1399,6 +1679,7 @@ function write_light_outputs(
     debug_default = _config_debug_enabled(cfg)
     do_sun_log = isnothing(write_sun_position_log) ? debug_default : Bool(write_sun_position_log)
     do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.scattering) : Bool(write_scattering_log)
+    do_export_ops = isnothing(write_export_ops) ? (_export_ops_raw_value(cfg) !== nothing) : Bool(write_export_ops)
 
     if do_component
         path = joinpath(outroot, "component_values.csv")
@@ -1458,6 +1739,10 @@ function write_light_outputs(
             end
             out["log_iteration_scat_$(lowercase(band))"] = path
         end
+    end
+
+    if do_export_ops
+        merge!(out, _write_export_ops_outputs(scene, steps, cfg, rows_in, outroot, start_step_number))
     end
 
     out

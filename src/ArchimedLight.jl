@@ -54,5 +54,6 @@ export simulation_output_directory
 export summary_values_table
 export write_summary_csv
 export write_light_outputs
+export sort_csv_file
 
 end

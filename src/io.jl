@@ -467,21 +467,130 @@ function _normalize_ops_lines(lines::Vector{String})
     out
 end
 
+function _triangulate_face_indices(ids::Vector{Int})
+    out = NTuple{3,Int}[]
+    length(ids) < 3 && return out
+    for i in 2:(length(ids) - 1)
+        push!(out, (ids[1], ids[i], ids[i + 1]))
+    end
+    out
+end
+
+function _opf_triangulated_text_if_needed(path::AbstractString)
+    txt = read(path, String)
+    changed = Ref(false)
+
+    new_txt = replace(txt, r"(?s)<faces>.*?</faces>" => (m -> begin
+        block = String(m)
+        faces = collect(eachmatch(r"(?s)<face\b[^>]*>(.*?)</face>", block))
+        isempty(faces) && return String(m)
+
+        tris = NTuple{3,Int}[]
+        for f in faces
+            ids = Int[parse(Int, mm.match) for mm in eachmatch(r"-?\d+", f.captures[1])]
+            length(ids) < 3 && continue
+            length(ids) > 3 && (changed[] = true)
+            append!(tris, _triangulate_face_indices(ids))
+        end
+        isempty(tris) && return String(m)
+
+        io = IOBuffer()
+        println(io, "<faces>")
+        for (i, t) in enumerate(tris)
+            println(io, "\t<face Id=\"$(i - 1)\">")
+            println(io, "\t\t$(t[1])\t$(t[2])\t$(t[3])")
+            println(io, "\t</face>")
+            println(io)
+        end
+        print(io, "</faces>")
+        String(take!(io))
+    end))
+
+    if occursin(r"(?s)<materialBDD>\s*</materialBDD>", new_txt)
+        changed[] = true
+        new_txt = replace(
+            new_txt,
+            r"(?s)<materialBDD>\s*</materialBDD>" =>
+                "<materialBDD>\n\t\t<material Id=\"0\">\n\t\t\t<emission>0 0 0 1</emission>\n\t\t\t<ambient>0.2 0.2 0.2 1</ambient>\n\t\t\t<diffuse>0.8 0.8 0.8 1</diffuse>\n\t\t\t<specular>0 0 0 1</specular>\n\t\t\t<shininess>0</shininess>\n\t\t</material>\n\t</materialBDD>",
+        )
+    end
+
+    return changed[] ? new_txt : nothing
+end
+
+function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractString, tmp_dir::AbstractString)
+    base = dirname(source_ops)
+    rewritten = String[]
+    opf_cache = Dict{String,String}()
+
+    for line in lines
+        s = strip(replace(line, '\r' => ""))
+        if isempty(s) || startswith(s, "#") || startswith(s, "T")
+            push!(rewritten, line)
+            continue
+        end
+
+        toks = split(s)
+        if length(toks) < 3
+            push!(rewritten, line)
+            continue
+        end
+
+        rel = toks[3]
+        ext = lowercase(splitext(rel)[2])
+        if ext != ".opf" && ext != ".gwa"
+            push!(rewritten, line)
+            continue
+        end
+
+        src = isabspath(rel) ? normpath(rel) : abspath(normpath(joinpath(base, rel)))
+        if ext == ".opf" && isfile(src)
+            dst = get(opf_cache, src, "")
+            if isempty(dst)
+                tri = _opf_triangulated_text_if_needed(src)
+                if tri === nothing
+                    dst = src
+                else
+                    dst = abspath(joinpath(tmp_dir, "$(splitext(basename(src))[1])-triangulated-$(length(opf_cache) + 1).opf"))
+                    write(dst, tri)
+                end
+                opf_cache[src] = dst
+            end
+            toks[3] = dst
+        else
+            toks[3] = abspath(src)
+        end
+        push!(rewritten, join(toks, '\t'))
+    end
+
+    rewritten
+end
+
 function _read_ops_relaxed(path::AbstractString)
     lines = readlines(path)
     normalized = _normalize_ops_lines(lines)
-
-    tmp_path = ""
-    mtg = mktemp(dirname(path)) do p, io
-        tmp_path = p
-        write(io, join(normalized, "\n"))
-        write(io, "\n")
-        flush(io)
-        PlantGeom.read_ops(p)
+    mtg = mktempdir(dirname(path)) do tmp_dir
+        normalized2 = _rewrite_ops_object_paths(normalized, path, tmp_dir)
+        tmp_ops = joinpath(tmp_dir, "scene-normalized.ops")
+        open(tmp_ops, "w") do io
+            write(io, join(normalized2, "\n"))
+            write(io, "\n")
+        end
+        PlantGeom.read_ops(tmp_ops)
     end
-
-    isfile(tmp_path) && rm(tmp_path; force=true)
     mtg
+end
+
+function _read_opf_relaxed(path::AbstractString)
+    tri = _opf_triangulated_text_if_needed(path)
+    if tri === nothing
+        return PlantGeom.read_opf(path)
+    end
+    mktemp(dirname(path)) do p, io
+        write(io, tri)
+        flush(io)
+        PlantGeom.read_opf(p)
+    end
 end
 
 function _ops_scene_xy_bounds(path::AbstractString)
@@ -527,7 +636,7 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
             _read_ops_relaxed(path)
         elseif ext == ".opf"
             component_id_hints[1] = _opf_geometry_component_ids(path)
-            PlantGeom.read_opf(path)
+            _read_opf_relaxed(path)
         elseif ext == ".gwa"
             PlantGeom.read_gwa(path)
         else
