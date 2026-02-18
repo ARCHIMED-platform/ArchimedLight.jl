@@ -1881,6 +1881,110 @@ end
         )
     end
 
+    function _light_cfg_with_meteo_controls(
+        cfg::ArchimedLight.LightConfig;
+        meteo_path::Union{Nothing,String}=nothing,
+        meteo_range::Union{Nothing,String}=nothing,
+    )
+        raw = copy(cfg.raw)
+        meteo_file = meteo_path === nothing ? cfg.meteo : meteo_path
+        raw["meteo"] = meteo_file
+        props0 = get(raw, "prop", Dict{String,Any}())
+        props = Dict{String,Any}(string(k) => v for (k, v) in pairs(props0))
+        delete!(props, "meteo_range")
+        delete!(props, "meteoRange")
+        delete!(props, "meteorange")
+        if meteo_range !== nothing
+            props["meteo_range"] = meteo_range
+        end
+        raw["prop"] = props
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            meteo_file,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    # Java test-meteo1/test-meteo2 parity: invalid meteo chronology must fail with explicit errors.
+    for (fx_name, expected_msg) in (
+        ("test-meteo1", "invalid overlapping meteo steps"),
+        ("test-meteo2", "end is before start"),
+    )
+        cfg_bad = ArchimedLight.read_light_config(joinpath(test_root, fx_name, "config.yml"))
+        scene_bad = ArchimedLight.read_scene(cfg_bad.scene)
+        meteo_bad = ArchimedLight.read_meteo(cfg_bad.meteo)
+        err = nothing
+        try
+            ArchimedLight.run_light_series(scene_bad, meteo_bad, cfg_bad)
+        catch e
+            err = e
+        end
+        @test err !== nothing
+        @test occursin(expected_msg, sprint(showerror, err))
+    end
+
+    # Java test-meteoactive parity: active column filtering and failures.
+    meteo_active_root = joinpath(test_root, "test-meteoactive")
+    cfg_active_base = ArchimedLight.read_light_config(joinpath(meteo_active_root, "config.yml"))
+    scene_active = ArchimedLight.read_scene(cfg_active_base.scene)
+
+    function _active_steps(file_name::String; meteo_range::Union{Nothing,String}=nothing)
+        cfg = _light_cfg_with_meteo_controls(
+            cfg_active_base;
+            meteo_path=joinpath(meteo_active_root, file_name),
+            meteo_range=meteo_range,
+        )
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        selected = ArchimedLight.prepare_meteo(meteo, cfg)
+        series = ArchimedLight.run_light_series(scene_active, meteo, cfg)
+        @test length(series) == length(selected.rows)
+        Int[round(Int, Float64(getproperty(r, :wind))) for r in selected.rows]
+    end
+
+    @test _active_steps("meteo1.csv") == [1, 2, 3, 4]
+    @test _active_steps("meteo2.csv") == [1, 2, 3, 4, 5, 6]
+    @test _active_steps("meteo3.csv") == [2, 5, 6]
+    @test_throws ErrorException _active_steps("meteo4.csv")
+    @test_throws ErrorException _active_steps("meteo5.csv")
+    @test _active_steps("meteo2.csv"; meteo_range="2,5") == [2, 3, 4, 5]
+    @test _active_steps("meteo2.csv"; meteo_range="2016/06/12-09:15:00,2016/06/12-10:45:00") == [3, 4, 5, 6]
+    @test _active_steps("meteo3.csv"; meteo_range="2,5") == [2, 5]
+    @test _active_steps("meteo3.csv"; meteo_range="2016/06/12-08:45:00,2016/06/12-10:45:00") == [2, 5, 6]
+
+    # Java test-meteorange parity: index/date range selection and invalid range checks.
+    meteo_range_root = joinpath(test_root, "test-meteorange")
+    cfg_range_base = ArchimedLight.read_light_config(joinpath(meteo_range_root, "config.yml"))
+    scene_range = ArchimedLight.read_scene(cfg_range_base.scene)
+    meteo_range_all = ArchimedLight.read_meteo(cfg_range_base.meteo)
+
+    function _steps_for_range(spec::String)
+        cfg = _light_cfg_with_meteo_controls(cfg_range_base; meteo_range=spec)
+        selected = ArchimedLight.prepare_meteo(meteo_range_all, cfg)
+        series = ArchimedLight.run_light_series(scene_range, meteo_range_all, cfg)
+        @test length(series) == length(selected.rows)
+        Int[round(Int, Float64(getproperty(r, :wind))) for r in selected.rows]
+    end
+
+    @test _steps_for_range("2,5") == [2, 3, 4, 5]
+    @test _steps_for_range("3,3") == [3]
+    @test_throws ErrorException _steps_for_range("3,2")
+    @test_throws ErrorException _steps_for_range("0,2")
+    @test _steps_for_range("2016/06/12-08:40:00,2016/06/12-08:50:00") == [2]
+    @test _steps_for_range("2016/06/12-08:30:00,2016/06/12-08:30:00") == [1, 2]
+    @test _steps_for_range("2016/06/12-08:40:00,2016/06/12-09:15:00") == [2, 3]
+    @test _steps_for_range("2016/06/12-08:45:00,2016/06/12-09:45:00") == [2, 3, 4]
+    @test _steps_for_range("2016/06/12-07:45:00,2016/06/12-11:15:00") == [1, 2, 3, 4, 5, 6]
+
     # Java test-meteo-stepduration parity: hour_end and step_duration encodings are equivalent;
     # malformed step_duration must fail.
     meteo_step_root = joinpath(test_root, "test-meteo-stepduration")

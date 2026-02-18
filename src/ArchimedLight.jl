@@ -26,6 +26,7 @@ export LightStepResult
 export read_scene
 export read_light_config
 export read_meteo
+export prepare_meteo
 export compute_sky
 export build_turtle
 export compute_directional_fluxes

@@ -235,6 +235,200 @@ function _step_duration_seconds_local(row)
     return 1.0
 end
 
+function _parse_time_strict_local(v, field_name::String)
+    v === missing && error("invalid meteo value: missing $(field_name)")
+    if v isa Dates.Time
+        return v
+    elseif v isa Dates.DateTime
+        return Dates.Time(v)
+    end
+    s = strip(string(v))
+    isempty(s) && error("invalid meteo value: empty $(field_name)")
+    try
+        return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+    catch
+        try
+            return Dates.Time(s, Dates.DateFormat("HH:MM"))
+        catch
+            error("invalid meteo value: cannot parse $(field_name)=$(repr(v))")
+        end
+    end
+end
+
+function _row_datetime_interval_local(row; index::Int=0)
+    names = propertynames(row)
+    has_start = (:hour_start in names) || (:hour in names)
+    has_start || error("invalid meteo value: missing hour_start/hour column at row $(index)")
+
+    date =
+        if :date in names
+            _parse_date_value(getproperty(row, :date), Dates.Date(2000, 1, 1))
+        else
+            Dates.Date(2000, 1, 1)
+        end
+    t0 = _parse_time_strict_local(
+        getproperty(row, :hour_start in names ? :hour_start : :hour),
+        :hour_start in names ? "hour_start" : "hour",
+    )
+    start_dt = Dates.DateTime(date, t0)
+
+    stop_dt =
+        if :hour_end in names
+            t1 = _parse_time_strict_local(getproperty(row, :hour_end), "hour_end")
+            dt = Dates.DateTime(date, t1)
+            dt < start_dt && error("end is before start at meteo row $(index)")
+            dt
+        elseif :step_duration in names
+            secs = _positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
+            start_dt + Dates.Millisecond(round(Int, secs * 1000))
+        else
+            start_dt + Dates.Second(1)
+        end
+
+    stop_dt > start_dt || error("end is before start at meteo row $(index)")
+    return start_dt, stop_dt
+end
+
+function _cfg_lookup_value_local(cfg::LightConfig, keys::Vector{String})
+    function _dict_lookup(d, k::String)
+        d isa AbstractDict || return nothing
+        haskey(d, k) && return d[k]
+        lk = lowercase(k)
+        for (dk, dv) in d
+            lowercase(string(dk)) == lk && return dv
+        end
+        return nothing
+    end
+
+    props = get(cfg.raw, "prop", nothing)
+    for d in (props, cfg.raw)
+        for k in keys
+            v = _dict_lookup(d, k)
+            v !== nothing && return v
+        end
+    end
+    return nothing
+end
+
+function _cfg_meteo_range_spec_local(cfg::LightConfig)
+    v = _cfg_lookup_value_local(cfg, ["meteo_range", "meteorange", "meteoRange"])
+    v === nothing && return nothing
+    s = strip(string(v))
+    isempty(s) ? nothing : s
+end
+
+function _parse_bool_strict_local(v, field_name::String)
+    if v isa Bool
+        return v
+    elseif v isa Integer
+        (v == 0 || v == 1) && return v == 1
+    elseif v isa Number
+        isfinite(v) && (abs(v) < eps(Float64) || abs(v - 1.0) < eps(Float64)) && return v > 0
+    end
+
+    s = lowercase(strip(string(v)))
+    s in ("true", "t", "1", "yes", "y") && return true
+    s in ("false", "f", "0", "no", "n") && return false
+    error("invalid $(field_name) value: $(repr(v))")
+end
+
+function _parse_range_datetime_token_local(s::AbstractString)
+    ss = strip(String(s))
+    for fmt in (
+        Dates.DateFormat("yyyy/mm/dd-HH:MM:SS"),
+        Dates.DateFormat("yyyy/mm/dd-HH:MM"),
+        Dates.DateFormat("yyyy-mm-dd-HH:MM:SS"),
+        Dates.DateFormat("yyyy-mm-dd-HH:MM"),
+    )
+        try
+            return Dates.DateTime(ss, fmt)
+        catch
+        end
+    end
+    error("invalid meteo_range datetime token: $(repr(s))")
+end
+
+function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, cfg::LightConfig)
+    spec = _cfg_meteo_range_spec_local(cfg)
+    spec === nothing && return rows
+
+    parts = split(spec, ","; limit=2)
+    length(parts) == 2 || error("invalid meteo_range format: $(repr(spec))")
+    a = strip(parts[1])
+    b = strip(parts[2])
+    isempty(a) && error("invalid meteo_range format: $(repr(spec))")
+    isempty(b) && error("invalid meteo_range format: $(repr(spec))")
+
+    ia = tryparse(Int, a)
+    ib = tryparse(Int, b)
+    if ia !== nothing && ib !== nothing
+        n = length(rows)
+        ia >= 1 || error("invalid meteo_range: start step must be >= 1")
+        ib >= ia || error("invalid meteo_range: end step is before start step")
+        ib <= n || error("invalid meteo_range: end step exceeds meteo size")
+        return rows[ia:ib]
+    end
+
+    t0 = _parse_range_datetime_token_local(a)
+    t1 = _parse_range_datetime_token_local(b)
+    t1 >= t0 || error("invalid meteo_range: end datetime is before start datetime")
+
+    out = NamedTuple[]
+    for (i, row) in enumerate(rows)
+        s, e = _row_datetime_interval_local(row; index=i)
+        # Closed-interval overlap, matching Java boundary behavior.
+        if s <= t1 && e >= t0
+            push!(out, row)
+        end
+    end
+    isempty(out) && error("invalid meteo_range: selection is empty")
+    return out
+end
+
+function _apply_meteo_active_filter_local(rows::Vector{<:NamedTuple})
+    isempty(rows) && return rows
+    names = propertynames(first(rows))
+    :active in names || return rows
+
+    out = NamedTuple[]
+    for row in rows
+        flag = _parse_bool_strict_local(getproperty(row, :active), "active")
+        flag && push!(out, row)
+    end
+    isempty(out) && error("invalid meteo: no active meteo step")
+    return out
+end
+
+function _validate_meteo_sequence_local(rows::Vector{<:NamedTuple})
+    prev_end = nothing
+    for (i, row) in enumerate(rows)
+        start_dt, end_dt = _row_datetime_interval_local(row; index=i)
+        if prev_end !== nothing && start_dt < prev_end
+            error("invalid overlapping meteo steps at row $(i)")
+        end
+        prev_end = end_dt
+    end
+end
+
+function _prepare_meteo_rows_for_series(meteo::MeteoTable, cfg::LightConfig)
+    rows = collect(meteo.rows)
+    isempty(rows) && return rows
+    _validate_meteo_sequence_local(rows)
+    rows = _apply_meteo_range_local(rows, cfg)
+    rows = _apply_meteo_active_filter_local(rows)
+    rows
+end
+
+"""
+    prepare_meteo(meteo, cfg)::MeteoTable
+
+Return the effective meteo table after Java-like meteo controls are applied:
+sequence validation, optional `meteo_range`, and optional `active` filtering.
+"""
+function prepare_meteo(meteo::MeteoTable, cfg::LightConfig)
+    MeteoTable(_prepare_meteo_rows_for_series(meteo, cfg), meteo.metadata)
+end
+
 function _default_scattering_factor_local(cfg::LightConfig, band::String)
     b = uppercase(band)
     b == "NIR" && return cfg.scattering_coeff_nir
@@ -437,9 +631,10 @@ function run_light_series(
     abs_nir = _node_absorptance_per_band(scene, cfg, "NIR")
     use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
     cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
-    out = Vector{LightStepResult}(undef, length(meteo.rows))
-    for i in eachindex(meteo.rows)
-        row = meteo.rows[i]
+    rows_eff = _prepare_meteo_rows_for_series(meteo, cfg)
+    out = Vector{LightStepResult}(undef, length(rows_eff))
+    for i in eachindex(rows_eff)
+        row = rows_eff[i]
         dt_seconds = _step_duration_seconds_local(row)
         sky = compute_sky(row, cfg)
         turtle = build_turtle(cfg, sky)
