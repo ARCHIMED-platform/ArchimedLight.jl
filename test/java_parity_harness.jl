@@ -23,60 +23,89 @@ function _fixture_expected_dir(test_dir::String)
     isdir(d) ? d : nothing
 end
 
-function _fixture_row(name::String)
+function _fixture_join(base::AbstractString, p::AbstractString)
+    isabspath(p) ? normpath(p) : normpath(joinpath(base, p))
+end
+
+function _fixture_row(
+    name::String;
+    fixture_name::String=name,
+    config_rel::String="config.yml",
+    scene_rel::Union{Nothing,String}=nothing,
+    meteo_rel::Union{Nothing,String}=nothing,
+)
     test_dir = joinpath(_fixture_root(), name)
-    cfg = joinpath(test_dir, "config.yml")
+    cfg = joinpath(test_dir, config_rel)
     scene = ""
     meteo = ""
     if isfile(cfg)
         c = ArchimedLight.read_light_config(cfg)
-        scene = c.scene
-        meteo = c.meteo
+        scene = scene_rel === nothing ? c.scene : _fixture_join(dirname(cfg), scene_rel)
+        meteo = meteo_rel === nothing ? c.meteo : _fixture_join(dirname(cfg), meteo_rel)
     end
-    ParityFixture(name, cfg, scene, meteo, _fixture_expected_dir(test_dir))
+    ParityFixture(fixture_name, cfg, scene, meteo, _fixture_expected_dir(test_dir))
 end
 
 function light_parity_fixtures()
-    names = [
-        "test-hitcount",
-        "test-hitcount2",
-        "test-hitcount3",
-        "test-weighted-sun",
-        "test-save_on_disk1",
-        "test-save_on_disk6",
-        "test-skytir",
-        "test-area_ratio",
-        "test-area_ratio2",
-        "test-area_ratio3",
-        "test-area_ratio4",
-        "test-area_ratio5",
-        "test-cafeier",
-        "test-cafeier2",
-        "test-cafeier_sensor",
-        "test-cafeier_sensor2",
-        "test-cafeier_sensor3",
-        "test-cafeier_sensor4",
-        "test-scattering-one-plate",
-        "test-scattering-two-plates",
-        "test-scattering-divergence",
-        "test-links",
-        "test-links2",
-        "test-links3",
-        "test-links4",
-        "test-links-stats",
-        "test-links-pixeltable",
-        "test-links-pixeltable2",
-        "test-links-sensor-plates",
-        "test-links-sensor-plates2",
-        "test-cached-radiation2",
-        "test-cached-radiation3",
-        "test-save_on_disk2",
-        "test-save_on_disk3",
-        "test-save_on_disk4",
-        "test-save_on_disk5",
-        "test-customband",
+    entries = [
+        ("test-hitcount", "test-hitcount", "config.yml"),
+        ("test-hitcount2", "test-hitcount2", "config.yml"),
+        ("test-hitcount3", "test-hitcount3", "config.yml"),
+        ("test-weighted-sun", "test-weighted-sun", "config.yml"),
+        ("test-save_on_disk1", "test-save_on_disk1", "config.yml"),
+        ("test-save_on_disk6", "test-save_on_disk6", "config.yml"),
+        ("test-skytir", "test-skytir", "config.yml"),
+        ("test-area_ratio", "test-area_ratio", "config.yml"),
+        ("test-area_ratio2", "test-area_ratio2", "config.yml"),
+        ("test-area_ratio3", "test-area_ratio3", "config.yml"),
+        ("test-area_ratio4", "test-area_ratio4", "config.yml"),
+        ("test-area_ratio5", "test-area_ratio5", "config.yml"),
+        ("test-cafeier", "test-cafeier", "config.yml"),
+        ("test-cafeier2", "test-cafeier2", "config.yml"),
+        ("test-cafeier_sensor", "test-cafeier_sensor", "config.yml"),
+        ("test-cafeier_sensor2", "test-cafeier_sensor2", "config.yml"),
+        ("test-cafeier_sensor3", "test-cafeier_sensor3", "config.yml"),
+        ("test-cafeier_sensor4", "test-cafeier_sensor4", "config.yml"),
+        ("test-scattering-one-plate", "test-scattering-one-plate", "config.yml"),
+        ("test-scattering-two-plates", "test-scattering-two-plates", "config.yml"),
+        ("test-scattering-divergence", "test-scattering-divergence", "config.yml"),
+        ("test-links", "test-links", "config.yml"),
+        ("test-links2", "test-links2", "config.yml"),
+        ("test-links3", "test-links3", "config.yml"),
+        ("test-links4", "test-links4", "config.yml"),
+        ("test-links-stats", "test-links-stats", "config.yml"),
+        ("test-links-pixeltable", "test-links-pixeltable", "config.yml"),
+        ("test-links-pixeltable2", "test-links-pixeltable2", "config.yml"),
+        ("test-links-sensor-plates", "test-links-sensor-plates", "config.yml"),
+        ("test-links-sensor-plates2", "test-links-sensor-plates2", "config.yml"),
+        ("test-cached-radiation", "test-cached-radiation", "config.yml"),
+        ("test-cached-radiation2", "test-cached-radiation2", "config.yml"),
+        ("test-cached-radiation3", "test-cached-radiation3", "config.yml"),
+        ("test-cached-radiation4", "test-cached-radiation4", "config.yml"),
+        ("test-absorb", "test-absorb", "config.yml"),
+        ("test-absorb2", "test-absorb2", "config.yml"),
+        ("test-independant-steps", "test-independant-steps", "config.yml", nothing, "meteo1.csv"),
+        ("test-independant-steps2", "test-independant-steps2", "config.yml", nothing, "meteo1.csv"),
+        ("test-meteo-stepduration", "test-meteo-stepduration", "config.yml", nothing, "meteo1.csv"),
+        ("test-timestep1", "test-timestep1-onestep", "onestep/config.yml"),
+        ("test-timestep1", "test-timestep1-manysteps", "manysteps/config.yml"),
+        ("test-timestep2", "test-timestep2-onestep", "onestep/config.yml"),
+        ("test-timestep2", "test-timestep2-manysteps", "manysteps/config.yml"),
+        ("test-timestep3", "test-timestep3-onestep", "onestep/config.yml"),
+        ("test-timestep3", "test-timestep3-manysteps", "manysteps/config.yml"),
+        ("test-save_on_disk2", "test-save_on_disk2", "config.yml"),
+        ("test-save_on_disk3", "test-save_on_disk3", "config.yml"),
+        ("test-save_on_disk4", "test-save_on_disk4", "config.yml"),
+        ("test-save_on_disk5", "test-save_on_disk5", "config.yml"),
+        ("test-customband", "test-customband", "config.yml"),
     ]
-    [_fixture_row(n) for n in names]
+    [
+        if length(e) == 3
+            _fixture_row(e[1]; fixture_name=e[2], config_rel=e[3])
+        else
+            _fixture_row(e[1]; fixture_name=e[2], config_rel=e[3], scene_rel=e[4], meteo_rel=e[5])
+        end for e in entries
+    ]
 end
 
 function read_java_csv(path::AbstractString)
@@ -107,6 +136,26 @@ end
 
 function run_fixture_once(fx::ParityFixture; all_in_turtle=nothing, cache_radiation=nothing)
     cfg = ArchimedLight.read_light_config(fx.config_path)
+    if !isempty(fx.scene_path) || !isempty(fx.meteo_path)
+        raw = copy(cfg.raw)
+        !isempty(fx.scene_path) && (raw["scene"] = fx.scene_path)
+        !isempty(fx.meteo_path) && (raw["meteo"] = fx.meteo_path)
+        cfg = ArchimedLight.LightConfig(
+            isempty(fx.scene_path) ? cfg.scene : fx.scene_path,
+            isempty(fx.meteo_path) ? cfg.meteo : fx.meteo_path,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
     cfg = _with_overrides(cfg; all_in_turtle=all_in_turtle, cache_radiation=cache_radiation)
     scene = ArchimedLight.read_scene(cfg.scene)
     meteo = ArchimedLight.read_meteo(cfg.meteo)
