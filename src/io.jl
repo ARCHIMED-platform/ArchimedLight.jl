@@ -6,6 +6,7 @@ import YAML
 import Tables
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
+import Rotations
 import Dates
 
 function _to_string_dict(x)
@@ -467,20 +468,6 @@ function _normalize_ops_lines(lines::Vector{String})
     out
 end
 
-function _rodrigues_rotation(axis::StaticArrays.SVector{3,Float64}, angle_rad::Float64)
-    n = norm(axis)
-    n > 0.0 || return StaticArrays.SMatrix{3,3,Float64}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-    x, y, z = axis / n
-    c = cos(angle_rad)
-    s = sin(angle_rad)
-    t = 1.0 - c
-    StaticArrays.SMatrix{3,3,Float64}(
-        t * x * x + c, t * x * y - s * z, t * x * z + s * y,
-        t * x * y + s * z, t * y * y + c, t * y * z - s * x,
-        t * x * z - s * y, t * y * z + s * x, t * z * z + c,
-    )
-end
-
 function _apply_transform_to_geometry_nodes!(node, transformation)
     attrs = _node_attrs(node)
     if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)
@@ -523,7 +510,10 @@ function _apply_ops_inclination_transforms!(mtg)
         az = deg2rad(inc_az_deg)
         ang = deg2rad(inc_angle_deg)
         axis = StaticArrays.SVector{3,Float64}(-sin(az), cos(az), 0.0)
-        rot = _rodrigues_rotation(axis, ang)
+        axis_n = norm(axis)
+        axis_n > 0.0 || continue
+        axis_u = axis / axis_n
+        rot = Rotations.RotMatrix(Rotations.AngleAxis(ang, axis_u[1], axis_u[2], axis_u[3]))
 
         px, py, pz = pos
         tf = PlantGeom.compose_lr(PlantGeom.Translation(-px, -py, -pz), PlantGeom.LinearMap(rot))
