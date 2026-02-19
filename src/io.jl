@@ -6,7 +6,7 @@ import YAML
 import Tables
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
-import Rotations
+import Rotations: RotZ, AngleAxis, RotMatrix
 import Dates
 
 function _to_string_dict(x)
@@ -509,11 +509,11 @@ function _apply_ops_inclination_transforms!(mtg)
 
         az = deg2rad(inc_az_deg)
         ang = deg2rad(inc_angle_deg)
-        axis = StaticArrays.SVector{3,Float64}(-sin(az), cos(az), 0.0)
+        axis = RotZ(az) * StaticArrays.SVector{3,Float64}(0.0, 1.0, 0.0)
         axis_n = norm(axis)
         axis_n > 0.0 || continue
         axis_u = axis / axis_n
-        rot = Rotations.RotMatrix(Rotations.AngleAxis(ang, axis_u[1], axis_u[2], axis_u[3]))
+        rot = RotMatrix(AngleAxis(ang, axis_u[1], axis_u[2], axis_u[3]))
 
         px, py, pz = pos
         tf = PlantGeom.compose_lr(PlantGeom.Translation(-px, -py, -pz), PlantGeom.LinearMap(rot))
