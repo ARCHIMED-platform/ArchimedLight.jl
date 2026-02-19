@@ -310,7 +310,8 @@ function _emitter_transfer_weights(
 
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
-            sort!(stack, by=x -> x[1], rev=true)
+            # Java uses a stable sort for hit heights; preserve insertion order on ties.
+            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
             for i in eachindex(stack)
                 src = stack[i][2]
@@ -665,7 +666,10 @@ function _project_triangle!(
         if abs(normal[3]) > 1e-5
             (normal[1] / normal[3], normal[2] / normal[3])
         else
-            (direction[3] * normal[1], direction[3] * normal[2])
+            # Java directions are upward (z>=0 here); keep parity when internal
+            # direction conventions use incoming/downward vectors.
+            dz = abs(direction[3])
+            (dz * normal[1], dz * normal[2])
         end
 
     z0 = pix_points[1][3] + slopeX * (pix_points[1][1] - iMin) + slopeY * (pix_points[1][2] - jMin)
@@ -731,7 +735,8 @@ function _rasterize_direction_java(
     visible_area = Dict{Int,Float64}()
     for stack in values(pixel_hits)
         isempty(stack) && continue
-        sort!(stack, by=x -> x[1], rev=true)
+        # Java uses a stable sort for hit heights; preserve insertion order on ties.
+        sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
         # VirtualSensor nodes are transparent: they receive without occluding other nodes.
         non_virtual_seen = false
@@ -876,6 +881,13 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
         _is_ignored_node(node_id, scene, ignored) && continue
         push!(faces, all_faces[i])
         push!(face2node, node_id)
+    end
+    # Java projects meshes item-by-item, so pixel hit insertion is grouped by node id.
+    # Preserve that ordering before rasterization to reduce tie-order drift.
+    if !isempty(face2node)
+        perm = sortperm(collect(eachindex(face2node)); by=i -> face2node[i])
+        faces = faces[perm]
+        face2node = face2node[perm]
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
