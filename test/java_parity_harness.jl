@@ -2,6 +2,56 @@ import CSV
 import Tables
 import Dates
 
+const PARITY_LIMITS = Dict{Symbol,Float64}(
+    # IDs/counts/order invariants.
+    :exact => 0.0,
+    :hitcount_total_rel => 1e-2,
+    :hitcount_component_rel => 3e-3,
+    :hitcount_component_hi_rel_turtle => 3e-3,
+    :hitcount_component_hi_rel_raycast => 5e-2,
+    :hitcount_hist_abs_turtle => 500.0,
+    :hitcount_hist_abs_raycast => 900.0,
+    :hitcount_hist_rel_turtle => 1.2e-3,
+    :hitcount_hist_rel_raycast => 2e-3,
+    # Irradiance / energy parity.
+    :irr_component_rel_strict => 1e-6,
+    :irr_component_rel_hi_turtle => 4e-1,
+    :irr_component_abs_hi_raycast => 650.0,
+    :scene_riq_rel => 2e-3,
+    :scattering_total_rel_loose => 5e-2,
+    :scattering_total_rel_strict => 1e-2,
+    # Sun / sky metrics.
+    :sun_deg_snapshot => 5e-2,
+    :sun_deg_az_series => 2e-2,
+    :sun_deg_el_series => 5e-2,
+)
+
+parity_limit(metric::Symbol) = get(PARITY_LIMITS, metric) do
+    error("Missing parity limit for metric=$(metric)")
+end
+
+relerr(a, b) = abs(a - b) / max(abs(b), eps(Float64))
+
+"""
+    parity_rel_with_limit(actual, expected, metric)
+
+Return `(err, limit)` for a relative parity comparison controlled by `PARITY_LIMITS`.
+"""
+function parity_rel_with_limit(actual::Real, expected::Real, metric::Symbol)
+    err = relerr(Float64(actual), Float64(expected))
+    return err, parity_limit(metric)
+end
+
+"""
+    parity_abs_with_limit(actual, expected, metric)
+
+Return `(err, limit)` for an absolute parity comparison controlled by `PARITY_LIMITS`.
+"""
+function parity_abs_with_limit(actual::Real, expected::Real, metric::Symbol)
+    err = abs(Float64(actual) - Float64(expected))
+    return err, parity_limit(metric)
+end
+
 struct ParityFixture
     name::String
     config_path::String
@@ -412,4 +462,73 @@ function fixture_parity_report(fx::ParityFixture; all_in_turtle=nothing, cache_r
             scat_log=scat_path,
         ),
     )
+end
+
+function _row_key_from_dict(row::AbstractDict{String,Any}, key_cols::Vector{String})
+    Tuple(get(row, c, missing) for c in key_cols)
+end
+
+function _row_float_value(row::AbstractDict{String,Any}, col::String)
+    v = get(row, col, missing)
+    v === missing && return nothing
+    v isa Number && return Float64(v)
+    p = tryparse(Float64, strip(string(v)))
+    p === nothing ? nothing : p
+end
+
+"""
+    compare_rows_by_key(expected_rows, observed_rows; key_cols, value_cols, atol=1e-6, rtol=1e-3, top_n=5)
+
+Compare two row sets keyed by `key_cols`. Returns:
+- `ok::Bool`
+- `missing_keys::Vector`
+- `extra_keys::Vector`
+- `mismatches::Vector{NamedTuple}`
+
+Each mismatch entry contains `(key, column, expected, observed, abs_err, rel_err)`.
+"""
+function compare_rows_by_key(
+    expected_rows::Vector{<:AbstractDict{String,Any}},
+    observed_rows::Vector{<:AbstractDict{String,Any}};
+    key_cols::Vector{String},
+    value_cols::Vector{String},
+    atol::Float64=1e-6,
+    rtol::Float64=1e-3,
+    top_n::Int=5,
+)
+    exp_map = Dict{Tuple,AbstractDict{String,Any}}(_row_key_from_dict(r, key_cols) => r for r in expected_rows)
+    obs_map = Dict{Tuple,AbstractDict{String,Any}}(_row_key_from_dict(r, key_cols) => r for r in observed_rows)
+
+    missing_keys = collect(setdiff(Set(keys(exp_map)), Set(keys(obs_map))))
+    extra_keys = collect(setdiff(Set(keys(obs_map)), Set(keys(exp_map))))
+
+    mismatches = NamedTuple[]
+    for k in intersect(Set(keys(exp_map)), Set(keys(obs_map)))
+        e = exp_map[k]
+        o = obs_map[k]
+        for c in value_cols
+            evf = _row_float_value(e, c)
+            ovf = _row_float_value(o, c)
+            if evf !== nothing && ovf !== nothing
+                abs_err = abs(ovf - evf)
+                rel_err = abs_err / max(abs(evf), eps(Float64))
+                if !(abs_err <= atol || rel_err <= rtol)
+                    push!(mismatches, (key=k, column=c, expected=evf, observed=ovf, abs_err=abs_err, rel_err=rel_err))
+                end
+            else
+                ev = get(e, c, missing)
+                ov = get(o, c, missing)
+                ev == ov || push!(mismatches, (key=k, column=c, expected=ev, observed=ov, abs_err=NaN, rel_err=NaN))
+            end
+        end
+    end
+
+    # Keep diagnostics concise.
+    sort!(mismatches; by=x -> (isnan(x.rel_err) ? Inf : -x.rel_err))
+    if length(mismatches) > top_n
+        resize!(mismatches, top_n)
+    end
+
+    ok = isempty(missing_keys) && isempty(extra_keys) && isempty(mismatches)
+    return (ok=ok, missing_keys=missing_keys, extra_keys=extra_keys, mismatches=mismatches)
 end

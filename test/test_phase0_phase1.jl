@@ -610,7 +610,6 @@ end
 end
 
 @testset "Parity reports" begin
-    relerr(a, b) = abs(a - b) / max(abs(b), eps(Float64))
     function max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
         ids = union(keys(a), keys(b))
         m = 0.0
@@ -629,6 +628,44 @@ end
     end
     to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
     mean_std(vals::Vector{Float64}) = (mean(vals), std(vals))
+    function _assert_rel_metric(actual, expected, metric::Symbol, label::AbstractString)
+        err, lim = parity_rel_with_limit(actual, expected, metric)
+        if !(err <= lim)
+            @info "Parity relative mismatch" label metric actual expected err limit=lim
+        end
+        @test err <= lim
+    end
+    function _assert_abs_metric(actual, expected, metric::Symbol, label::AbstractString)
+        err, lim = parity_abs_with_limit(actual, expected, metric)
+        if !(err <= lim)
+            @info "Parity absolute mismatch" label metric actual expected err limit=lim
+        end
+        @test err <= lim
+    end
+    function _assert_rows_match(
+        expected_rows::Vector{Dict{String,Any}},
+        observed_rows::Vector{Dict{String,Any}},
+        key_cols::Vector{String},
+        value_cols::Vector{String};
+        atol::Float64=1e-6,
+        rtol::Float64=1e-3,
+        label::AbstractString="",
+    )
+        cmp = compare_rows_by_key(
+            expected_rows,
+            observed_rows;
+            key_cols=key_cols,
+            value_cols=value_cols,
+            atol=atol,
+            rtol=rtol,
+            top_n=10,
+        )
+        if !cmp.ok
+            @info "Parity row mismatch" label missing_keys=cmp.missing_keys extra_keys=cmp.extra_keys mismatches=cmp.mismatches
+        end
+        @test cmp.ok
+    end
+
     function with_cache_pixel_table(cfg::ArchimedLight.LightConfig, enabled::Bool)
         raw = copy(cfg.raw)
         raw["cache_pixel_table"] = enabled
@@ -693,8 +730,8 @@ end
     @test r_true.expected_hitcount_total !== nothing
     @test r_false.snapshot.total_hits > 0
     @test r_true.snapshot.total_hits > 0
-    @test relerr(r_false.snapshot.total_hits, r_false.expected_hitcount_total) < 0.01
-    @test relerr(r_true.snapshot.total_hits, r_true.expected_hitcount_total) < 0.01
+    _assert_rel_metric(r_false.snapshot.total_hits, r_false.expected_hitcount_total, :hitcount_total_rel, "test-hitcount2 total hits raycast")
+    _assert_rel_metric(r_true.snapshot.total_hits, r_true.expected_hitcount_total, :hitcount_total_rel, "test-hitcount2 total hits turtle")
 
     for all_in_turtle in (false, true)
         cfg = ArchimedLight.read_light_config(f_hit.config_path)
@@ -712,7 +749,7 @@ end
         for key in keys(expected)
             exp = expected[key]
             got = observed[key]
-            @test abs(got.hits - exp.hits) / max(exp.hits, 1) < 0.003
+            _assert_rel_metric(got.hits, exp.hits, :hitcount_component_rel, "test-hitcount2 per-component hits key=$(key)")
         end
 
         # Item component IDs are now mapped explicitly; plant component irradiance is in tight parity.
@@ -722,7 +759,7 @@ end
         expp = expected[plant_key]
         gotp = observed[plant_key]
         got_irr = gotp.power0 / max(expp.area, eps(Float64))
-        @test abs(got_irr - expp.irr0) / max(abs(expp.irr0), eps(Float64)) < 1e-6
+        _assert_rel_metric(got_irr, expp.irr0, :irr_component_rel_strict, "test-hitcount2 plant irradiance")
     end
 
     f_hit3 = fixtures["test-hitcount3"]
@@ -764,15 +801,18 @@ end
         @test !isempty(hit_rel_hi)
         @test !isempty(irr_abs_hi)
         if all_in_turtle
-            @test maximum(hit_rel_hi) < 0.003
-            @test maximum(irr_rel_hi) < 0.4
+            @test maximum(hit_rel_hi) < parity_limit(:hitcount_component_hi_rel_turtle)
+            @test maximum(irr_rel_hi) < parity_limit(:irr_component_rel_hi_turtle)
         else
-            @test maximum(hit_rel_hi) < 0.05
-            @test maximum(irr_abs_hi) < 650.0
+            @test maximum(hit_rel_hi) < parity_limit(:hitcount_component_hi_rel_raycast)
+            @test maximum(irr_abs_hi) < parity_limit(:irr_component_abs_hi_raycast)
         end
     end
 
-    for (all_in_turtle, max_abs_err, max_rel_err) in ((false, 900, 0.002), (true, 500, 0.0012))
+    for (all_in_turtle, abs_metric, rel_metric) in (
+        (false, :hitcount_hist_abs_raycast, :hitcount_hist_rel_raycast),
+        (true, :hitcount_hist_abs_turtle, :hitcount_hist_rel_turtle),
+    )
         step = run_fixture_once(f_hit; all_in_turtle=all_in_turtle)
         expected_path = _expected_component_values_path(f_hit; all_in_turtle=all_in_turtle)
         @test expected_path !== nothing
@@ -781,8 +821,8 @@ end
         @test length(got_hits) == length(expected_hits)
         abs_err = abs.(got_hits .- expected_hits)
         rel_errs = abs_err ./ max.(abs.(Float64.(expected_hits)), 1.0)
-        @test maximum(abs_err) <= max_abs_err
-        @test maximum(rel_errs) <= max_rel_err
+        @test maximum(abs_err) <= parity_limit(abs_metric)
+        @test maximum(rel_errs) <= parity_limit(rel_metric)
     end
 
     f_wsun = fixtures["test-weighted-sun"]
@@ -791,8 +831,8 @@ end
     @test r_wsun.expected_sun_elevation !== nothing
     @test isfinite(r_wsun.snapshot.sun_azimuth)
     @test isfinite(r_wsun.snapshot.sun_elevation)
-    @test abs(r_wsun.snapshot.sun_azimuth - r_wsun.expected_sun_azimuth) < 0.05
-    @test abs(r_wsun.snapshot.sun_elevation - r_wsun.expected_sun_elevation) < 0.05
+    _assert_abs_metric(r_wsun.snapshot.sun_azimuth, r_wsun.expected_sun_azimuth, :sun_deg_snapshot, "test-weighted-sun snapshot azimuth")
+    _assert_abs_metric(r_wsun.snapshot.sun_elevation, r_wsun.expected_sun_elevation, :sun_deg_snapshot, "test-weighted-sun snapshot elevation")
 
     cfg_wsun = ArchimedLight.read_light_config(f_wsun.config_path)
     meteo_wsun = ArchimedLight.read_meteo(cfg_wsun.meteo)
@@ -812,8 +852,8 @@ end
         max_az_err = max(max_az_err, da)
         max_el_err = max(max_el_err, de)
     end
-    @test max_az_err < 0.02
-    @test max_el_err < 0.05
+    @test max_az_err < parity_limit(:sun_deg_az_series)
+    @test max_el_err < parity_limit(:sun_deg_el_series)
 
     for (fx_name, max_abs_err, max_mean_rel_err) in (
         ("test-weighted-sun", 1.0, 0.01),
@@ -887,19 +927,19 @@ end
             end
             exp_riq = sum(values(exp_by_item))
             got_riq = sum(get(got_by_item, k, 0.0) for k in keys(exp_by_item))
-            @test relerr(got_riq, exp_riq) < 2e-3
+            _assert_rel_metric(got_riq, exp_riq, :scene_riq_rel, "summary Ri_q by item fixture=$(fx_name)")
         end
     end
 
     f_scat = fixtures["test-scattering-one-plate"]
     r_scat = fixture_parity_report(f_scat)
     @test r_scat.expected_scattering_total !== nothing
-    @test relerr(r_scat.julia_scattering_total, r_scat.expected_scattering_total) < 0.05
+    _assert_rel_metric(r_scat.julia_scattering_total, r_scat.expected_scattering_total, :scattering_total_rel_loose, "test-scattering-one-plate total scattering")
 
     f_scat2 = fixtures["test-scattering-two-plates"]
     r_scat2 = fixture_parity_report(f_scat2)
     @test r_scat2.expected_scattering_total !== nothing
-    @test relerr(r_scat2.julia_scattering_total, r_scat2.expected_scattering_total) < 0.01
+    _assert_rel_metric(r_scat2.julia_scattering_total, r_scat2.expected_scattering_total, :scattering_total_rel_strict, "test-scattering-two-plates total scattering")
 
     for links_fx_name in ("test-links-pixeltable", "test-links-pixeltable2")
         f_links = fixtures[links_fx_name]
@@ -2178,12 +2218,15 @@ end
         push!(rows_indep_2, rr)
     end
     sort!(rows_indep_2; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
-    @test length(rows_indep_1) == length(rows_indep_2)
-    for i in eachindex(rows_indep_1)
-        for c in component_cols
-            @test _cell_equal(get(rows_indep_1[i], c, "NA"), get(rows_indep_2[i], c, "NA"))
-        end
-    end
+    _assert_rows_match(
+        rows_indep_1,
+        rows_indep_2,
+        ["step_number", "item_id", "component_id"],
+        component_cols;
+        atol=1e-9,
+        rtol=1e-9,
+        label="test-independant-steps2 component rows",
+    )
 
     # Java test-independant-steps parity (light-only subset): after dropping the first
     # non-common step and renumbering, overlapping light outputs are identical.
@@ -2242,12 +2285,15 @@ end
         push!(rows_indep_light_2, rr)
     end
     sort!(rows_indep_light_2; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
-    @test length(rows_indep_light_1) == length(rows_indep_light_2)
-    for i in eachindex(rows_indep_light_1)
-        for c in cols_indep_light
-            @test _cell_equal(get(rows_indep_light_1[i], c, "NA"), get(rows_indep_light_2[i], c, "NA"))
-        end
-    end
+    _assert_rows_match(
+        rows_indep_light_1,
+        rows_indep_light_2,
+        ["step_number", "item_id", "component_id"],
+        cols_indep_light;
+        atol=1e-9,
+        rtol=1e-9,
+        label="test-independant-steps light component rows",
+    )
 
     # Java absorb tests parity: within a type/domain, absorbed over incident ratios are constant.
     function _check_absorption_ratios(cfg_path::String; with_scattering::Bool)
