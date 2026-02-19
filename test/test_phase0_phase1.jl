@@ -643,8 +643,8 @@ end
         @test err <= lim
     end
     function _assert_rows_match(
-        expected_rows::Vector{Dict{String,Any}},
-        observed_rows::Vector{Dict{String,Any}},
+        expected_rows::Vector,
+        observed_rows::Vector,
         key_cols::Vector{String},
         value_cols::Vector{String};
         atol::Float64=1e-6,
@@ -685,6 +685,42 @@ end
             cfg.cache_radiation,
             raw,
         )
+    end
+    function _component_snapshot_rows(scene, step, cfg, row)
+        cols = ["step_number", "item_id", "component_id", "area", "Ri_PAR_0_f", "Ri_NIR_0_f", "barycentre_z"]
+        raw_rows = ArchimedLight.component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            columns=cols,
+        ).rows
+        out = Vector{Dict{String,Any}}(undef, length(raw_rows))
+        for i in eachindex(raw_rows)
+            r = raw_rows[i]
+            out[i] = Dict(
+                "step_number" => Int(r["step_number"]),
+                "item_id" => Int(r["item_id"]),
+                "component_id" => Int(r["component_id"]),
+                "area" => Float64(r["area"]),
+                "irradiance_withoutScattering_PAR_NIR" => Float64(r["Ri_PAR_0_f"]) + Float64(r["Ri_NIR_0_f"]),
+                "barycentre_z" => Float64(r["barycentre_z"]),
+            )
+        end
+        sort!(out; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+        out
+    end
+    function _scene_snapshot_rows(scene, series, cfg, meteo_rows)
+        cols = ["step_number", "date", "hour_start", "hour_end", "RI_SW_f"]
+        rows = ArchimedLight.scene_values_table(
+            scene,
+            series,
+            cfg;
+            meteo_rows=meteo_rows,
+            columns=cols,
+        ).rows
+        sort!(rows; by=r -> Int(r["step_number"]))
+        rows
     end
     function expected_component_hits(path::String)
         rows = read_java_csv(path)
@@ -877,6 +913,70 @@ end
         rel_err = abs_err ./ max.(abs.(expected_sw), eps(Float64))
         @test maximum(abs_err) < max_abs_err
         @test mean(rel_err) < max_mean_rel_err
+    end
+
+    # Frozen Java scene_values snapshots (full keyed rows).
+    for (fx_name, sw_atol, sw_rtol) in (
+        ("test-weighted-sun", 1.0, 1e-2),
+        ("test-save_on_disk1", 1e-3, 1e-3),
+        ("test-save_on_disk6", 1e-3, 1e-3),
+    )
+        fx = fixtures[fx_name]
+        expected_path = _expected_scene_values_path(fx)
+        @test expected_path !== nothing
+        expected_rows = read_java_csv(expected_path)
+        sort!(expected_rows; by=r -> Int(getproperty(r, :step_number)))
+
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
+        observed_rows = _scene_snapshot_rows(scene, series, cfg, meteo.rows)
+
+        _assert_rows_match(
+            expected_rows,
+            observed_rows,
+            ["step_number"],
+            ["date", "hour_start", "hour_end"];
+            atol=0.0,
+            rtol=0.0,
+            label="scene snapshot fields fixture=$(fx_name)",
+        )
+        _assert_rows_match(
+            expected_rows,
+            observed_rows,
+            ["step_number"],
+            ["RI_SW_f"];
+            atol=sw_atol,
+            rtol=sw_rtol,
+            label="scene snapshot RI_SW_f fixture=$(fx_name)",
+        )
+    end
+
+    # Frozen Java component_values snapshots for single-step save fixtures.
+    for fx_name in ("test-save_on_disk1", "test-save_on_disk6")
+        fx = fixtures[fx_name]
+        expected_path = _expected_component_values_path(fx)
+        @test expected_path !== nothing
+        expected_rows = read_java_csv(expected_path)
+        sort!(expected_rows; by=r -> (Int(getproperty(r, :step_number)), Int(getproperty(r, :item_id)), Int(getproperty(r, :component_id))))
+
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        row = first(meteo.rows)
+        step = ArchimedLight.run_light_step(scene, row, cfg)
+        observed_rows = _component_snapshot_rows(scene, step, cfg, row)
+
+        _assert_rows_match(
+            expected_rows,
+            observed_rows,
+            ["step_number", "item_id", "component_id"],
+            ["area", "barycentre_z"];
+            atol=1e-6,
+            rtol=1e-4,
+            label="component snapshot geometry fixture=$(fx_name)",
+        )
     end
 
     for (fx_name, max_rel_err) in (

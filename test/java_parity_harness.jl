@@ -464,12 +464,51 @@ function fixture_parity_report(fx::ParityFixture; all_in_turtle=nothing, cache_r
     )
 end
 
-function _row_key_from_dict(row::AbstractDict{String,Any}, key_cols::Vector{String})
-    Tuple(get(row, c, missing) for c in key_cols)
+_row_get_by_col(row::AbstractDict{String,Any}, col::String) = get(row, col, missing)
+function _row_get_by_col(row::NamedTuple, col::String)
+    s = Symbol(col)
+    s in propertynames(row) ? getproperty(row, s) : missing
 end
 
-function _row_float_value(row::AbstractDict{String,Any}, col::String)
-    v = get(row, col, missing)
+function _canonical_cell_value(v)
+    if v === missing || v === nothing
+        return missing
+    elseif v isa Dates.Date
+        return v
+    elseif v isa Dates.DateTime
+        return v
+    elseif v isa Dates.Time
+        return Dates.format(v, Dates.DateFormat("HH:MM:SS"))
+    elseif v isa AbstractString
+        s = strip(String(v))
+        for fmt in (Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd"))
+            try
+                return Dates.Date(s, fmt)
+            catch
+            end
+        end
+        for fmt in (
+            Dates.DateFormat("HH:MM:SS"),
+            Dates.DateFormat("H:MM:SS"),
+            Dates.DateFormat("HH:MM"),
+            Dates.DateFormat("H:MM"),
+        )
+            try
+                return Dates.format(Dates.Time(s, fmt), Dates.DateFormat("HH:MM:SS"))
+            catch
+            end
+        end
+        return s
+    end
+    return v
+end
+
+function _row_key_from_dict(row, key_cols::Vector{String})
+    Tuple(_row_get_by_col(row, c) for c in key_cols)
+end
+
+function _row_float_value(row, col::String)
+    v = _row_get_by_col(row, col)
     v === missing && return nothing
     v isa Number && return Float64(v)
     p = tryparse(Float64, strip(string(v)))
@@ -488,16 +527,16 @@ Compare two row sets keyed by `key_cols`. Returns:
 Each mismatch entry contains `(key, column, expected, observed, abs_err, rel_err)`.
 """
 function compare_rows_by_key(
-    expected_rows::Vector{<:AbstractDict{String,Any}},
-    observed_rows::Vector{<:AbstractDict{String,Any}};
+    expected_rows::Vector,
+    observed_rows::Vector;
     key_cols::Vector{String},
     value_cols::Vector{String},
     atol::Float64=1e-6,
     rtol::Float64=1e-3,
     top_n::Int=5,
 )
-    exp_map = Dict{Tuple,AbstractDict{String,Any}}(_row_key_from_dict(r, key_cols) => r for r in expected_rows)
-    obs_map = Dict{Tuple,AbstractDict{String,Any}}(_row_key_from_dict(r, key_cols) => r for r in observed_rows)
+    exp_map = Dict{Tuple,Any}(_row_key_from_dict(r, key_cols) => r for r in expected_rows)
+    obs_map = Dict{Tuple,Any}(_row_key_from_dict(r, key_cols) => r for r in observed_rows)
 
     missing_keys = collect(setdiff(Set(keys(exp_map)), Set(keys(obs_map))))
     extra_keys = collect(setdiff(Set(keys(obs_map)), Set(keys(exp_map))))
@@ -510,14 +549,17 @@ function compare_rows_by_key(
             evf = _row_float_value(e, c)
             ovf = _row_float_value(o, c)
             if evf !== nothing && ovf !== nothing
+                if isnan(evf) && isnan(ovf)
+                    continue
+                end
                 abs_err = abs(ovf - evf)
                 rel_err = abs_err / max(abs(evf), eps(Float64))
                 if !(abs_err <= atol || rel_err <= rtol)
                     push!(mismatches, (key=k, column=c, expected=evf, observed=ovf, abs_err=abs_err, rel_err=rel_err))
                 end
             else
-                ev = get(e, c, missing)
-                ov = get(o, c, missing)
+                ev = _canonical_cell_value(_row_get_by_col(e, c))
+                ov = _canonical_cell_value(_row_get_by_col(o, c))
                 ev == ov || push!(mismatches, (key=k, column=c, expected=ev, observed=ov, abs_err=NaN, rel_err=NaN))
             end
         end
