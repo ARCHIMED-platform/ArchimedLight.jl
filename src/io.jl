@@ -467,6 +467,71 @@ function _normalize_ops_lines(lines::Vector{String})
     out
 end
 
+function _rodrigues_rotation(axis::StaticArrays.SVector{3,Float64}, angle_rad::Float64)
+    n = norm(axis)
+    n > 0.0 || return StaticArrays.SMatrix{3,3,Float64}(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    x, y, z = axis / n
+    c = cos(angle_rad)
+    s = sin(angle_rad)
+    t = 1.0 - c
+    StaticArrays.SMatrix{3,3,Float64}(
+        t * x * x + c, t * x * y - s * z, t * x * z + s * y,
+        t * x * y + s * z, t * y * y + c, t * y * z - s * x,
+        t * x * z - s * y, t * y * z + s * x, t * z * z + c,
+    )
+end
+
+function _apply_transform_to_geometry_nodes!(node, transformation)
+    attrs = _node_attrs(node)
+    if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)
+        PlantGeom.transform_mesh!(node, transformation)
+    end
+    children = _node_children(node)
+    children === nothing && return
+    for ch in children
+        _apply_transform_to_geometry_nodes!(ch, transformation)
+    end
+end
+
+function _as_pos3(v)
+    v === nothing && return nothing
+    try
+        x = Float64(v[1])
+        y = Float64(v[2])
+        z = Float64(v[3])
+        return (x, y, z)
+    catch
+        return nothing
+    end
+end
+
+function _apply_ops_inclination_transforms!(mtg)
+    children = _node_children(mtg)
+    children === nothing && return
+
+    for obj in children
+        attrs = _node_attrs(obj)
+        attrs isa AbstractDict || continue
+
+        inc_angle_deg = _as_float(_dict_attr(attrs, :inclinationAngle), 0.0)
+        abs(inc_angle_deg) > 0.0 || continue
+
+        inc_az_deg = _as_float(_dict_attr(attrs, :inclinationAzimut), 0.0)
+        pos = _as_pos3(_dict_attr(attrs, :pos))
+        pos === nothing && continue
+
+        az = deg2rad(inc_az_deg)
+        ang = deg2rad(inc_angle_deg)
+        axis = StaticArrays.SVector{3,Float64}(-sin(az), cos(az), 0.0)
+        rot = _rodrigues_rotation(axis, ang)
+
+        px, py, pz = pos
+        tf = PlantGeom.compose_lr(PlantGeom.Translation(-px, -py, -pz), PlantGeom.LinearMap(rot))
+        tf = PlantGeom.compose_lr(tf, PlantGeom.Translation(px, py, pz))
+        _apply_transform_to_geometry_nodes!(obj, tf)
+    end
+end
+
 function _triangulate_face_indices(ids::Vector{Int})
     out = NTuple{3,Int}[]
     length(ids) < 3 && return out
@@ -633,7 +698,9 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
         if ext == ".ops"
             scene_xy_bounds = _ops_scene_xy_bounds(path)
             component_id_hints = _ops_component_id_hints(path)
-            _read_ops_relaxed(path)
+            mtg = _read_ops_relaxed(path)
+            _apply_ops_inclination_transforms!(mtg)
+            mtg
         elseif ext == ".opf"
             component_id_hints[1] = _opf_geometry_component_ids(path)
             _read_opf_relaxed(path)
