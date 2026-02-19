@@ -668,74 +668,26 @@ function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
     isempty(pairs) ? row : merge(row, (; pairs...))
 end
 
-function _duration_seconds_or_nan(v)
-    v === missing && return NaN
-
-    if v isa Number
-        return Float64(v)
-    elseif v isa Dates.Time
-        return Float64(Dates.hour(v) * 3600 + Dates.minute(v) * 60 + Dates.second(v))
-    elseif v isa Dates.DateTime
-        t = Dates.Time(v)
-        return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60 + Dates.second(t))
-    elseif v isa Dates.Period
-        try
-            return Dates.value(Dates.Millisecond(v)) / 1000.0
-        catch
-        end
-    end
-
-    s = strip(string(v))
-    isempty(s) && return NaN
-    lowercase(s) in ("na", "nan", "missing") && return NaN
-
-    try
-        t = Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
-        return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60 + Dates.second(t))
-    catch
-        try
-            t = Dates.Time(s, Dates.DateFormat("HH:MM"))
-            return Float64(Dates.hour(t) * 3600 + Dates.minute(t) * 60)
-        catch
-        end
-    end
-
-    x = tryparse(Float64, s)
-    x === nothing && return NaN
-    return x
-end
-
 function _positive_duration_seconds(v; field_name::AbstractString="step_duration")
-    seconds = _duration_seconds_or_nan(v)
-    if !(isfinite(seconds) && seconds > 0.0)
-        error("Invalid $(field_name) value in meteo row: expected a positive duration, got $(repr(v))")
-    end
-    return seconds
+    PlantMeteo.positive_duration_seconds(v; field_name=field_name)
 end
 
-function _forward_fill_row_date(rows::Vector{<:NamedTuple})
-    out = Vector{NamedTuple}(undef, length(rows))
-    last_date = nothing
-    for i in eachindex(rows)
-        r = rows[i]
-        if :date in propertynames(r)
-            d = getproperty(r, :date)
-            if d === missing
-                out[i] = last_date === nothing ? r : merge(r, (; date=last_date))
-            else
-                s = lowercase(strip(string(d)))
-                if isempty(s) || s == "missing"
-                    out[i] = last_date === nothing ? r : merge(r, (; date=last_date))
-                else
-                    out[i] = r
-                    last_date = d
-                end
-            end
-        else
-            out[i] = r
+function _normalize_raw_meteo_dates(data)
+    hasproperty(data, :date) || return data
+    hour_fmt = Dates.DateFormat("HH:MM:SS")
+    date_only = (; date=getproperty(data, :date))
+    for date_fmt in (
+        Dates.DateFormat("yyyy-mm-ddTHH:MM:SS.s"),
+        Dates.DateFormat("yyyy/mm/dd"),
+        Dates.DateFormat("yyyy-mm-dd"),
+    )
+        try
+            date = PlantMeteo.compute_date(date_only, date_fmt, hour_fmt; forward_fill_date=true)
+            return PlantMeteo.set_column(data, :date, date)
+        catch
         end
     end
-    out
+    return data
 end
 
 """
@@ -747,7 +699,11 @@ and returning rows as named tuples.
 function read_meteo(path::AbstractString)
     weather, meta =
         try
-            w = PlantMeteo.read_weather(path)
+            w = PlantMeteo.read_weather(
+                path;
+                date_formats=(Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd")),
+                forward_fill_date=true,
+            )
             m = try
                 PlantMeteo.metadata(w)
             catch
@@ -755,21 +711,12 @@ function read_meteo(path::AbstractString)
             end
             (w, m)
         catch
-            try
-                w = PlantMeteo.read_weather(path; date_format=Dates.DateFormat("yyyy/mm/dd"))
-                m = try
-                    PlantMeteo.metadata(w)
-                catch
-                    (; file=path)
-                end
-                (w, m)
-            catch
-                data, metadata_ = PlantMeteo.read_weather_(path)
-                (data, metadata_)
-            end
+            data, metadata_ = PlantMeteo.read_weather_(path)
+            data = _normalize_raw_meteo_dates(data)
+            (data, metadata_)
         end
     meta_nt = merge((; file=path), _meta_to_namedtuple(meta))
-    raw_rows = _forward_fill_row_date(_rows_to_namedtuples(weather))
+    raw_rows = _rows_to_namedtuples(weather)
     rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
     MeteoTable(rows, meta_nt)
 end

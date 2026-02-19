@@ -220,7 +220,7 @@ end
 function _step_duration_seconds_local(row)
     names = propertynames(row)
     if (:step_duration in names)
-        return _positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
+        return PlantMeteo.positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
     end
     if (:hour_start in names) && (:hour_end in names)
         t0 = _parse_time_or_default_local(getproperty(row, :hour_start))
@@ -235,58 +235,24 @@ function _step_duration_seconds_local(row)
     return 1.0
 end
 
-function _parse_time_strict_local(v, field_name::String)
-    v === missing && error("invalid meteo value: missing $(field_name)")
-    if v isa Dates.Time
-        return v
-    elseif v isa Dates.DateTime
-        return Dates.Time(v)
-    end
-    s = strip(string(v))
-    isempty(s) && error("invalid meteo value: empty $(field_name)")
-    try
-        return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
-    catch
-        try
-            return Dates.Time(s, Dates.DateFormat("HH:MM"))
-        catch
-            error("invalid meteo value: cannot parse $(field_name)=$(repr(v))")
-        end
-    end
-end
-
 function _row_datetime_interval_local(row; index::Int=0)
-    names = propertynames(row)
-    has_start = (:hour_start in names) || (:hour in names)
-    has_start || error("invalid meteo value: missing hour_start/hour column at row $(index)")
-
-    date =
-        if :date in names
-            _parse_date_value(getproperty(row, :date), Dates.Date(2000, 1, 1))
-        else
-            Dates.Date(2000, 1, 1)
-        end
-    t0 = _parse_time_strict_local(
-        getproperty(row, :hour_start in names ? :hour_start : :hour),
-        :hour_start in names ? "hour_start" : "hour",
-    )
-    start_dt = Dates.DateTime(date, t0)
-
-    stop_dt =
-        if :hour_end in names
-            t1 = _parse_time_strict_local(getproperty(row, :hour_end), "hour_end")
-            dt = Dates.DateTime(date, t1)
-            dt < start_dt && error("end is before start at meteo row $(index)")
-            dt
-        elseif :step_duration in names
-            secs = _positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
-            start_dt + Dates.Millisecond(round(Int, secs * 1000))
-        else
-            start_dt + Dates.Second(1)
-        end
-
-    stop_dt > start_dt || error("end is before start at meteo row $(index)")
-    return start_dt, stop_dt
+    try
+        return PlantMeteo.row_datetime_interval(
+            row;
+            index=index,
+            date_cols=(:date,),
+            start_cols=(:hour_start, :hour),
+            end_cols=(:hour_end,),
+            duration_cols=(:step_duration,),
+            default_date=Dates.Date(2000, 1, 1),
+            default_duration_seconds=1.0,
+            allow_end_rollover=false,
+        )
+    catch err
+        msg = sprint(showerror, err)
+        occursin("end is before start", msg) && error("end is before start at meteo row $(index)")
+        rethrow(err)
+    end
 end
 
 function _cfg_lookup_value_local(cfg::LightConfig, keys::Vector{String})
@@ -373,14 +339,19 @@ function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, cfg::LightConfig)
     t1 = _parse_range_datetime_token_local(b)
     t1 >= t0 || error("invalid meteo_range: end datetime is before start datetime")
 
-    out = NamedTuple[]
-    for (i, row) in enumerate(rows)
-        s, e = _row_datetime_interval_local(row; index=i)
-        # Closed-interval overlap, matching Java boundary behavior.
-        if s <= t1 && e >= t0
-            push!(out, row)
-        end
-    end
+    out = PlantMeteo.select_overlapping_timesteps(
+        rows,
+        t0,
+        t1;
+        closed=true, # Java uses closed-interval overlap semantics.
+        date_cols=(:date,),
+        start_cols=(:hour_start, :hour),
+        end_cols=(:hour_end,),
+        duration_cols=(:step_duration,),
+        default_date=Dates.Date(2000, 1, 1),
+        default_duration_seconds=1.0,
+        allow_end_rollover=false,
+    )
     isempty(out) && error("invalid meteo_range: selection is empty")
     return out
 end
@@ -400,13 +371,25 @@ function _apply_meteo_active_filter_local(rows::Vector{<:NamedTuple})
 end
 
 function _validate_meteo_sequence_local(rows::Vector{<:NamedTuple})
-    prev_end = nothing
-    for (i, row) in enumerate(rows)
-        start_dt, end_dt = _row_datetime_interval_local(row; index=i)
-        if prev_end !== nothing && start_dt < prev_end
+    try
+        PlantMeteo.check_non_overlapping_timesteps(
+            rows;
+            date_cols=(:date,),
+            start_cols=(:hour_start, :hour),
+            end_cols=(:hour_end,),
+            duration_cols=(:step_duration,),
+            default_date=Dates.Date(2000, 1, 1),
+            default_duration_seconds=1.0,
+            allow_end_rollover=false,
+        )
+    catch err
+        msg = sprint(showerror, err)
+        if occursin("overlapping timesteps at row", msg)
+            m = match(r"row\s+(\d+)", msg)
+            i = m === nothing ? 0 : parse(Int, m.captures[1])
             error("invalid overlapping meteo steps at row $(i)")
         end
-        prev_end = end_dt
+        rethrow(err)
     end
 end
 
