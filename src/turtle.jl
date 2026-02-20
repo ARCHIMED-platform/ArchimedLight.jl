@@ -9,9 +9,10 @@ end
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
-    # Incoming direction from source to scene.
-    sx = cos(el) * sin(az)
-    sy = cos(el) * cos(az)
+    # Java SunPosition gives a ground-to-sky vector.
+    # ArchimedLight rays are incoming (source-to-scene), so negate all components.
+    sx = -cos(el) * sin(az)
+    sy = -cos(el) * cos(az)
     sz = -sin(el)
     _normalize3(StaticArrays.SVector{3,Float64}(sx, sy, sz))
 end
