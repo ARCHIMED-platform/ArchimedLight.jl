@@ -1,4 +1,7 @@
 using Statistics
+using LinearAlgebra: norm
+using Rotations: RotZ, AngleAxis, RotMatrix
+using StaticArrays: SVector
 
 @testset "Phase 0 artifacts" begin
     note = joinpath(dirname(@__DIR__), "docs", "phase0_reverse_engineering.md")
@@ -440,6 +443,54 @@ end
     cfg_opf = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-customband", "config.yml"))
     scene_opf = ArchimedLight.read_scene(cfg_opf.scene)
     @test isapprox(sum(values(scene_opf.total_area_per_node)), 0.007472579789211572; atol=1e-12, rtol=1e-9)
+
+    @testset "OPS inclination transform parity" begin
+        opf = joinpath(dirname(@__DIR__), "example", "scene", "opf", "simple_OPF_shapes.opf")
+        @test isfile(opf)
+
+        mktempdir() do tmp
+            function _write_ops(path::AbstractString, inclination_angle_rad::Float64)
+                open(path, "w") do io
+                    println(io, "T 0 0 0 1 1 flat")
+                    println(io, "1 1 $(opf) 1.25 -2.0 0.5 0.37 $(inclination_angle_rad) 0 0")
+                    println(io, "-1 1 1")
+                end
+            end
+
+            ops_base = joinpath(tmp, "base.ops")
+            ops_inclined = joinpath(tmp, "inclined.ops")
+            _write_ops(ops_base, 0.0)
+            _write_ops(ops_inclined, 0.24)
+
+            scene_base = ArchimedLight.read_scene(ops_base)
+            scene_inclined = ArchimedLight.read_scene(ops_inclined)
+
+            @test Set(keys(scene_base.total_area_per_node)) == Set(keys(scene_inclined.total_area_per_node))
+            @test scene_base.java_item_id_per_node == scene_inclined.java_item_id_per_node
+            @test scene_base.java_component_id_per_node == scene_inclined.java_component_id_per_node
+
+            pivot = SVector{3,Float64}(1.25, -2.0, 0.5)
+            axis = RotZ(0.37) * SVector{3,Float64}(0.0, 1.0, 0.0)
+            axis_u = axis / norm(axis)
+            rot = RotMatrix(AngleAxis(0.24, axis_u[1], axis_u[2], axis_u[3]))
+
+            for nid in keys(scene_base.total_area_per_node)
+                @test isapprox(
+                    scene_inclined.total_area_per_node[nid],
+                    scene_base.total_area_per_node[nid];
+                    atol=1e-12,
+                    rtol=1e-12,
+                )
+
+                b0 = scene_base.barycenter_per_node[nid]
+                b1 = scene_inclined.barycenter_per_node[nid]
+                expected = rot * (SVector{3,Float64}(b0[1], b0[2], b0[3]) - pivot) + pivot
+                @test isapprox(b1[1], expected[1]; atol=1e-9, rtol=1e-9)
+                @test isapprox(b1[2], expected[2]; atol=1e-9, rtol=1e-9)
+                @test isapprox(b1[3], expected[3]; atol=1e-9, rtol=1e-9)
+            end
+        end
+    end
 end
 
 @testset "Turtle geometry parity" begin

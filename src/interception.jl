@@ -868,7 +868,7 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
 end
 
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
-    raw_vertices = GeometryBasics.decompose(PlantGeom.Point3, scene.merged_mesh)
+    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
     all_face2node = collect(scene.face2node)

@@ -6,7 +6,6 @@ import YAML
 import Tables
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
-import Rotations: RotZ, AngleAxis, RotMatrix
 import Dates
 
 function _to_string_dict(x)
@@ -394,7 +393,7 @@ function _build_scene_geometry(
     merged_mesh, face2node, node_group, node_type, node_item_id, node_component_id =
         _build_merged_mesh_with_map_local(mtg; component_id_hints=component_id_hints)
 
-    verts = GeometryBasics.decompose(PlantGeom.Point3, merged_mesh)
+    verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
     node_area = Dict{Int,Float64}()
     bary_acc = Dict{Int,NTuple{3,Float64}}()
@@ -466,60 +465,6 @@ function _normalize_ops_lines(lines::Vector{String})
         end
     end
     out
-end
-
-function _apply_transform_to_geometry_nodes!(node, transformation)
-    attrs = _node_attrs(node)
-    if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)
-        PlantGeom.transform_mesh!(node, transformation)
-    end
-    children = _node_children(node)
-    children === nothing && return
-    for ch in children
-        _apply_transform_to_geometry_nodes!(ch, transformation)
-    end
-end
-
-function _as_pos3(v)
-    v === nothing && return nothing
-    try
-        x = Float64(v[1])
-        y = Float64(v[2])
-        z = Float64(v[3])
-        return (x, y, z)
-    catch
-        return nothing
-    end
-end
-
-function _apply_ops_inclination_transforms!(mtg)
-    children = _node_children(mtg)
-    children === nothing && return
-
-    for obj in children
-        attrs = _node_attrs(obj)
-        attrs isa AbstractDict || continue
-
-        inc_angle_deg = _as_float(_dict_attr(attrs, :inclinationAngle), 0.0)
-        abs(inc_angle_deg) > 0.0 || continue
-
-        inc_az_deg = _as_float(_dict_attr(attrs, :inclinationAzimut), 0.0)
-        pos = _as_pos3(_dict_attr(attrs, :pos))
-        pos === nothing && continue
-
-        az = deg2rad(inc_az_deg)
-        ang = deg2rad(inc_angle_deg)
-        axis = RotZ(az) * StaticArrays.SVector{3,Float64}(0.0, 1.0, 0.0)
-        axis_n = norm(axis)
-        axis_n > 0.0 || continue
-        axis_u = axis / axis_n
-        rot = RotMatrix(AngleAxis(ang, axis_u[1], axis_u[2], axis_u[3]))
-
-        px, py, pz = pos
-        tf = PlantGeom.compose_lr(PlantGeom.Translation(-px, -py, -pz), PlantGeom.LinearMap(rot))
-        tf = PlantGeom.compose_lr(tf, PlantGeom.Translation(px, py, pz))
-        _apply_transform_to_geometry_nodes!(obj, tf)
-    end
 end
 
 function _triangulate_face_indices(ids::Vector{Int})
@@ -688,9 +633,7 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
         if ext == ".ops"
             scene_xy_bounds = _ops_scene_xy_bounds(path)
             component_id_hints = _ops_component_id_hints(path)
-            mtg = _read_ops_relaxed(path)
-            _apply_ops_inclination_transforms!(mtg)
-            mtg
+            _read_ops_relaxed(path)
         elseif ext == ".opf"
             component_id_hints[1] = _opf_geometry_component_ids(path)
             _read_opf_relaxed(path)
