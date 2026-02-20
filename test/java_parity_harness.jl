@@ -15,8 +15,8 @@ const PARITY_LIMITS = Dict{Symbol,Float64}(
     :hitcount_hist_rel_raycast => 2e-3,
     # Irradiance / energy parity.
     :irr_component_rel_strict => 1e-6,
-    :irr_component_rel_hi_turtle => 2.4e-1,
-    :irr_component_abs_hi_raycast => 8.0,
+    :irr_component_rel_dense => 9e-3,
+    :irr_component_abs_sparse => 7.5,
     :scene_riq_rel => 2e-3,
     :scattering_total_rel_loose => 5e-2,
     :scattering_total_rel_strict => 1e-2,

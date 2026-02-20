@@ -702,6 +702,23 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         end
         @test err <= lim
     end
+    function _assert_component_metric_limit(
+        rows::Vector,
+        field::Symbol,
+        metric::Symbol,
+        label::AbstractString;
+        top_n::Int=8,
+    )
+        values = Float64[getproperty(r, field) for r in rows]
+        @test !isempty(values)
+        lim = parity_limit(metric)
+        vmax = maximum(values)
+        if !(vmax <= lim)
+            top = sort(rows; by=r -> getproperty(r, field), rev=true)[1:min(top_n, length(rows))]
+            @info "Parity component metric mismatch" label metric max_value=vmax limit=lim top
+        end
+        @test vmax <= lim
+    end
     function _assert_rows_match(
         expected_rows::Vector,
         observed_rows::Vector,
@@ -887,33 +904,37 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         @test isempty(missing)
         @test isempty(extra)
 
-        hit_rel_hi = Float64[]
-        irr_rel_hi = Float64[]
-        irr_abs_hi = Float64[]
+        irr_dense_hits_threshold = 400
+        hit_rel_hi = NamedTuple{(:key,:value),Tuple{Tuple{Int,Int},Float64}}[]
+        irr_rel_dense = NamedTuple{(:key,:value,:hits),Tuple{Tuple{Int,Int},Float64,Int}}[]
+        irr_abs_sparse = NamedTuple{(:key,:value,:hits),Tuple{Tuple{Int,Int},Float64,Int}}[]
         for key in keys(expected)
             exp = expected[key]
             got = observed[key]
             rel_hit = abs(got.hits - exp.hits) / max(exp.hits, 1)
             if exp.hits >= 1000
-                push!(hit_rel_hi, rel_hit)
+                push!(hit_rel_hi, (key=key, value=rel_hit))
             end
 
             got_irr = got.power0 / max(exp.area, eps(Float64))
             abs_err_irr = abs(got_irr - exp.irr0)
             if abs(exp.irr0) >= 1.0
-                push!(irr_abs_hi, abs_err_irr)
-                push!(irr_rel_hi, abs_err_irr / max(abs(exp.irr0), eps(Float64)))
+                if exp.hits >= irr_dense_hits_threshold
+                    push!(irr_rel_dense, (key=key, value=abs_err_irr / max(abs(exp.irr0), eps(Float64)), hits=exp.hits))
+                else
+                    push!(irr_abs_sparse, (key=key, value=abs_err_irr, hits=exp.hits))
+                end
             end
         end
 
-        @test !isempty(hit_rel_hi)
-        @test !isempty(irr_abs_hi)
         if all_in_turtle
-            @test maximum(hit_rel_hi) < parity_limit(:hitcount_component_hi_rel_turtle)
-            @test maximum(irr_rel_hi) < parity_limit(:irr_component_rel_hi_turtle)
+            _assert_component_metric_limit(hit_rel_hi, :value, :hitcount_component_hi_rel_turtle, "test-hitcount3 high-hit rel (turtle)")
+            _assert_component_metric_limit(irr_rel_dense, :value, :irr_component_rel_dense, "test-hitcount3 dense irradiance rel (turtle)")
+            _assert_component_metric_limit(irr_abs_sparse, :value, :irr_component_abs_sparse, "test-hitcount3 sparse irradiance abs (turtle)")
         else
-            @test maximum(hit_rel_hi) < parity_limit(:hitcount_component_hi_rel_raycast)
-            @test maximum(irr_abs_hi) < parity_limit(:irr_component_abs_hi_raycast)
+            _assert_component_metric_limit(hit_rel_hi, :value, :hitcount_component_hi_rel_raycast, "test-hitcount3 high-hit rel (raycast)")
+            _assert_component_metric_limit(irr_rel_dense, :value, :irr_component_rel_dense, "test-hitcount3 dense irradiance rel (raycast)")
+            _assert_component_metric_limit(irr_abs_sparse, :value, :irr_component_abs_sparse, "test-hitcount3 sparse irradiance abs (raycast)")
         end
     end
 
