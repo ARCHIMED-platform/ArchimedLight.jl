@@ -1,0 +1,167 @@
+#!/usr/bin/env julia
+
+using ArchimedLight
+
+include(joinpath(dirname(@__DIR__), "test", "java_parity_harness.jl"))
+
+to_int(v) = v isa Number ? Int(round(v)) : parse(Int, strip(string(v)))
+
+function expected_component_metric(component_csv::AbstractString, key::Tuple{Int,Int})
+    rows = read_java_csv(component_csv)
+    for r in rows
+        k = (to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id)))
+        k == key || continue
+        area = Float64(getproperty(r, :area))
+        hits = Int(floor(area * Float64(getproperty(r, :surface_hits))))
+        irr0 = Float64(getproperty(r, :irradiance_withoutScattering_PAR_NIR))
+        return (area=area, hits=hits, irr0=irr0)
+    end
+    return nothing
+end
+
+function component_sector_report(
+    fx::ParityFixture,
+    key::Tuple{Int,Int};
+    all_in_turtle::Bool,
+)
+    cfg = ArchimedLight.read_light_config(fx.config_path)
+    cfg = _with_overrides(cfg; all_in_turtle=all_in_turtle)
+    scene = ArchimedLight.read_scene(cfg.scene)
+    row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+    sky = ArchimedLight.compute_sky(row, cfg)
+    turtle = ArchimedLight.build_turtle(cfg, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+
+    vertices, faces, face2node, _, plotbox, node_group = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+    key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
+    node_ids = Int[nid for (nid, k) in key_by_node if k == key]
+    isempty(node_ids) && error("component $(key) not found in scene")
+    length(node_ids) == 1 || error("component $(key) maps to $(length(node_ids)) nodes, expected one")
+    target_nid = node_ids[1]
+
+    virtual_nodes = ArchimedLight._virtual_sensor_node_ids(node_group, cfg)
+    upper_hit = ArchimedLight._use_upper_hit_pixel_table(cfg)
+    cache_ctx = ArchimedLight._projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+
+    rows = NamedTuple[]
+    total_hits = 0
+    total_power = 0.0
+    for i in eachindex(turtle.sectors)
+        vis, node_hits = ArchimedLight._rasterize_direction_java(
+            vertices,
+            faces,
+            face2node,
+            turtle.sectors[i].direction,
+            cfg,
+            plotbox;
+            cache_ctx=cache_ctx,
+            virtual_nodes=virtual_nodes,
+            upper_hit=upper_hit,
+        )
+        hits = get(node_hits, target_nid, 0)
+        area = get(vis, target_nid, 0.0)
+        flux_sw = fluxes.par[i] + fluxes.nir[i]
+        power = area * flux_sw
+        total_hits += hits
+        total_power += power
+        if hits > 0 || area > 0.0 || power > 0.0
+            push!(
+                rows,
+                (
+                    dir=i,
+                    source=String(turtle.sectors[i].source),
+                    hits=hits,
+                    visible_area=area,
+                    flux_sw=flux_sw,
+                    power_sw=power,
+                ),
+            )
+        end
+    end
+
+    step = ArchimedLight.run_light_step(scene, row, cfg)
+    got_power_step =
+        get(step.first_order.incident_par_power_per_node, target_nid, 0.0) +
+        get(step.first_order.incident_nir_power_per_node, target_nid, 0.0)
+    got_hits_step = get(step.first_order.hits_per_node, target_nid, 0)
+
+    expected_path = _expected_component_values_path(fx; all_in_turtle=all_in_turtle)
+    expected = expected_path === nothing ? nothing : expected_component_metric(expected_path, key)
+
+    (
+        key=key,
+        node_id=target_nid,
+        all_in_turtle=all_in_turtle,
+        rows=rows,
+        sum_hits=total_hits,
+        sum_power=total_power,
+        step_hits=got_hits_step,
+        step_power=got_power_step,
+        expected=expected,
+    )
+end
+
+function print_report(rep; topn::Int=12)
+    println()
+    println("mode all_in_turtle=$(rep.all_in_turtle) key=$(rep.key) node=$(rep.node_id)")
+    println("----------------------------------------------------------------")
+    println("hits (sector sum): $(rep.sum_hits)")
+    println("hits (run_light_step): $(rep.step_hits)")
+    println("power SW (sector sum): $(round(rep.sum_power; digits=12))")
+    println("power SW (run_light_step): $(round(rep.step_power; digits=12))")
+    if rep.expected !== nothing
+        exp = rep.expected
+        exp_power = exp.irr0 * exp.area
+        println("expected hits: $(exp.hits)")
+        println("expected power SW: $(round(exp_power; digits=12))")
+        println("expected irradiance SW: $(round(exp.irr0; digits=9))")
+        println("julia irradiance SW: $(round(rep.step_power / max(exp.area, eps(Float64)); digits=9))")
+    end
+
+    rows = sort(rep.rows; by=r -> (r.power_sw, r.hits), rev=true)
+    n = min(topn, length(rows))
+    println()
+    println("top $(n) contributing directions:")
+    for r in rows[1:n]
+        println(
+            "  dir=$(lpad(r.dir, 3)) source=$(r.source) hits=$(lpad(r.hits, 4)) " *
+            "area=$(round(r.visible_area; digits=10)) flux=$(round(r.flux_sw; digits=6)) " *
+            "power=$(round(r.power_sw; digits=10))",
+        )
+    end
+end
+
+function parse_mode(arg::String)
+    s = lowercase(strip(arg))
+    if s in ("both", "all")
+        return (false, true)
+    elseif s in ("raycast", "false", "0")
+        return (false,)
+    elseif s in ("turtle", "true", "1")
+        return (true,)
+    end
+    error("invalid mode $(repr(arg)); use one of: both, raycast, turtle")
+end
+
+function main()
+    length(ARGS) >= 3 || error(
+        "usage: julia --project=. scripts/component_parity_debug.jl <fixture> <item_id> <component_id> [mode=both] [topn=12]",
+    )
+    fixture_name = String(ARGS[1])
+    item_id = parse(Int, ARGS[2])
+    component_id = parse(Int, ARGS[3])
+    mode = length(ARGS) >= 4 ? parse_mode(ARGS[4]) : (false, true)
+    topn = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 12
+
+    fixtures = Dict(f.name => f for f in light_parity_fixtures())
+    haskey(fixtures, fixture_name) || error("unknown fixture $(repr(fixture_name))")
+    fx = fixtures[fixture_name]
+    key = (item_id, component_id)
+
+    for all_in_turtle in mode
+        rep = component_sector_report(fx, key; all_in_turtle=all_in_turtle)
+        print_report(rep; topn=topn)
+    end
+end
+
+main()

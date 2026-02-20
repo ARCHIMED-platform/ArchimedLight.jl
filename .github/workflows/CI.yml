@@ -32,7 +32,8 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
-    if: github.event_name != 'pull_request'
+    # Keep CI spend low: run the full matrix only on manual trigger.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
@@ -60,7 +61,8 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
   parity:
     name: Parity (Frozen Java refs)
-    if: github.event_name != 'pull_request'
+    # Keep CI spend low: run full parity only on manual trigger.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -79,6 +81,7 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
   docs:
     name: Documentation
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       actions: write # needed to allow julia-actions/cache to proactively delete old caches that it has created
