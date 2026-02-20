@@ -3,6 +3,12 @@ using LinearAlgebra: norm
 using Rotations: RotZ, AngleAxis, RotMatrix
 using StaticArrays: SVector
 
+const _TEST_PROFILE = lowercase(get(ENV, "ARCHIMEDLIGHT_TEST_PROFILE", "all"))
+const _RUN_CORE_TESTS = _TEST_PROFILE in ("all", "core")
+const _RUN_PARITY_TESTS = _TEST_PROFILE in ("all", "parity")
+const _RUN_GUARD_TESTS = _TEST_PROFILE == "guard"
+
+if _RUN_CORE_TESTS
 @testset "Phase 0 artifacts" begin
     note = joinpath(dirname(@__DIR__), "docs", "phase0_reverse_engineering.md")
     @test isfile(note)
@@ -660,6 +666,9 @@ end
     @test abs(s21.ri_par_f - (10.0 * 0.48)) < 1e-12
 end
 
+end
+
+if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
 @testset "Parity reports" begin
     function max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
         ids = union(keys(a), keys(b))
@@ -809,7 +818,19 @@ end
     end
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
+    test_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests")
+    function _stage_start(name::AbstractString)
+        t0 = time()
+        @info "Parity stage start" stage=name
+        t0
+    end
+    function _stage_done(name::AbstractString, t0::Real)
+        @info "Parity stage done" stage=name elapsed_s=round(time() - t0; digits=3)
+        nothing
+    end
 
+    @testset "Hitcount parity" begin
+        _stage_t0 = _stage_start("Hitcount parity")
     f_hit = fixtures["test-hitcount2"]
     r_false = fixture_parity_report(f_hit; all_in_turtle=false)
     r_true = fixture_parity_report(f_hit; all_in_turtle=true)
@@ -911,7 +932,11 @@ end
         @test maximum(abs_err) <= parity_limit(abs_metric)
         @test maximum(rel_errs) <= parity_limit(rel_metric)
     end
+        _stage_done("Hitcount parity", _stage_t0)
+    end
 
+    @testset "Sun and snapshot parity" begin
+        _stage_t0 = _stage_start("Sun and snapshot parity")
     f_wsun = fixtures["test-weighted-sun"]
     r_wsun = fixture_parity_report(f_wsun)
     @test r_wsun.expected_sun_azimuth !== nothing
@@ -942,6 +967,7 @@ end
     @test max_az_err < parity_limit(:sun_deg_az_series)
     @test max_el_err < parity_limit(:sun_deg_el_series)
 
+    if _RUN_PARITY_TESTS
     for (fx_name, max_abs_err, max_mean_rel_err) in (
         ("test-weighted-sun", 1.0, 0.01),
         ("test-save_on_disk1", 1e-3, 1e-3),
@@ -1081,12 +1107,19 @@ end
             _assert_rel_metric(got_riq, exp_riq, :scene_riq_rel, "summary Ri_q by item fixture=$(fx_name)")
         end
     end
+    end
 
+        _stage_done("Sun and snapshot parity", _stage_t0)
+    end
+
+    @testset "Scattering links outputs and lightsource parity" begin
+        _stage_t0 = _stage_start("Scattering links outputs and lightsource parity")
     f_scat = fixtures["test-scattering-one-plate"]
     r_scat = fixture_parity_report(f_scat)
     @test r_scat.expected_scattering_total !== nothing
     _assert_rel_metric(r_scat.julia_scattering_total, r_scat.expected_scattering_total, :scattering_total_rel_loose, "test-scattering-one-plate total scattering")
 
+    if _RUN_PARITY_TESTS
     f_scat2 = fixtures["test-scattering-two-plates"]
     r_scat2 = fixture_parity_report(f_scat2)
     @test r_scat2.expected_scattering_total !== nothing
@@ -1629,8 +1662,6 @@ end
         m === nothing && error("No radiance found in $path")
         parse(Float64, m.captures[1])
     end
-
-    test_root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests")
 
     # Java run-test parity: output counter directories keep incrementing even when gaps exist.
     for cfg_path in (
@@ -2180,7 +2211,14 @@ end
         @test max_abs_float_dict_diff(s4_1[i].budget.ra_par_q_per_node, s4_2[i].budget.ra_par_q_per_node) == 0.0
         @test max_abs_float_dict_diff(s4_1[i].budget.ra_nir_q_per_node, s4_2[i].budget.ra_nir_q_per_node) == 0.0
     end
+    end
 
+        _stage_done("Scattering links outputs and lightsource parity", _stage_t0)
+    end
+
+    if _RUN_PARITY_TESTS
+    @testset "Meteo and independent-step parity" begin
+        _stage_t0 = _stage_start("Meteo and independent-step parity")
     function _light_cfg_with_meteo(cfg::ArchimedLight.LightConfig, meteo_path::String)
         raw = copy(cfg.raw)
         raw["meteo"] = meteo_path
@@ -2446,6 +2484,11 @@ end
         label="test-independant-steps light component rows",
     )
 
+        _stage_done("Meteo and independent-step parity", _stage_t0)
+    end
+
+    @testset "Absorption caching timestep parity" begin
+        _stage_t0 = _stage_start("Absorption caching timestep parity")
     # Java absorb tests parity: within a type/domain, absorbed over incident ratios are constant.
     function _check_absorption_ratios(cfg_path::String; with_scattering::Bool)
         cfg = ArchimedLight.read_light_config(cfg_path)
@@ -2650,4 +2693,9 @@ end
     @test max_abs_float_dict_diff(scat_on.added_par_power_per_node, scat_off.added_par_power_per_node) == 0.0
     @test max_abs_float_dict_diff(scat_on.added_nir_power_per_node, scat_off.added_nir_power_per_node) == 0.0
     rm(scat_cache_dir; recursive=true, force=true)
+        _stage_done("Absorption caching timestep parity", _stage_t0)
+    end
+    end
+end
+
 end
