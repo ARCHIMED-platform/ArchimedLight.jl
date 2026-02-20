@@ -84,3 +84,15 @@ Run the parity and smoke suite:
 ```bash
 julia --project=. test/runtests.jl
 ```
+
+Run only the frozen-reference parity suite:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=parity julia --project=. test/runtests.jl
+```
+
+Run the fast parity guard subset (hitcount + weighted sun + one scattering fixture):
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=guard julia --project=. test/runtests.jl
+```
