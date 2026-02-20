@@ -235,7 +235,11 @@ function _opf_geometry_component_ids(path::AbstractString)
     out
 end
 
-function _ops_component_id_hints(path::AbstractString)
+function _normalized_abs_path(base::AbstractString, p::AbstractString)
+    isabspath(p) ? normpath(p) : normpath(joinpath(base, p))
+end
+
+function _ops_component_id_hints_by_item(path::AbstractString)
     hints = Dict{Int,Vector{Int}}()
     base = dirname(path)
     lines = readlines(path)
@@ -253,13 +257,27 @@ function _ops_component_id_hints(path::AbstractString)
             continue
         end
         f = toks[3]
-        full = isabspath(f) ? f : normpath(joinpath(base, f))
+        full = _normalized_abs_path(base, f)
         ext = lowercase(splitext(full)[2])
         if ext == ".opf" && isfile(full)
-            hints[plant_id] = _opf_geometry_component_ids(full)
+            ids = _opf_geometry_component_ids(full)
+            if haskey(hints, plant_id)
+                append!(hints[plant_id], ids)
+            else
+                hints[plant_id] = copy(ids)
+            end
         end
     end
     hints
+end
+
+function _component_hint_path(attrs, scene_base_dir::AbstractString)
+    attrs isa AbstractDict || return nothing
+    fp = _dict_attr(attrs, :filePath)
+    fp === nothing && return nothing
+    s = strip(string(fp))
+    isempty(s) && return nothing
+    _normalized_abs_path(scene_base_dir, s)
 end
 
 function _collect_mesh_nodes!(
@@ -270,22 +288,34 @@ function _collect_mesh_nodes!(
     node_type,
     node_item_id,
     node_component_id,
-    component_id_hints,
-    component_id_hint_cursor,
+    component_id_hints_by_item,
+    component_id_hints_by_object,
+    component_id_hint_cursor_by_item,
     per_item_component_counter,
     next_id::Base.RefValue{Int},
+    scene_base_dir::AbstractString,
     current_group::String="",
     current_item_id::Int=1,
+    current_object_ids::Union{Nothing,Vector{Int}}=nothing,
+    current_object_cursor::Union{Nothing,Base.RefValue{Int}}=nothing,
 )
     attrs = _node_attrs(node)
     group = current_group
     item_id = _node_item_id(attrs, current_item_id)
     type_name = _node_type_name(node, attrs, "")
+    object_ids = current_object_ids
+    object_cursor = current_object_cursor
     if attrs isa AbstractDict
         if haskey(attrs, :functional_group)
             group = string(attrs[:functional_group])
         elseif haskey(attrs, "functional_group")
             group = string(attrs["functional_group"])
+        end
+
+        object_path = _component_hint_path(attrs, scene_base_dir)
+        if object_path !== nothing && haskey(component_id_hints_by_object, object_path)
+            object_ids = component_id_hints_by_object[object_path]
+            object_cursor = Ref(1)
         end
     end
 
@@ -298,17 +328,24 @@ function _collect_mesh_nodes!(
         node_item_id[next_id[]] = item_id
 
         hinted = nothing
-        if haskey(component_id_hints, item_id)
-            cursor = get(component_id_hint_cursor, item_id, 1)
-            ids = component_id_hints[item_id]
+        if object_ids !== nothing && object_cursor !== nothing
+            cursor = object_cursor[]
+            ids = object_ids
             if 1 <= cursor <= length(ids)
                 hinted = ids[cursor]
-                component_id_hint_cursor[item_id] = cursor + 1
+                object_cursor[] = cursor + 1
+            end
+        elseif haskey(component_id_hints_by_item, item_id)
+            cursor = get(component_id_hint_cursor_by_item, item_id, 1)
+            ids = component_id_hints_by_item[item_id]
+            if 1 <= cursor <= length(ids)
+                hinted = ids[cursor]
+                component_id_hint_cursor_by_item[item_id] = cursor + 1
             end
         end
         if hinted !== nothing
             node_component_id[next_id[]] = Int(hinted)
-        elseif haskey(component_id_hints, item_id)
+        elseif haskey(component_id_hints_by_item, item_id)
             node_component_id[next_id[]] = _node_component_id(node, next_id[] + 1)
         else
             # Java .gwa-like fallback: component ids are local to each item and start at 2.
@@ -329,25 +366,34 @@ function _collect_mesh_nodes!(
                 node_type,
                 node_item_id,
                 node_component_id,
-                component_id_hints,
-                component_id_hint_cursor,
+                component_id_hints_by_item,
+                component_id_hints_by_object,
+                component_id_hint_cursor_by_item,
                 per_item_component_counter,
                 next_id,
+                scene_base_dir,
                 group,
                 item_id,
+                object_ids,
+                object_cursor,
             )
         end
     end
 end
 
-function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vector{Int}}=Dict{Int,Vector{Int}}())
+function _build_merged_mesh_with_map_local(
+    mtg;
+    scene_base_dir::AbstractString="",
+    component_id_hints_by_item::Dict{Int,Vector{Int}}=Dict{Int,Vector{Int}}(),
+    component_id_hints_by_object::Dict{String,Vector{Int}}=Dict{String,Vector{Int}}(),
+)
     meshes = Any[]
     mesh_node_ids = Int[]
     node_group = Dict{Int,String}()
     node_type = Dict{Int,String}()
     node_item_id = Dict{Int,Int}()
     node_component_id = Dict{Int,Int}()
-    component_id_hint_cursor = Dict{Int,Int}(k => 1 for k in keys(component_id_hints))
+    component_id_hint_cursor_by_item = Dict{Int,Int}(k => 1 for k in keys(component_id_hints_by_item))
     per_item_component_counter = Dict{Int,Int}()
     next_id = Ref(0)
     _collect_mesh_nodes!(
@@ -358,10 +404,12 @@ function _build_merged_mesh_with_map_local(mtg; component_id_hints::Dict{Int,Vec
         node_type,
         node_item_id,
         node_component_id,
-        component_id_hints,
-        component_id_hint_cursor,
+        component_id_hints_by_item,
+        component_id_hints_by_object,
+        component_id_hint_cursor_by_item,
         per_item_component_counter,
         next_id,
+        scene_base_dir,
     )
 
     isempty(meshes) && error("No geometry meshes found in scene.")
@@ -388,10 +436,16 @@ function _build_scene_geometry(
     mtg,
     source_path::AbstractString,
     scene_xy_bounds::Union{Nothing,NTuple{4,Float64}},
-    component_id_hints::Dict{Int,Vector{Int}},
+    component_id_hints_by_item::Dict{Int,Vector{Int}},
+    component_id_hints_by_object::Dict{String,Vector{Int}}=Dict{String,Vector{Int}}(),
 )
     merged_mesh, face2node, node_group, node_type, node_item_id, node_component_id =
-        _build_merged_mesh_with_map_local(mtg; component_id_hints=component_id_hints)
+        _build_merged_mesh_with_map_local(
+            mtg;
+            scene_base_dir=dirname(source_path),
+            component_id_hints_by_item=component_id_hints_by_item,
+            component_id_hints_by_object=component_id_hints_by_object,
+        )
 
     verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
@@ -522,6 +576,7 @@ function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractSt
     base = dirname(source_ops)
     rewritten = String[]
     opf_cache = Dict{String,String}()
+    hints_by_object = Dict{String,Vector{Int}}()
 
     for line in lines
         s = strip(replace(line, '\r' => ""))
@@ -543,8 +598,9 @@ function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractSt
             continue
         end
 
-        src = isabspath(rel) ? normpath(rel) : abspath(normpath(joinpath(base, rel)))
+        src = _normalized_abs_path(base, rel)
         if ext == ".opf" && isfile(src)
+            hints = _opf_geometry_component_ids(src)
             dst = get(opf_cache, src, "")
             if isempty(dst)
                 tri = _opf_triangulated_text_if_needed(src)
@@ -556,6 +612,7 @@ function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractSt
                 end
                 opf_cache[src] = dst
             end
+            hints_by_object[normpath(dst)] = hints
             toks[3] = dst
         else
             toks[3] = abspath(src)
@@ -563,14 +620,16 @@ function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractSt
         push!(rewritten, join(toks, '\t'))
     end
 
-    rewritten
+    return rewritten, hints_by_object
 end
 
 function _read_ops_relaxed(path::AbstractString)
     lines = readlines(path)
     normalized = _normalize_ops_lines(lines)
+    hints_by_object_ref = Ref(Dict{String,Vector{Int}}())
     mtg = mktempdir(dirname(path)) do tmp_dir
-        normalized2 = _rewrite_ops_object_paths(normalized, path, tmp_dir)
+        normalized2, hints_by_object = _rewrite_ops_object_paths(normalized, path, tmp_dir)
+        hints_by_object_ref[] = hints_by_object
         tmp_ops = joinpath(tmp_dir, "scene-normalized.ops")
         open(tmp_ops, "w") do io
             write(io, join(normalized2, "\n"))
@@ -578,7 +637,7 @@ function _read_ops_relaxed(path::AbstractString)
         end
         PlantGeom.read_ops(tmp_ops)
     end
-    mtg
+    mtg, hints_by_object_ref[]
 end
 
 function _read_opf_relaxed(path::AbstractString)
@@ -628,21 +687,24 @@ with per-node metadata used by light interception and scattering.
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
     scene_xy_bounds = nothing
-    component_id_hints = Dict{Int,Vector{Int}}()
+    component_id_hints_by_item = Dict{Int,Vector{Int}}()
+    component_id_hints_by_object = Dict{String,Vector{Int}}()
     mtg =
         if ext == ".ops"
             scene_xy_bounds = _ops_scene_xy_bounds(path)
-            component_id_hints = _ops_component_id_hints(path)
-            _read_ops_relaxed(path)
+            component_id_hints_by_item = _ops_component_id_hints_by_item(path)
+            mtg0, hints0 = _read_ops_relaxed(path)
+            component_id_hints_by_object = hints0
+            mtg0
         elseif ext == ".opf"
-            component_id_hints[1] = _opf_geometry_component_ids(path)
+            component_id_hints_by_item[1] = _opf_geometry_component_ids(path)
             _read_opf_relaxed(path)
         elseif ext == ".gwa"
             PlantGeom.read_gwa(path)
         else
             error("Unsupported scene extension: $ext")
         end
-    _build_scene_geometry(mtg, path, scene_xy_bounds, component_id_hints)
+    _build_scene_geometry(mtg, path, scene_xy_bounds, component_id_hints_by_item, component_id_hints_by_object)
 end
 
 function _rows_to_namedtuples(table)

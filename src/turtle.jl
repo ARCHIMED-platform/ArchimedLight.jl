@@ -189,16 +189,15 @@ function _circle_lumen_area(centers_distance::Float64, radius1::Float64, radius2
     (r22 * acos(t1)) + (r12 * acos(t2)) - term
 end
 
-function _soc_fraction_hourly(diffuse::Float64, global_flux::Float64, sun_elevation_deg::Float64)
-    if sun_elevation_deg <= 0.0
+function _soc_fraction_hourly(diffuse::Float64, global_flux::Float64, elevation_rad::Float64)
+    if elevation_rad <= 0.0
         return 0.5
     end
 
     global_flux <= 0.0 && return 0.0
     ratio = diffuse / global_flux
 
-    sun_elevation = deg2rad(sun_elevation_deg)
-    sin_sun = sin(sun_elevation)
+    sin_sun = sin(elevation_rad)
     r_clear = 0.847 - (1.61 * sin_sun) + (1.04 * sin_sun * sin_sun)
     return max((ratio - r_clear) / (1.0 - r_clear), 0.0)
 end
@@ -233,14 +232,13 @@ function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::
 
     sun_dir = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
     sun_up = -sun_dir
-    coeff_soc = _soc_fraction_hourly(sky.diffuse_fraction, 1.0, sky.sun_elevation_deg)
-    coeff_clear = 1.0 - coeff_soc
-
     raw = zeros(Float64, n)
     total = 0.0
     for (k, i) in enumerate(sky_ids)
         sec_up = -turtle.sectors[i].direction
         elev = asin(clamp(sec_up[3], -1.0, 1.0))
+        coeff_soc = _soc_fraction_hourly(sky.diffuse_fraction, 1.0, elev)
+        coeff_clear = 1.0 - coeff_soc
         b_soc = _brightness_norm_soc(elev)
         b_clear = _brightness_norm_clear(sec_up, sun_up)
         b = coeff_soc * b_soc + coeff_clear * b_clear
