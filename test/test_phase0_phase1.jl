@@ -1485,7 +1485,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             )
             sensor_meas = sum(Float64(r["Ri_PAR_f"]) for r in rows_pix if string(r["group"]) == "sensors"; init=0.0)
             @test sensor_meas > 0.0
-            @test abs(plate_scat - sensor_meas) / max(abs(plate_scat), eps(Float64)) < 0.047
+            @test abs(plate_scat - sensor_meas) / max(abs(plate_scat), eps(Float64)) < 0.005
         else
             coeffs = ArchimedLight._group_optical_coeffs(cfg)
             ro = get(get(coeffs, "plates", Dict{String,Float64}()), "PAR", cfg.scattering_coeff_par) / 2.0
@@ -1496,11 +1496,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             is1 = _sum_item(rows_pix, 3, "Ri_PAR_f")
 
             v_plate2 = ip1 * ro
-            @test abs(v_plate2 - ip2) / max(abs(v_plate2), eps(Float64)) < 0.91
+            @test abs(v_plate2 - ip2) / max(abs(v_plate2), eps(Float64)) < 0.02
 
             v_sensor = ip1 * ro + ip2 * ro
-            @test abs(is2 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.86
-            @test abs(is1 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.046
+            @test abs(is2 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.02
+            @test abs(is1 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.005
         end
     end
 
@@ -1544,7 +1544,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
 
     scene_intercep = sum(Float64(r["Ri_q"]) for r in summary4.rows if string(r["group"]) != "sensors"; init=0.0)
     scene_irr = scene_intercep / stepdur / ground_area
-    @test abs(sky_irr - scene_irr) < 0.77
+    @test abs(sky_irr - scene_irr) < 0.65
 
     # Java fixture `test-links-stats` compares node-link counts across two pixel sizes.
     # It does not compare our internal all-direction hit count proxy.
@@ -1894,7 +1894,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Java test-lightsource1/2 parity: sky-only run and emitter-only run match on receiver components.
-    for (fx_name, tol) in (("test-lightsource1", 0.1), ("test-lightsource2", 0.16))
+    for (fx_name, tol) in (("test-lightsource1", 0.09), ("test-lightsource2", 0.14))
         cfg1, scene1, row1, step1 = _run_fixture_step(joinpath(test_root, fx_name, "config1.yml"))
         cfg2, scene2, row2, step2 = _run_fixture_step(joinpath(test_root, fx_name, "config2.yml"))
 
@@ -1976,10 +1976,10 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         if strict_one_node
             vals = [Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows if Int(r["item_id"]) == 1]
             @test !isempty(vals)
-            @test relerr(maximum(vals), source_power) < 0.1
+            @test relerr(maximum(vals), source_power) < 1e-6
         else
             tot = sum(Float64(r["area"]) * Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows; init=0.0)
-            @test relerr(tot, source_power) < 0.1
+            @test relerr(tot, source_power) < 1e-6
         end
     end
 
@@ -2003,7 +2003,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             Float64(r["Ri_NIR_f"]) * (1.0 - Float64(r["scat_factor_NIR"]))) * Float64(r["area"]) for r in rows;
             init=0.0,
         )
-        @test relerr(tot_abs, source_power) < 0.1
+        @test relerr(tot_abs, source_power) < 1e-6
     end
 
     # Java test-lightsource-box parity: closed box should intercept emitted lamp power.
@@ -2017,7 +2017,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     ).rows
     source_box = _model_radiance(joinpath(test_root, "test-lightsource-box", "model_box.yml"))
     tot_box = sum(Float64(r["area"]) * (Float64(r["Ri_PAR_0_f"]) + Float64(r["Ri_NIR_0_f"])) for r in rows_box; init=0.0)
-    @test relerr(tot_box, source_box) < 0.1
+    @test relerr(tot_box, source_box) < 1e-6
 
     # Java test-lightsource-box2 parity: absorbed power with scattering matches emitted lamp power.
     cfg_box2, scene_box2, row_box2, step_box2 = _run_fixture_step(joinpath(test_root, "test-lightsource-box2", "config.yml"))
@@ -2036,7 +2036,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         ) * Float64(r["area"]) for r in rows_box2;
         init=0.0,
     )
-    @test relerr(tot_box2, source_box2) < 0.2
+    @test relerr(tot_box2, source_box2) < 0.01
 
     function _check_summary_component_parity(cfg_path::String; use_scattering::Bool, max_scene_rel::Union{Nothing,Float64}=nothing)
         cfg = ArchimedLight.read_light_config(cfg_path)
@@ -2103,8 +2103,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Java summary tests parity.
-    _check_summary_component_parity(joinpath(test_root, "test-summary", "config.yml"); use_scattering=false, max_scene_rel=0.07)
-    _check_summary_component_parity(joinpath(test_root, "test-summary2", "config.yml"); use_scattering=false, max_scene_rel=0.01)
+    _check_summary_component_parity(joinpath(test_root, "test-summary", "config.yml"); use_scattering=false, max_scene_rel=0.002)
+    _check_summary_component_parity(joinpath(test_root, "test-summary2", "config.yml"); use_scattering=false, max_scene_rel=0.002)
     _check_summary_component_parity(joinpath(test_root, "test-summary3", "config.yml"); use_scattering=true)
     _check_summary_component_parity(joinpath(test_root, "test-summary4", "config.yml"); use_scattering=true)
 
