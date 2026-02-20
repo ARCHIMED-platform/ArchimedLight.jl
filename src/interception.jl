@@ -254,6 +254,17 @@ function _group_light_emitters(cfg::LightConfig)
     out
 end
 
+function _use_upper_hit_pixel_table(cfg::LightConfig)
+    # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
+    # or explicit light emitters require complete interception stacks.
+    if cfg.scattering
+        return false
+    end
+    isempty(_virtual_sensor_groups(cfg)) || return false
+    isempty(_group_light_emitters(cfg)) || return false
+    return true
+end
+
 function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
     by_group_type = _group_light_emitters(cfg)
     isempty(by_group_type) && return Dict{Int,Float64}(), Dict{Int,Float64}()
@@ -306,7 +317,7 @@ function _emitter_transfer_weights(
     for sector in turtle.sectors
         sector.source == :sun && continue
         pixel_hits, _, _, _ =
-            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx, upper_hit=false)
 
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
@@ -429,10 +440,11 @@ function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::Lig
     )
 end
 
-function _projection_cache_path(cache_ctx, direction)
+function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
-    joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * ".jls")
+    mode = upper_hit ? "u1" : "u0"
+    joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * "_" * mode * ".jls")
 end
 
 function _read_projection_cache(path::AbstractString)
@@ -619,6 +631,7 @@ function _project_triangle!(
     nx::Int,
     ny::Int,
     toricity::Bool,
+    upper_hit::Bool,
 )
     v = (p1, p2, p3)
     projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
@@ -696,10 +709,19 @@ function _project_triangle!(
 
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
+                zpix_f32 = Float64(Float32(zpix))
                 h = get!(pixel_hits, idx) do
                     Vector{Tuple{Float64,Int}}()
                 end
-                push!(h, (zpix, node_id))
+                if upper_hit
+                    if isempty(h)
+                        push!(h, (zpix_f32, node_id))
+                    elseif zpix_f32 > h[1][1]
+                        h[1] = (zpix_f32, node_id)
+                    end
+                else
+                    push!(h, (zpix_f32, node_id))
+                end
                 node_hits[node_id] = get(node_hits, node_id, 0) + 1
             end
         end
@@ -718,9 +740,10 @@ function _rasterize_direction_java(
     plotbox;
     cache_ctx=nothing,
     virtual_nodes=Set{Int}(),
+    upper_hit::Bool=false,
 )
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx)
+        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit)
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
@@ -735,8 +758,10 @@ function _rasterize_direction_java(
     visible_area = Dict{Int,Float64}()
     for stack in values(pixel_hits)
         isempty(stack) && continue
-        # Java uses a stable sort for hit heights; preserve insertion order on ties.
-        sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+        if !upper_hit
+            # Java uses a stable sort for hit heights; preserve insertion order on ties.
+            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+        end
 
         # VirtualSensor nodes are transparent: they receive without occluding other nodes.
         non_virtual_seen = false
@@ -760,8 +785,9 @@ function _rasterize_direction_java(
     return visible_area, node_hits
 end
 
-function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox)
+function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
     toricity = _cfg_toricity(cfg)
+    use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
@@ -789,18 +815,19 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
             plotbox.nx,
             plotbox.ny,
             toricity,
+            use_upper_hit,
         )
     end
 
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx)
+function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false)
     if cache_ctx === nothing
-        return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox)
+        return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     end
 
-    path = _projection_cache_path(cache_ctx, direction)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
@@ -808,7 +835,7 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
     end
 
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox)
+        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
 end
@@ -881,13 +908,6 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
         _is_ignored_node(node_id, scene, ignored) && continue
         push!(faces, all_faces[i])
         push!(face2node, node_id)
-    end
-    # Java projects meshes item-by-item, so pixel hit insertion is grouped by node id.
-    # Preserve that ordering before rasterization to reduce tie-order drift.
-    if !isempty(face2node)
-        perm = sortperm(collect(eachindex(face2node)); by=i -> face2node[i])
-        faces = faces[perm]
-        face2node = face2node[perm]
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
@@ -977,6 +997,7 @@ function compute_first_order(
 
     vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
     virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
+    upper_hit = _use_upper_hit_pixel_table(cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
 
     projected_area_per_node = Dict(id => 0.0 for id in node_ids)
@@ -995,6 +1016,7 @@ function compute_first_order(
                 plotbox;
                 cache_ctx=cache_ctx,
                 virtual_nodes=virtual_nodes,
+                upper_hit=upper_hit,
             )
 
         for (nid, h) in node_hits

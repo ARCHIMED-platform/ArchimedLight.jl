@@ -130,6 +130,7 @@ function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::
     n = length(turtle.sectors)
     vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    upper_hit = _use_upper_hit_pixel_table(cfg)
     pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
     hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
     for i in 1:n
@@ -141,6 +142,7 @@ function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::
             cfg,
             plotbox,
             cache_ctx=cache_ctx,
+            upper_hit=upper_hit,
         )
     end
     return pa_by_sector, hits_by_sector, node_ids
