@@ -47,6 +47,16 @@ function component_sector_report(
     total_hits = 0
     total_power = 0.0
     for i in eachindex(turtle.sectors)
+        _, _, projected_mesh_area, projected_pixels_area = ArchimedLight._direction_projection_cached(
+            vertices,
+            faces,
+            face2node,
+            turtle.sectors[i].direction,
+            cfg,
+            plotbox,
+            cache_ctx;
+            upper_hit=upper_hit,
+        )
         vis, node_hits = ArchimedLight._rasterize_direction_java(
             vertices,
             faces,
@@ -62,21 +72,23 @@ function component_sector_report(
         area = get(vis, target_nid, 0.0)
         flux_sw = fluxes.par[i] + fluxes.nir[i]
         power = area * flux_sw
+        pma = get(projected_mesh_area, target_nid, 0.0)
+        ppa = get(projected_pixels_area, target_nid, 0.0)
+        ratio = cfg.area_ratio && ppa > 0.0 ? pma / ppa : 1.0
         total_hits += hits
         total_power += power
-        if hits > 0 || area > 0.0 || power > 0.0
-            push!(
-                rows,
-                (
-                    dir=i,
-                    source=String(turtle.sectors[i].source),
-                    hits=hits,
-                    visible_area=area,
-                    flux_sw=flux_sw,
-                    power_sw=power,
-                ),
-            )
-        end
+        push!(
+            rows,
+            (
+                dir=i,
+                source=String(turtle.sectors[i].source),
+                hits=hits,
+                visible_area=area,
+                flux_sw=flux_sw,
+                power_sw=power,
+                area_ratio=ratio,
+            ),
+        )
     end
 
     step = ArchimedLight.run_light_step(scene, row, cfg)
@@ -101,7 +113,55 @@ function component_sector_report(
     )
 end
 
-function print_report(rep; topn::Int=12)
+function _resolve_java_debug_dir(path::AbstractString)
+    isdir(path) || return nothing
+    has_direct_logs = !isempty(readdir(path; join=true))
+    if has_direct_logs && !isempty(filter(p -> startswith(basename(p), "log-arearatio-"), readdir(path; join=true)))
+        return path
+    end
+    step_dirs = filter(p -> isdir(p), readdir(path; join=true))
+    for d in sort(step_dirs)
+        if !isempty(filter(p -> startswith(basename(p), "log-arearatio-"), readdir(d; join=true)))
+            return d
+        end
+    end
+    return nothing
+end
+
+function java_debug_metrics(debug_dir::AbstractString, key::Tuple{Int,Int})
+    data_dir = _resolve_java_debug_dir(debug_dir)
+    data_dir === nothing && return nothing
+
+    ratio = Dict{Int,Float64}()
+    vis = Dict{Int,Float64}()
+
+    for p in sort(readdir(data_dir; join=true))
+        b = basename(p)
+        if startswith(b, "log-arearatio-")
+            rows = read_java_csv(p)
+            for r in rows
+                item = to_int(getproperty(r, :plantid))
+                comp = to_int(getproperty(r, :nodeid))
+                (item, comp) == key || continue
+                dir = to_int(getproperty(r, :dir))
+                ratio[dir + 1] = Float64(getproperty(r, :arearatio))
+            end
+        elseif startswith(b, "log-visiblearea-")
+            rows = read_java_csv(p)
+            for r in rows
+                item = to_int(getproperty(r, :plantid))
+                comp = to_int(getproperty(r, :nodeid))
+                (item, comp) == key || continue
+                dir = to_int(getproperty(r, :dir))
+                vis[dir + 1] = Float64(getproperty(r, :visiblearea))
+            end
+        end
+    end
+
+    return (dir_area_ratio=ratio, dir_visible_area=vis, source_dir=data_dir)
+end
+
+function print_report(rep; topn::Int=12, java_debug=nothing)
     println()
     println("mode all_in_turtle=$(rep.all_in_turtle) key=$(rep.key) node=$(rep.node_id)")
     println("----------------------------------------------------------------")
@@ -129,6 +189,21 @@ function print_report(rep; topn::Int=12)
             "power=$(round(r.power_sw; digits=10))",
         )
     end
+
+    if java_debug !== nothing
+        println()
+        println("java debug dir: $(java_debug.source_dir)")
+        println("dir-by-dir area ratio / visible area:")
+        for r in sort(rep.rows; by=x -> x.dir)
+            j_ratio = get(java_debug.dir_area_ratio, r.dir, NaN)
+            j_vis = get(java_debug.dir_visible_area, r.dir, NaN)
+            println(
+                "  dir=$(lpad(r.dir, 3)) " *
+                "ratio julia=$(round(r.area_ratio; digits=9)) java=$(round(j_ratio; digits=9)) " *
+                "vis julia=$(round(r.visible_area; digits=10)) java=$(round(j_vis; digits=10))",
+            )
+        end
+    end
 end
 
 function parse_mode(arg::String)
@@ -145,13 +220,14 @@ end
 
 function main()
     length(ARGS) >= 3 || error(
-        "usage: julia --project=. scripts/component_parity_debug.jl <fixture> <item_id> <component_id> [mode=both] [topn=12]",
+        "usage: julia --project=. scripts/component_parity_debug.jl <fixture> <item_id> <component_id> [mode=both] [topn=12] [java_debug_dir]",
     )
     fixture_name = String(ARGS[1])
     item_id = parse(Int, ARGS[2])
     component_id = parse(Int, ARGS[3])
     mode = length(ARGS) >= 4 ? parse_mode(ARGS[4]) : (false, true)
     topn = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 12
+    java_debug_dir = length(ARGS) >= 6 ? String(ARGS[6]) : nothing
 
     fixtures = Dict(f.name => f for f in light_parity_fixtures())
     haskey(fixtures, fixture_name) || error("unknown fixture $(repr(fixture_name))")
@@ -160,7 +236,8 @@ function main()
 
     for all_in_turtle in mode
         rep = component_sector_report(fx, key; all_in_turtle=all_in_turtle)
-        print_report(rep; topn=topn)
+        jdbg = java_debug_dir === nothing ? nothing : java_debug_metrics(java_debug_dir, key)
+        print_report(rep; topn=topn, java_debug=jdbg)
     end
 end
 
