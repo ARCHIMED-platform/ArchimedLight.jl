@@ -554,12 +554,14 @@ function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
 end
 
 function _project_point_ground(point, direction)
-    abs(direction[3]) <= eps(Float64) && return nothing
-    dz = -point[3] / direction[3]
-    x = point[1] + direction[1] * dz
-    y = point[2] + direction[2] * dz
+    dzden = Float32(direction[3])
+    dzden == 0.0f0 && return nothing
+    pz = Float32(point[3])
+    dz = -pz / dzden
+    x = Float32(point[1]) + Float32(direction[1]) * dz
+    y = Float32(point[2]) + Float32(direction[2]) * dz
     # Keep source altitude for stack sorting as in Java.
-    StaticArrays.SVector{3,Float64}(x, y, point[3])
+    StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(pz))
 end
 
 function _triangle_area_xy(p1, p2, p3)
@@ -590,17 +592,17 @@ end
 
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
     p_min, p_max = p1[1] < p2[1] ? (p1, p2) : (p2, p1)
-    dx = p_max[1] - p_min[1]
+    dx = Float32(p_max[1] - p_min[1])
     dx < 1e-6 && return
 
-    slope = (p_max[2] - p_min[2]) / dx
-    i_min = ceil(Int, p_min[1])
-    i_max = floor(Int, p_max[1])
+    slope = Float32((Float32(p_max[2]) - Float32(p_min[2])) / dx)
+    i_min = ceil(Int, Float32(p_min[1]))
+    i_max = floor(Int, Float32(p_max[1]))
 
     @inbounds for i in i_min:i_max
         i0 = i - i_origin
-        yi = slope * (i - p_min[1]) + p_min[2]
-        j = trunc(Int, floor(yi) + 0.5)
+        yi = slope * Float32(i - Float32(p_min[1])) + Float32(p_min[2])
+        j = trunc(Int, floor(Float64(yi)) + 0.5)
         if 0 <= i0 < length(minY)
             idx = i0 + 1
             minY[idx] = min(minY[idx], j)
@@ -641,9 +643,10 @@ function _project_triangle!(
         pp = _project_point_ground(v[k], direction)
         pp === nothing && return
         projected[k] = StaticArrays.SVector{3,Float64}(pp[1], pp[2], 0.0)
-        x = (pp[1] - origin_x) / x_pix
-        y = (pp[2] - origin_y) / y_pix
-        pix_points[k] = StaticArrays.SVector{3,Float64}(x, y, pp[3])
+        x = Float32((Float32(pp[1]) - Float32(origin_x)) / Float32(x_pix))
+        y = Float32((Float32(pp[2]) - Float32(origin_y)) / Float32(y_pix))
+        z = Float32(pp[3])
+        pix_points[k] = StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
     end
 
     iMin = floor(Int, pix_points[1][1])
@@ -675,29 +678,33 @@ function _project_triangle!(
     end
 
     normal = _compute_normal(pix_points)
-    slopeX, slopeY =
+    slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
-            (normal[1] / normal[3], normal[2] / normal[3])
+            (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
         else
             # Java directions are upward (z>=0 here); keep parity when internal
             # direction conventions use incoming/downward vectors.
-            dz = abs(direction[3])
-            (dz * normal[1], dz * normal[2])
+            dz = Float32(abs(direction[3]))
+            (dz * Float32(normal[1]), dz * Float32(normal[2]))
         end
 
-    z0 = pix_points[1][3] + slopeX * (pix_points[1][1] - iMin) + slopeY * (pix_points[1][2] - jMin)
+    z0 = Float32(pix_points[1][3])
+    z0 += slopeX_f32 * (Float32(pix_points[1][1]) - Float32(iMin))
+    z0 += slopeY_f32 * (Float32(pix_points[1][2]) - Float32(jMin))
 
+    tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
+    buffered_hits = Tuple{Int,Float64}[]
     nb_hits = 0
     @inbounds for i in iMin:(iMax - 1)
         ni = i - iMin
-        zi = z0 - slopeX * ni
+        zi = z0 - slopeX_f32 * Float32(ni)
         ymin_i = minY[ni + 1]
         ymax_i = maxY[ni + 1]
 
         for j in ymin_i:(ymax_i - 1)
             nj = j - jMin
-            zpix = zi - slopeY * nj
-            zpix = clamp(zpix, kMin, kMax)
+            zpix = zi - slopeY_f32 * Float32(nj)
+            zpix = clamp(zpix, Float32(kMin), Float32(kMax))
             nb_hits += 1
 
             ii, jj =
@@ -709,27 +716,34 @@ function _project_triangle!(
 
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
-                zpix_f32 = Float64(Float32(zpix))
-                h = get!(pixel_hits, idx) do
-                    Vector{Tuple{Float64,Int}}()
-                end
-                if upper_hit
-                    if isempty(h)
-                        push!(h, (zpix_f32, node_id))
-                    elseif zpix_f32 > h[1][1]
-                        h[1] = (zpix_f32, node_id)
-                    end
-                else
-                    push!(h, (zpix_f32, node_id))
-                end
-                node_hits[node_id] = get(node_hits, node_id, 0) + 1
+                zpix_f32 = Float64(zpix)
+                push!(buffered_hits, (idx, zpix_f32))
             end
         end
     end
 
-    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + _triangle_area_xy(projected[1], projected[2], projected[3])
+    for (idx, zpix_f32) in buffered_hits
+        h = get!(pixel_hits, idx) do
+            Vector{Tuple{Float64,Int}}()
+        end
+        if upper_hit
+            if isempty(h)
+                push!(h, (zpix_f32, node_id))
+            elseif zpix_f32 > h[1][1]
+                h[1] = (zpix_f32, node_id)
+            end
+        else
+            push!(h, (zpix_f32, node_id))
+        end
+        node_hits[node_id] = get(node_hits, node_id, 0) + 1
+    end
+
+    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + tri_proj_area
     projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
 end
+
+@inline _hit_height(hit) = hit[1]
+@inline _hit_node(hit) = hit[2]
 
 function _rasterize_direction_java(
     vertices,
@@ -758,15 +772,14 @@ function _rasterize_direction_java(
     visible_area = Dict{Int,Float64}()
     for stack in values(pixel_hits)
         isempty(stack) && continue
-        if !upper_hit
-            # Java uses a stable sort for hit heights; preserve insertion order on ties.
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
-        end
+        # Java uses a stable sort for hit heights; preserve insertion order on ties.
+        sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 
         # VirtualSensor nodes are transparent: they receive without occluding other nodes.
         non_virtual_seen = false
         first_non_virtual = 0
-        for (_, nid) in stack
+        for hit in stack
+            nid = _hit_node(hit)
             if nid in virtual_nodes
                 if !non_virtual_seen
                     visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)

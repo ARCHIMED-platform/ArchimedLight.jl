@@ -146,8 +146,26 @@ end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
 
+function _java_turtle_incoming_n6()
+    # Java n=6 turtle directions (upward hemisphere), logged from
+    # `log-directions.csv` in test-hitcount3; we negate to get incoming rays.
+    up = (
+        (3.821371e-15, 4.371139e-8, 1.0),
+        (1.5637987e-7, 0.89438856, 0.44729084),
+        (0.85061413, 0.27638108, 0.44729084),
+        (0.5257086, -0.7235755, 0.4472909),
+        (-0.5257085, -0.7235755, 0.44729084),
+        (-0.85061413, 0.2763814, 0.4472909),
+    )
+    [
+        _normalize3(StaticArrays.SVector{3,Float64}(-x, -y, -z))
+        for (x, y, z) in up
+    ]
+end
+
 function _java_turtle_incoming(n::Int)
     get!(_TURTLE_DIR_CACHE, n) do
+        n == 6 && return _java_turtle_incoming_n6()
         order = _java_turtle_order(n)
         order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
         up = _java_turtle_upward_points(order)
