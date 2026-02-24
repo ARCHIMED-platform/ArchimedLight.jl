@@ -118,34 +118,19 @@ function _triangle_area3d(p1, p2, p3)
 end
 
 function _node_attrs(node)
-    try
-        getfield(node, :attributes)
-    catch
-        nothing
-    end
+    MultiScaleTreeGraph.attributes(node)
 end
 
 function _node_children(node)
-    try
-        getfield(node, :children)
-    catch
-        nothing
-    end
+    MultiScaleTreeGraph.children(node)
 end
 
 function _has_attr(attrs, key::Symbol)
-    attrs isa AbstractDict || return false
-    haskey(attrs, key) || haskey(attrs, String(key))
+    hasproperty(attrs, key)
 end
 
 function _dict_attr(attrs, key::Symbol)
-    attrs isa AbstractDict || return nothing
-    if haskey(attrs, key)
-        return attrs[key]
-    elseif haskey(attrs, String(key))
-        return attrs[String(key)]
-    end
-    return nothing
+    hasproperty(attrs, key) ? getproperty(attrs, key) : nothing
 end
 
 function _as_int_or(x, default::Int)
@@ -172,30 +157,18 @@ function _node_item_id(attrs, default::Int)
 end
 
 function _node_type_name(node, attrs, default::String="")
-    if attrs isa AbstractDict
-        for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
-            v = _dict_attr(attrs, key)
-            v === nothing && continue
-            s = strip(string(v))
-            isempty(s) || return s
-        end
+    for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
+        v = _dict_attr(attrs, key)
+        v === nothing && continue
+        s = strip(string(v))
+        isempty(s) || return s
     end
-    s = try
-        string(MultiScaleTreeGraph.symbol(node))
-    catch
-        ""
-    end
+    s = string(MultiScaleTreeGraph.symbol(node))
     isempty(s) ? default : s
 end
 
 function _node_component_id(node, default::Int)
-    idv =
-        try
-            getfield(node, :id)
-        catch
-            nothing
-        end
-    idv === nothing && return default
+    idv = MultiScaleTreeGraph.index(node)
     # Java component ids match MTG node ids with +1 offset.
     _as_int_or(idv, default) + 1
 end
@@ -272,7 +245,6 @@ function _ops_component_id_hints_by_item(path::AbstractString)
 end
 
 function _component_hint_path(attrs, scene_base_dir::AbstractString)
-    attrs isa AbstractDict || return nothing
     fp = _dict_attr(attrs, :filePath)
     fp === nothing && return nothing
     s = strip(string(fp))
@@ -305,18 +277,13 @@ function _collect_mesh_nodes!(
     type_name = _node_type_name(node, attrs, "")
     object_ids = current_object_ids
     object_cursor = current_object_cursor
-    if attrs isa AbstractDict
-        if haskey(attrs, :functional_group)
-            group = string(attrs[:functional_group])
-        elseif haskey(attrs, "functional_group")
-            group = string(attrs["functional_group"])
-        end
+    fg = _dict_attr(attrs, :functional_group)
+    fg !== nothing && (group = string(fg))
 
-        object_path = _component_hint_path(attrs, scene_base_dir)
-        if object_path !== nothing && haskey(component_id_hints_by_object, object_path)
-            object_ids = component_id_hints_by_object[object_path]
-            object_cursor = Ref(1)
-        end
+    object_path = _component_hint_path(attrs, scene_base_dir)
+    if object_path !== nothing && haskey(component_id_hints_by_object, object_path)
+        object_ids = component_id_hints_by_object[object_path]
+        object_cursor = Ref(1)
     end
 
     if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)

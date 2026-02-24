@@ -2,6 +2,7 @@ import GeometryBasics
 import StaticArrays
 import PlantGeom
 import YAML
+import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Serialization
 
@@ -488,35 +489,16 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
         return scene.scene_xy_bounds
     end
 
-    attrs =
-        if hasproperty(scene.mtg, :attributes)
-            getfield(scene.mtg, :attributes)
-        else
-            nothing
-        end
-
-    if attrs isa AbstractDict
-        dims =
-            if haskey(attrs, :scene_dimensions)
-                attrs[:scene_dimensions]
-            elseif haskey(attrs, "scene_dimensions")
-                attrs["scene_dimensions"]
-            else
-                nothing
-            end
-
-        if dims !== nothing
-            try
-                p0 = dims[1]
-                p1 = dims[2]
-                x0 = Float64(p0[1])
-                y0 = Float64(p0[2])
-                x1 = Float64(p1[1])
-                y1 = Float64(p1[2])
-                return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-            catch
-            end
-        end
+    attrs = MultiScaleTreeGraph.attributes(scene.mtg)
+    if hasproperty(attrs, :scene_dimensions)
+        dims = getproperty(attrs, :scene_dimensions)
+        p0 = dims[1]
+        p1 = dims[2]
+        x0 = Float64(p0[1])
+        y0 = Float64(p0[2])
+        x1 = Float64(p1[1])
+        y1 = Float64(p1[2])
+        return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     end
 
     xs = Float64[p[1] for p in vertices]
