@@ -6,6 +6,44 @@ function _normalize3(v)
     n == 0.0 ? v : v / n
 end
 
+function _normalize3_java(v)
+    x = Float32(v[1])
+    y = Float32(v[2])
+    z = Float32(v[3])
+    n2 = (x * x) + (y * y) + (z * z)
+    n2 <= 0.0f0 && return StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
+    n = sqrt(n2)
+    StaticArrays.SVector{3,Float64}(Float64(x / n), Float64(y / n), Float64(z / n))
+end
+
+function _as_bool_local_turtle(x, default::Bool)
+    x === nothing && return default
+    x isa Bool && return x
+    if x isa Number
+        return x != 0
+    end
+    s = lowercase(strip(string(x)))
+    s in ("", "nothing", "missing", "null") && return default
+    s in ("true", "t", "yes", "y", "on", "1") && return true
+    s in ("false", "f", "no", "n", "off", "0") && return false
+    return default
+end
+
+function _use_java_logged_turtle_dirs(cfg::LightConfig)
+    raw = cfg.raw
+    v = get(raw, "java_logged_turtle_dirs", nothing)
+    if v === nothing
+        props = get(raw, "properties", nothing)
+        if props isa AbstractDict
+            v = get(props, "java_logged_turtle_dirs", nothing)
+        end
+    end
+    if v === nothing
+        v = get(ENV, "ARCHIMEDLIGHT_JAVA_LOGGED_TURTLE_DIRS", nothing)
+    end
+    _as_bool_local_turtle(v, false)
+end
+
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
@@ -35,21 +73,26 @@ function _java_turtle_order(n::Int)
 end
 
 function _java_seed_points_up()
-    elevation6 = (90.0, 26.57, 26.57, 26.57, 26.57, 26.57)
-    azimuth6 = (0.0, 180.0, 252.0, 324.0, 36.0, 108.0)
+    elevation6 = Float32[90.0f0, 26.57f0, 26.57f0, 26.57f0, 26.57f0, 26.57f0]
+    azimuth6 = Float32[0.0f0, 180.0f0, 252.0f0, 324.0f0, 36.0f0, 108.0f0]
 
     pts = StaticArrays.SVector{3,Float64}[]
     for i in eachindex(elevation6)
         elevation = deg2rad(elevation6[i])
-        azimuth = deg2rad(azimuth6[i] + 180.0)
-        x = cos(elevation) * sin(azimuth)
-        y = cos(elevation) * cos(azimuth)
+        azimuth = deg2rad(azimuth6[i] + 180.0f0)
+        c = cos(elevation)
+        x = c * sin(azimuth)
+        y = c * cos(azimuth)
         z = sin(elevation)
         p = StaticArrays.SVector{3,Float64}(x, y, z)
         push!(pts, p)
         push!(pts, -p)
     end
     pts
+end
+
+function _java_seed_points_up_f32()
+    _java_seed_points_up()
 end
 
 function _hull_faces_12(points)
@@ -125,6 +168,19 @@ function _java_turtle_upward_points(order::Int)
     [p for p in points if p[3] >= 0.0]
 end
 
+function _java_turtle_upward_points_f32(order::Int)
+    order == 0 && return [StaticArrays.SVector{3,Float64}(0.0, 0.0, 1.0)]
+
+    points = _java_seed_points_up_f32()
+    faces = _hull_faces_12(points)
+
+    for _ in 2:order
+        points, faces = _refine_turtle_mesh(points, faces)
+    end
+
+    [p for p in points if p[3] >= 0.0]
+end
+
 function _hemisphere_fibonacci_incoming(n::Int)
     dirs = Vector{StaticArrays.SVector{3,Float64}}(undef, n)
     if n == 1
@@ -145,8 +201,9 @@ function _hemisphere_fibonacci_incoming(n::Int)
 end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
+const _TURTLE_DIR_COMPAT_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
 
-function _java_turtle_incoming_n6()
+function _java_turtle_incoming_n6_logged()
     # Java n=6 turtle directions (upward hemisphere), logged from
     # `log-directions.csv` in test-hitcount3; we negate to get incoming rays.
     up = (
@@ -158,18 +215,30 @@ function _java_turtle_incoming_n6()
         (-0.85061413, 0.2763814, 0.4472909),
     )
     [
-        _normalize3(StaticArrays.SVector{3,Float64}(-x, -y, -z))
+        _normalize3_java(StaticArrays.SVector{3,Float64}(-x, -y, -z))
         for (x, y, z) in up
     ]
 end
 
 function _java_turtle_incoming(n::Int)
     get!(_TURTLE_DIR_CACHE, n) do
-        n == 6 && return _java_turtle_incoming_n6()
+        n == 6 && return _java_turtle_incoming_n6_logged()
         order = _java_turtle_order(n)
         order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
         up = _java_turtle_upward_points(order)
-        [_normalize3(-u) for u in up]
+        [_normalize3_java(-u) for u in up]
+    end
+end
+
+function _java_turtle_incoming_logged(n::Int)
+    n == 6 && return _java_turtle_incoming_n6_logged()
+    # For larger sector counts, compatibility mode uses a Float32 turtle build
+    # (seed/trigonometry) which is closer to Java internals than Float64 defaults.
+    return get!(_TURTLE_DIR_COMPAT_CACHE, n) do
+        order = _java_turtle_order(n)
+        order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
+        up = _java_turtle_upward_points_f32(order)
+        [_normalize3_java(-u) for u in up]
     end
 end
 
@@ -281,12 +350,17 @@ end
 
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
 sector when `cfg.all_in_turtle == false`.
+
+Set `java_logged_turtle_dirs: true` (or `properties.java_logged_turtle_dirs: true`) in the
+light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
+Float32 Java-style construction for larger sector counts).
 """
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(cfg.turtle_sectors, 1)
+    use_logged_dirs = _use_java_logged_turtle_dirs(cfg)
     dirs =
         if _java_turtle_order(n) >= 0
-            _java_turtle_incoming(n)
+            use_logged_dirs ? _java_turtle_incoming_logged(n) : _java_turtle_incoming(n)
         else
             _hemisphere_fibonacci_incoming(n)
         end
