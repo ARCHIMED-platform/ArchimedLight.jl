@@ -787,6 +787,37 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         sort!(out; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
         out
     end
+    function _component_series_rows(scene, series, cfg, meteo_rows)
+        cols = ["step_number", "item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"]
+        out = Dict{Tuple{Int,Int,Int},Dict{String,Any}}()
+        for i in eachindex(series)
+            step = series[i]
+            row = meteo_rows[i]
+            rows = ArchimedLight.component_values_table(
+                scene,
+                step,
+                cfg;
+                meteo_row=row,
+                step_number=i - 1,
+                columns=cols,
+            ).rows
+            for r in rows
+                key = (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"]))
+                out[key] = Dict(
+                    "step_number" => key[1],
+                    "item_id" => key[2],
+                    "component_id" => key[3],
+                    "Ri_PAR_0_f" => Float64(r["Ri_PAR_0_f"]),
+                    "Ri_NIR_0_f" => Float64(r["Ri_NIR_0_f"]),
+                    "Ri_PAR_f" => Float64(r["Ri_PAR_f"]),
+                    "Ri_NIR_f" => Float64(r["Ri_NIR_f"]),
+                )
+            end
+        end
+        rows = collect(values(out))
+        sort!(rows; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+        rows
+    end
     function _scene_snapshot_rows(scene, series, cfg, meteo_rows)
         cols = ["step_number", "date", "hour_start", "hour_end", "RI_SW_f"]
         rows = ArchimedLight.scene_values_table(
@@ -2235,6 +2266,188 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         @test max_abs_float_dict_diff(s4_1[i].budget.ra_par_q_per_node, s4_2[i].budget.ra_par_q_per_node) == 0.0
         @test max_abs_float_dict_diff(s4_1[i].budget.ra_nir_q_per_node, s4_2[i].budget.ra_nir_q_per_node) == 0.0
     end
+
+    # Java test-parallel and test-parallel2 parity:
+    # cache-radiation toggles must keep component light outputs stable.
+    function _parallel_cfg_with_overrides(
+        cfg::ArchimedLight.LightConfig;
+        all_in_turtle::Union{Nothing,Bool}=nothing,
+        cache_radiation::Union{Nothing,Bool}=nothing,
+    )
+        raw = copy(cfg.raw)
+        a = all_in_turtle === nothing ? cfg.all_in_turtle : Bool(all_in_turtle)
+        c = cache_radiation === nothing ? cfg.cache_radiation : Bool(cache_radiation)
+        raw["all_in_turtle"] = a
+        raw["cache_radiation"] = c
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            a,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            cfg.scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            c,
+            raw,
+        )
+    end
+
+    function _parallel_rows(fx_name::String; all_in_turtle::Union{Nothing,Bool}=nothing, cache_radiation::Bool=false)
+        fx = fixtures[fx_name]
+        cfg0 = ArchimedLight.read_light_config(fx.config_path)
+        cfg = _parallel_cfg_with_overrides(cfg0; all_in_turtle=all_in_turtle, cache_radiation=cache_radiation)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        selected = ArchimedLight.prepare_meteo(meteo, cfg)
+        series = ArchimedLight.run_light_series(scene, selected, cfg)
+        _component_series_rows(scene, series, cfg, selected.rows)
+    end
+
+    function _assert_parallel_fixture_cache_invariance(fx_name::String; all_in_turtle::Union{Nothing,Bool}=nothing)
+        rows_uncached = _parallel_rows(fx_name; all_in_turtle=all_in_turtle, cache_radiation=false)
+        rows_cached = _parallel_rows(fx_name; all_in_turtle=all_in_turtle, cache_radiation=true)
+        _assert_rows_match(
+            rows_uncached,
+            rows_cached,
+            ["step_number", "item_id", "component_id"],
+            ["Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"];
+            atol=parity_limit(:absorb_cached_abs),
+            rtol=0.0,
+            label="parallel cache invariance fixture=$(fx_name) all_in_turtle=$(all_in_turtle)",
+        )
+    end
+
+    _assert_parallel_fixture_cache_invariance("test-parallel")
+    for all_in_turtle in (true, false)
+        _assert_parallel_fixture_cache_invariance("test-parallel2"; all_in_turtle=all_in_turtle)
+    end
+
+    # Frozen Java snapshots for compare fixtures (light-only scope).
+    function _csv_columns(rows)
+        isempty(rows) && return String[]
+        String[string(n) for n in propertynames(first(rows))]
+    end
+
+    function _stack_component_rows_with_columns(scene, series, cfg, meteo_rows, cols::Vector{String})
+        out = Dict{String,Any}[]
+        for i in eachindex(series)
+            rows = ArchimedLight.component_values_table(
+                scene,
+                series[i],
+                cfg;
+                meteo_row=meteo_rows[i],
+                step_number=i - 1,
+                columns=cols,
+            ).rows
+            append!(out, rows)
+        end
+        sort!(out; by=r -> (Int(r["step_number"]), Int(r["item_id"]), Int(r["component_id"])))
+        out
+    end
+
+    compare_fx_names = (
+        "test-compare-cafeier1",
+        "test-compare-cafeier2",
+        "test-compare-cafeier3",
+        "test-compare-cafeier4",
+        "test-compare-cafeier5",
+        "test-compare-simpleplant",
+        "test-compare-two_coffee",
+        "test-compare-timestep",
+    )
+    for fx_name in compare_fx_names
+        fx = fixtures[fx_name]
+        expected_comp_path = _expected_component_values_path(fx)
+        expected_scene_path = _expected_scene_values_path(fx)
+        @test expected_comp_path !== nothing
+        @test expected_scene_path !== nothing
+
+        expected_comp = read_java_csv(expected_comp_path)
+        expected_scene = read_java_csv(expected_scene_path)
+        @test !isempty(expected_comp)
+        @test !isempty(expected_scene)
+        sort!(expected_comp; by=r -> (to_int(getproperty(r, :step_number)), to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id))))
+        sort!(expected_scene; by=r -> to_int(getproperty(r, :step_number)))
+
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        selected = ArchimedLight.prepare_meteo(meteo, cfg)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
+        @test length(series) == length(selected.rows)
+
+        comp_cols = _csv_columns(expected_comp)
+        scene_cols = _csv_columns(expected_scene)
+        observed_comp = _stack_component_rows_with_columns(scene, series, cfg, selected.rows, comp_cols)
+        observed_scene = ArchimedLight.scene_values_table(scene, series, cfg; meteo_rows=selected.rows, columns=scene_cols).rows
+        sort!(observed_scene; by=r -> Int(r["step_number"]))
+
+        _assert_rows_match(
+            expected_comp,
+            observed_comp,
+            ["step_number", "item_id", "component_id"],
+            [c for c in comp_cols if !(c in ("step_number", "item_id", "component_id"))];
+            atol=1e-3,
+            rtol=3e-3,
+            label="compare fixture component snapshot $(fx_name)",
+        )
+        _assert_rows_match(
+            expected_scene,
+            observed_scene,
+            ["step_number"],
+            [c for c in scene_cols if c != "step_number"];
+            atol=1e-3,
+            rtol=3e-3,
+            label="compare fixture scene snapshot $(fx_name)",
+        )
+
+        expected_summary_path = _expected_summary_path(fx)
+        if expected_summary_path !== nothing
+            expected_summary = read_java_csv(expected_summary_path)
+            !isempty(expected_summary) || continue
+            sort!(
+                expected_summary;
+                by=r -> (
+                    to_int(getproperty(r, :step_number)),
+                    string(getproperty(r, :group)),
+                    string(getproperty(r, :type)),
+                    to_int(getproperty(r, :item_id)),
+                ),
+            )
+            summary_cols = _csv_columns(expected_summary)
+            summary_key_cols = [c for c in ("step_number", "group", "type", "item_id") if c in summary_cols]
+            observed_summary = ArchimedLight.summary_values_table(
+                scene,
+                series,
+                cfg;
+                meteo_rows=selected.rows,
+                start_step_number=0,
+                columns=summary_cols,
+            ).rows
+            sort!(
+                observed_summary;
+                by=r -> (
+                    Int(get(r, "step_number", 0)),
+                    string(get(r, "group", "")),
+                    string(get(r, "type", "")),
+                    Int(get(r, "item_id", 0)),
+                ),
+            )
+            _assert_rows_match(
+                expected_summary,
+                observed_summary,
+                summary_key_cols,
+                [c for c in summary_cols if !(c in summary_key_cols)];
+                atol=1e-3,
+                rtol=3e-3,
+                label="compare fixture summary snapshot $(fx_name)",
+            )
+        end
+    end
     end
 
         _stage_done("Scattering links outputs and lightsource parity", _stage_t0)
@@ -2366,6 +2579,24 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     @test _steps_for_range("2016/06/12-08:40:00,2016/06/12-09:15:00") == [2, 3]
     @test _steps_for_range("2016/06/12-08:45:00,2016/06/12-09:45:00") == [2, 3, 4]
     @test _steps_for_range("2016/06/12-07:45:00,2016/06/12-11:15:00") == [1, 2, 3, 4, 5, 6]
+
+    # Java test-rhvpd parity: RH/VPD columns and use-tags consistency.
+    rhvpd_root = joinpath(test_root, "test-rhvpd")
+    cfg_rhvpd_base = ArchimedLight.read_light_config(joinpath(rhvpd_root, "config.yml"))
+    scene_rhvpd = ArchimedLight.read_scene(cfg_rhvpd_base.scene)
+
+    function _run_rhvpd(file_name::String)
+        cfg = _light_cfg_with_meteo(cfg_rhvpd_base, joinpath(rhvpd_root, file_name))
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        ArchimedLight.run_light_step(scene_rhvpd, first(meteo.rows), cfg)
+    end
+
+    for file_name in ("meteo1.csv", "meteo2.csv", "meteo3.csv", "meteo4.csv", "meteo5.csv", "meteo6.csv")
+        @test _run_rhvpd(file_name).sky.ri_sw_f > 0.0
+    end
+    for file_name in ("meteo7.csv", "meteo8.csv", "meteo9.csv", "meteo10.csv", "meteo11.csv", "meteo12.csv")
+        @test_throws ErrorException _run_rhvpd(file_name)
+    end
 
     # Java test-meteo-stepduration parity: hour_end and step_duration encodings are equivalent;
     # malformed step_duration must fail.
