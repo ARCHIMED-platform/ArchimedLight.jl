@@ -30,52 +30,48 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
 
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
-            sort!(stack, by=x -> x[1], rev=true)
+            # Java PixelTable uses a stable height sort (Collections.sort on comparator).
+            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
-            non_virtual_idx = Int[]
-            for i in eachindex(stack)
-                nid = stack[i][2]
-                !(nid in virtual_nodes) && push!(non_virtual_idx, i)
+            # Mirror EnergyTransferTask: carry nearest non-virtual diffuser upward/downward
+            # across virtual sensors, then transfer between adjacent stack positions.
+            n_hits = length(stack)
+            node_ids_stack = Vector{Int}(undef, n_hits)
+            @inbounds for i in 1:n_hits
+                node_ids_stack[i] = stack[i][2]
             end
 
-            # Link non-virtual nodes as if virtual sensors were absent.
-            for h in 1:(length(non_virtual_idx) - 1)
-                above = stack[non_virtual_idx[h]][2]
-                below = stack[non_virtual_idx[h + 1]][2]
-                pair_counts[(above, below)] = get(pair_counts, (above, below), 0) + 1
-                pair_counts[(below, above)] = get(pair_counts, (below, above), 0) + 1
+            scatt_up = Vector{Int}(undef, n_hits)
+            up = 0
+            @inbounds for h in n_hits:-1:1
+                nid = node_ids_stack[h]
+                if !(nid in virtual_nodes)
+                    up = nid
+                end
+                scatt_up[h] = up
             end
 
-            # Virtual sensors receive from closest non-virtual neighbours above/below.
-            for i in eachindex(stack)
-                vid = stack[i][2]
-                vid in virtual_nodes || continue
+            scatt_down = Vector{Int}(undef, n_hits)
+            down = 0
+            @inbounds for h in 1:n_hits
+                nid = node_ids_stack[h]
+                if !(nid in virtual_nodes)
+                    down = nid
+                end
+                scatt_down[h] = down
+            end
 
-                above = 0
-                for j in (i - 1):-1:1
-                    nid = stack[j][2]
-                    if !(nid in virtual_nodes)
-                        above = nid
-                        break
-                    end
+            @inbounds for h in (n_hits - 1):-1:1
+                to_above = node_ids_stack[h]
+                from_below = scatt_up[h + 1]
+                if from_below != 0
+                    pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
                 end
 
-                below = 0
-                for j in (i + 1):length(stack)
-                    nid = stack[j][2]
-                    if !(nid in virtual_nodes)
-                        below = nid
-                        break
-                    end
-                end
-
-                if above != 0
-                    pair_counts[(vid, above)] = get(pair_counts, (vid, above), 0) + 1
-                    pair_counts[(above, vid)] = get(pair_counts, (above, vid), 0) + 1
-                end
-                if below != 0
-                    pair_counts[(vid, below)] = get(pair_counts, (vid, below), 0) + 1
-                    pair_counts[(below, vid)] = get(pair_counts, (below, vid), 0) + 1
+                to_below = node_ids_stack[h + 1]
+                from_above = scatt_down[h]
+                if from_above != 0
+                    pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
                 end
             end
         end
@@ -96,10 +92,10 @@ end
 
 function _group_optical_coeffs(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{String,Dict{String,Float64}}()
+    models isa AbstractVector || return Dict{Tuple{String,String},Dict{String,Float64}}()
 
     base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    coeffs = Dict{String,Dict{String,Float64}}()
+    coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
     for m in models
         mp = String(m)
@@ -121,39 +117,48 @@ function _group_optical_coeffs(cfg::LightConfig)
         types isa AbstractDict || continue
         isempty(types) && continue
 
-        tkey = first(keys(types))
-        tconf = _to_string_dict(types[tkey])
-        tconf isa AbstractDict || continue
+        for (tkey, tval) in types
+            tconf = _to_string_dict(tval)
+            tconf isa AbstractDict || continue
 
-        inter = get(tconf, "Interception", nothing)
-        inter isa AbstractDict || continue
-        inter = _to_string_dict(inter)
-        iuse = get(inter, "use", nothing)
-        iconf =
-            if iuse !== nothing && haskey(inter, string(iuse))
-                inter[string(iuse)]
-            else
-                inter
-            end
+            inter = get(tconf, "Interception", nothing)
+            inter isa AbstractDict || continue
+            inter = _to_string_dict(inter)
+            iuse = get(inter, "use", nothing)
+            iconf =
+                if iuse !== nothing && haskey(inter, string(iuse))
+                    inter[string(iuse)]
+                else
+                    inter
+                end
             iconf isa AbstractDict || continue
             iconf = _to_string_dict(iconf)
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            if model == "virtualsensor"
-                coeffs[group] = Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
-                continue
-            end
-            op = get(iconf, "optical_properties", nothing)
-            op isa AbstractDict || continue
-            op = _to_string_dict(op)
 
-        c = Dict{String,Float64}()
-        for (k, v) in op
-            try
-                c[uppercase(string(k))] = Float64(v)
-            catch
+            model = lowercase(strip(string(get(iconf, "model", ""))))
+            c =
+                if model == "virtualsensor"
+                    Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                else
+                    op = get(iconf, "optical_properties", nothing)
+                    op isa AbstractDict || continue
+                    op = _to_string_dict(op)
+                    ctmp = Dict{String,Float64}()
+                    for (k, v) in op
+                        try
+                            ctmp[uppercase(string(k))] = Float64(v)
+                        catch
+                        end
+                    end
+                    ctmp
+                end
+
+            tname = string(tkey)
+            coeffs[(group, tname)] = c
+            # Group-level fallback for nodes without explicit type metadata.
+            if !haskey(coeffs, (group, "*"))
+                coeffs[(group, "*")] = c
             end
         end
-        coeffs[group] = c
     end
 
     coeffs
@@ -161,7 +166,7 @@ end
 
 function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::FirstOrderResult, cfg::LightConfig)
     pair_counts, sun_hits, geom_node_ids, node_group = _pair_counts_for_scattering(scene, turtle, cfg)
-    group_coeffs = _group_optical_coeffs(cfg)
+    group_type_coeffs = _group_optical_coeffs(cfg)
 
     node_set = Set{Int}()
     for nid in geom_node_ids
@@ -175,7 +180,13 @@ function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::Fi
     end
     node_ids = collect(node_set)
     all_hits = _all_dir_hits_for_scattering(first, sun_hits, cfg, node_ids)
-    return pair_counts, all_hits, node_ids, node_group, group_coeffs
+    node_type = Dict{Int,String}()
+    for nid in node_ids
+        g = get(node_group, nid, get(scene.node_group, nid, ""))
+        default_type = g == "pavement" ? "Cobblestone" : ""
+        node_type[nid] = get(scene.node_type, nid, default_type)
+    end
+    return pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs
 end
 
 function _scattering_backend_from_mode(mode::Symbol)
@@ -225,8 +236,9 @@ function build_scattering_transfer_graph(
     cfg::LightConfig,
     ::RaycastScatteringBackend,
 )
-    pair_counts, all_hits, node_ids, node_group, group_coeffs = _scattering_context(scene, turtle, first, cfg)
-    return ScatteringTransferGraph(pair_counts, all_hits, node_ids, node_group, group_coeffs)
+    pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs =
+        _scattering_context(scene, turtle, first, cfg)
+    return ScatteringTransferGraph(pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs)
 end
 
 function build_scattering_transfer_graph(
@@ -255,7 +267,12 @@ function _coeff_by_node(
     band = uppercase(band_key)
     for nid in graph.node_ids
         g = get(graph.node_group, nid, "")
-        c = get(graph.group_coeffs, g, Dict{String,Float64}())
+        t = get(graph.node_type, nid, "")
+        c = get(
+            graph.group_type_coeffs,
+            (g, t),
+            get(graph.group_type_coeffs, (g, "*"), Dict{String,Float64}()),
+        )
         coeff_by_node[nid] = get(c, band, default_coeff)
     end
     coeff_by_node
