@@ -990,9 +990,9 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
 
     if _RUN_PARITY_TESTS
     for (fx_name, max_abs_err, max_mean_rel_err) in (
-        ("test-weighted-sun", 1.0, 0.01),
-        ("test-save_on_disk1", 1e-3, 1e-3),
-        ("test-save_on_disk6", 1e-3, 1e-3),
+        ("test-weighted-sun", 0.8, 7.5e-3),
+        ("test-save_on_disk1", 1e-4, 1e-6),
+        ("test-save_on_disk6", 1e-4, 1e-6),
     )
         fx = fixtures[fx_name]
         expected_path = _expected_scene_values_path(fx)
@@ -1015,9 +1015,9 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
 
     # Frozen Java scene_values snapshots (full keyed rows).
     for (fx_name, sw_atol, sw_rtol) in (
-        ("test-weighted-sun", 1.0, 1e-2),
-        ("test-save_on_disk1", 1e-3, 1e-3),
-        ("test-save_on_disk6", 1e-3, 1e-3),
+        ("test-weighted-sun", 0.8, 1e-2),
+        ("test-save_on_disk1", 1e-4, 1e-6),
+        ("test-save_on_disk6", 1e-4, 1e-6),
     )
         fx = fixtures[fx_name]
         expected_path = _expected_scene_values_path(fx)
@@ -1078,11 +1078,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     for (fx_name, max_rel_err) in (
-        ("test-cafeier", 5e-4),
-        ("test-cafeier2", 5e-4),
-        ("test-cafeier_sensor", 8e-3),
-        ("test-cafeier_sensor2", 8e-3),
-        ("test-cafeier_sensor3", 2e-3),
+        ("test-cafeier", 1e-5),
+        ("test-cafeier2", 1e-5),
+        ("test-cafeier_sensor", 1e-5),
+        ("test-cafeier_sensor2", 1e-5),
+        ("test-cafeier_sensor3", 5e-4),
     )
         fx = fixtures[fx_name]
         expected_path = _expected_component_values_path(fx)
