@@ -5,10 +5,10 @@ import Dates
 const PARITY_LIMITS = Dict{Symbol,Float64}(
     # IDs/counts/order invariants.
     :exact => 0.0,
-    :hitcount_total_rel => 1e-3,
-    :hitcount_component_rel => 3e-3,
-    :hitcount_component_hi_rel_turtle => 2.2e-3,
-    :hitcount_component_hi_rel_raycast => 5e-3,
+    :hitcount_total_rel => 5e-4,
+    :hitcount_component_rel => 1.3e-3,
+    :hitcount_component_hi_rel_turtle => 1.9e-3,
+    :hitcount_component_hi_rel_raycast => 1.8e-3,
     :hitcount_hist_abs_turtle => 200.0,
     :hitcount_hist_abs_raycast => 200.0,
     :hitcount_hist_rel_turtle => 1.2e-3,
@@ -16,14 +16,14 @@ const PARITY_LIMITS = Dict{Symbol,Float64}(
     # Irradiance / energy parity.
     :irr_component_rel_strict => 1e-6,
     :irr_component_rel_dense => 8e-3,
-    :irr_component_abs_sparse => 7.5,
-    :scene_riq_rel => 2e-3,
-    :scattering_total_rel_loose => 1e-2,
-    :scattering_total_rel_strict => 1e-2,
+    :irr_component_abs_sparse => 1.0,
+    :scene_riq_rel => 6e-4,
+    :scattering_total_rel_loose => 6e-3,
+    :scattering_total_rel_strict => 1e-3,
     # Sun / sky metrics.
-    :sun_deg_snapshot => 5e-2,
-    :sun_deg_az_series => 2e-2,
-    :sun_deg_el_series => 5e-2,
+    :sun_deg_snapshot => 1e-4,
+    :sun_deg_az_series => 1.2e-2,
+    :sun_deg_el_series => 4e-2,
 )
 
 parity_limit(metric::Symbol) = get(PARITY_LIMITS, metric) do
