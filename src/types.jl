@@ -106,7 +106,8 @@ struct ScatteringTransferGraph
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
-    group_coeffs::Dict{String,Dict{String,Float64}}
+    node_type::Dict{Int,String}
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
 end
 
 struct LightBudget
