@@ -9,10 +9,10 @@ const PARITY_LIMITS = Dict{Symbol,Float64}(
     :hitcount_component_rel => 3e-3,
     :hitcount_component_hi_rel_turtle => 2.2e-3,
     :hitcount_component_hi_rel_raycast => 5e-3,
-    :hitcount_hist_abs_turtle => 500.0,
-    :hitcount_hist_abs_raycast => 900.0,
+    :hitcount_hist_abs_turtle => 200.0,
+    :hitcount_hist_abs_raycast => 200.0,
     :hitcount_hist_rel_turtle => 1.2e-3,
-    :hitcount_hist_rel_raycast => 2e-3,
+    :hitcount_hist_rel_raycast => 1.1e-3,
     # Irradiance / energy parity.
     :irr_component_rel_strict => 1e-6,
     :irr_component_rel_dense => 8e-3,
