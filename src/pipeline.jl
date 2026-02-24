@@ -300,6 +300,47 @@ function _parse_bool_strict_local(v, field_name::String)
     error("invalid $(field_name) value: $(repr(v))")
 end
 
+function _cfg_bool_override_local(cfg::LightConfig, keys::Vector{String})
+    v = _cfg_lookup_value_local(cfg, keys)
+    v === nothing && return nothing
+    _parse_bool_strict_local(v, keys[1])
+end
+
+"""
+    _nir_scattering_enabled_local(cfg)::Bool
+
+NIR scattering activation with optional explicit override (`nir_scattering`).
+Default behavior remains enabled whenever scattering is enabled.
+"""
+function _nir_scattering_enabled_local(cfg::LightConfig)
+    cfg.scattering || return false
+    override = _cfg_bool_override_local(cfg, ["nir_scattering", "nirScattering"])
+    override === nothing ? true : override
+end
+
+"""
+    _nir_interception_enabled_local(cfg)::Bool
+
+NIR interception activation with optional explicit override (`nir_interception`).
+Default behavior remains enabled.
+"""
+function _nir_interception_enabled_local(cfg::LightConfig)
+    override = _cfg_bool_override_local(cfg, ["nir_interception", "nirInterception"])
+    override === nothing ? true : override
+end
+
+function _disable_nir_sky_local(sky::SkyState)
+    SkyState(
+        sky.sun_azimuth_deg,
+        sky.sun_elevation_deg,
+        sky.ri_sw_f,
+        sky.ri_sw_f,
+        0.0,
+        sky.direct_fraction,
+        sky.diffuse_fraction,
+    )
+end
+
 function _parse_range_datetime_token_local(s::AbstractString)
     ss = strip(String(s))
     for fmt in (
@@ -418,6 +459,32 @@ function _default_scattering_factor_local(cfg::LightConfig, band::String)
     b = uppercase(band)
     b == "NIR" && return cfg.scattering_coeff_nir
     return cfg.scattering_coeff_par
+end
+
+function _compute_scattering_with_flags(
+    scene::SceneGeometry,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    cfg::LightConfig;
+    mode::Symbol=:raycast,
+    backend::Union{Nothing,ScatteringBackend}=nothing,
+    nir_scattering::Bool=true,
+)
+    cfg.scattering || return nothing
+    nir_scattering && return compute_scattering(scene, turtle, first, cfg; mode=mode, backend=backend)
+
+    par_only = compute_scattering_band(
+        scene,
+        turtle,
+        first,
+        cfg;
+        mode=mode,
+        backend=backend,
+        band="PAR",
+        initial_power_per_node=first.incident_par_power_per_node,
+        default_coeff=cfg.scattering_coeff_par,
+    )
+    return ScatteringResult(par_only.added_power_per_node, Dict{Int,Float64}(), par_only.iterations, par_only.converged)
 end
 
 function _interception_area_per_node_local(scene::SceneGeometry, cfg::LightConfig)
@@ -564,20 +631,26 @@ function run_light_step(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     ib = _resolve_interception_backend(interception_backend)
+    nir_interception = _nir_interception_enabled_local(cfg)
+    nir_scattering = _nir_scattering_enabled_local(cfg) && nir_interception
     dt_seconds = _step_duration_seconds_local(meteo_row)
     area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
-    abs_nir = _node_absorptance_per_band(scene, cfg, "NIR")
+    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
     sky = compute_sky(meteo_row, cfg)
+    nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(cfg, sky)
     fluxes = compute_directional_fluxes(sky, turtle, cfg)
     first = compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
-    scat =
-        if cfg.scattering
-            compute_scattering(scene, turtle, first, cfg; mode=scattering_mode, backend=scattering_backend)
-        else
-            nothing
-        end
+    scat = _compute_scattering_with_flags(
+        scene,
+        turtle,
+        first,
+        cfg;
+        mode=scattering_mode,
+        backend=scattering_backend,
+        nir_scattering=nir_scattering,
+    )
     extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
         scene,
         meteo_row,
@@ -617,9 +690,11 @@ function run_light_series(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     ib = _resolve_interception_backend(interception_backend)
+    nir_interception = _nir_interception_enabled_local(cfg)
+    nir_scattering = _nir_scattering_enabled_local(cfg) && nir_interception
     area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
-    abs_nir = _node_absorptance_per_band(scene, cfg, "NIR")
+    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
     use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
     cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
     rows_eff = _prepare_meteo_rows_for_series(meteo, cfg)
@@ -628,6 +703,7 @@ function run_light_series(
         row = rows_eff[i]
         dt_seconds = _step_duration_seconds_local(row)
         sky = compute_sky(row, cfg)
+        nir_interception || (sky = _disable_nir_sky_local(sky))
         turtle = build_turtle(cfg, sky)
         fluxes = compute_directional_fluxes(sky, turtle, cfg)
 
@@ -643,12 +719,15 @@ function run_light_series(
                 compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
             end
 
-        scat =
-            if cfg.scattering
-                compute_scattering(scene, turtle, first, cfg; mode=scattering_mode, backend=scattering_backend)
-            else
-                nothing
-            end
+        scat = _compute_scattering_with_flags(
+            scene,
+            turtle,
+            first,
+            cfg;
+            mode=scattering_mode,
+            backend=scattering_backend,
+            nir_scattering=nir_scattering,
+        )
         extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
             scene,
             row,
