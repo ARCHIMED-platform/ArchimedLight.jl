@@ -989,11 +989,9 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     @test max_el_err < parity_limit(:sun_deg_el_series)
 
     if _RUN_PARITY_TESTS
-    for (fx_name, max_abs_err, max_mean_rel_err) in (
-        ("test-weighted-sun", 0.8, 7.5e-3),
-        ("test-save_on_disk1", 1e-4, 1e-6),
-        ("test-save_on_disk6", 1e-4, 1e-6),
-    )
+    for fx_name in ("test-weighted-sun", "test-save_on_disk1", "test-save_on_disk6")
+        max_abs_err = parity_limit(:scene_sw_series_max_abs; fixture=fx_name)
+        max_mean_rel_err = parity_limit(:scene_sw_series_mean_rel; fixture=fx_name)
         fx = fixtures[fx_name]
         expected_path = _expected_scene_values_path(fx)
         @test expected_path !== nothing
@@ -1014,11 +1012,9 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Frozen Java scene_values snapshots (full keyed rows).
-    for (fx_name, sw_atol, sw_rtol) in (
-        ("test-weighted-sun", 0.8, 1e-2),
-        ("test-save_on_disk1", 1e-4, 1e-6),
-        ("test-save_on_disk6", 1e-4, 1e-6),
-    )
+    for fx_name in ("test-weighted-sun", "test-save_on_disk1", "test-save_on_disk6")
+        sw_atol = parity_limit(:scene_snapshot_sw_atol; fixture=fx_name)
+        sw_rtol = parity_limit(:scene_snapshot_sw_rtol; fixture=fx_name)
         fx = fixtures[fx_name]
         expected_path = _expected_scene_values_path(fx)
         @test expected_path !== nothing
@@ -1077,13 +1073,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         )
     end
 
-    for (fx_name, max_rel_err) in (
-        ("test-cafeier", 1e-5),
-        ("test-cafeier2", 1e-5),
-        ("test-cafeier_sensor", 1e-5),
-        ("test-cafeier_sensor2", 1e-5),
-        ("test-cafeier_sensor3", 5e-4),
-    )
+    for fx_name in ("test-cafeier", "test-cafeier2", "test-cafeier_sensor", "test-cafeier_sensor2", "test-cafeier_sensor3")
+        max_rel_err = parity_limit(:cafeier_total_rel; fixture=fx_name)
         fx = fixtures[fx_name]
         expected_path = _expected_component_values_path(fx)
         @test expected_path !== nothing
@@ -1160,8 +1151,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         scat_lnk = ArchimedLight.compute_scattering(scene_links, turtle_links, first_links, cfg_links; mode=:links)
         bud_pix = ArchimedLight.integrate_light(first_links, scat_pix, cfg_links)
         bud_lnk = ArchimedLight.integrate_light(first_links, scat_lnk, cfg_links)
-        @test max_abs_float_dict_diff(bud_pix.ri_par_q_per_node, bud_lnk.ri_par_q_per_node) < 1e-12
-        @test max_abs_float_dict_diff(bud_pix.ri_nir_q_per_node, bud_lnk.ri_nir_q_per_node) < 1e-12
+        @test max_abs_float_dict_diff(bud_pix.ri_par_q_per_node, bud_lnk.ri_par_q_per_node) < parity_limit(:backend_identity_abs)
+        @test max_abs_float_dict_diff(bud_pix.ri_nir_q_per_node, bud_lnk.ri_nir_q_per_node) < parity_limit(:backend_identity_abs)
     end
 
     area_ratio_metrics = Dict{String,Tuple{Float64,Float64,Float64,Float64}}()
@@ -1196,10 +1187,10 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         # Java intent: pavement intercepted energy is effectively uniform with area-ratio correction.
         # Java uses Float32 turtle/pixel internals; with Java-aligned directions this
         # ratio stays effectively null but not bit-zero in Julia Float64 accumulation.
-        @test got_std / max(abs(got_mean), eps(Float64)) < 5e-7
-        @test exp_std / max(abs(exp_mean), eps(Float64)) < 1e-5
+        @test got_std / max(abs(got_mean), eps(Float64)) < parity_limit(:area_ratio_uniformity_julia_relstd)
+        @test exp_std / max(abs(exp_mean), eps(Float64)) < parity_limit(:area_ratio_uniformity_java_relstd)
         # Java sky conversion and units are matched closely.
-        @test relerr(got_mean, exp_mean) < 1e-5
+        @test relerr(got_mean, exp_mean) < parity_limit(:area_ratio_mean_rel)
 
         area_ratio_metrics[area_name] = (got_mean, got_std, exp_mean, exp_std)
     end
@@ -1208,7 +1199,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     # Means should stay stable across those runtime switches.
     got_means = [v[1] for v in values(area_ratio_metrics)]
     mean_ref = max(abs(mean(got_means)), 1.0)
-    @test (maximum(got_means) - minimum(got_means)) / mean_ref < 3e-5
+    @test (maximum(got_means) - minimum(got_means)) / mean_ref < parity_limit(:area_ratio_means_spread_rel)
 
     # Java test-area_ratio5 parity: area-ratio correction should keep leaf irradiance
     # stdev relatively stable across pixel sizes; without correction, stdev decreases
@@ -1293,18 +1284,18 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
 
     # Corrected branch is close to Java across the whole sweep.
     for n in keys(expected_stdev_ratio)
-        @test abs(stdev_by_npix_ratio[n] - expected_stdev_ratio[n]) < 10.0
+        @test abs(stdev_by_npix_ratio[n] - expected_stdev_ratio[n]) < parity_limit(:area_ratio5_ratio_abs)
     end
     # Uncorrected branch converges close to Java on high-resolution runs.
     for n in (500000, 1000000)
-        @test abs(stdev_by_npix_noratio[n] - expected_stdev_noratio[n]) < 10.0
+        @test abs(stdev_by_npix_noratio[n] - expected_stdev_noratio[n]) < parity_limit(:area_ratio5_noratio_abs_hi)
     end
     # Behavioral gate from Java README/run-test: correction stabilizes stdev,
     # while no-correction decreases stdev as resolution increases.
     ratio_vals = [stdev_by_npix_ratio[n] for (n, _) in pixel_sweep]
     noratio_vals = [stdev_by_npix_noratio[n] for (n, _) in pixel_sweep]
-    @test maximum(ratio_vals) - minimum(ratio_vals) < 40.0
-    @test first(noratio_vals) > 2.0 * last(noratio_vals)
+    @test maximum(ratio_vals) - minimum(ratio_vals) < parity_limit(:area_ratio5_ratio_spread)
+    @test first(noratio_vals) > parity_limit(:area_ratio5_noratio_first_last_ratio) * last(noratio_vals)
 
     # Java test-ignore parity: Interception model=ignore drops ignored types from outputs,
     # and explicit/aliased ignore configurations are equivalent.
@@ -1499,8 +1490,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         map_lnk_0 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_0_f"]) for r in rows_lnk)
         map_pix_n = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_f"]) for r in rows_pix)
         map_lnk_n = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r["Ri_PAR_f"]) for r in rows_lnk)
-        @test maximum(abs(map_pix_0[k] - map_lnk_0[k]) for k in keys(map_pix_0); init=0.0) < 1e-12
-        @test maximum(abs(map_pix_n[k] - map_lnk_n[k]) for k in keys(map_pix_n); init=0.0) < 1e-12
+        @test maximum(abs(map_pix_0[k] - map_lnk_0[k]) for k in keys(map_pix_0); init=0.0) < parity_limit(:backend_identity_abs)
+        @test maximum(abs(map_pix_n[k] - map_lnk_n[k]) for k in keys(map_pix_n); init=0.0) < parity_limit(:backend_identity_abs)
 
         if links_name == "test-links-sensor-plates"
             plate_scat = sum(
@@ -1509,7 +1500,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             )
             sensor_meas = sum(Float64(r["Ri_PAR_f"]) for r in rows_pix if string(r["group"]) == "sensors"; init=0.0)
             @test sensor_meas > 0.0
-            @test abs(plate_scat - sensor_meas) / max(abs(plate_scat), eps(Float64)) < 0.005
+            @test abs(plate_scat - sensor_meas) / max(abs(plate_scat), eps(Float64)) < parity_limit(:links_sensor_plate_balance_rel)
         else
             coeffs = ArchimedLight._group_optical_coeffs(cfg)
             ro = get(get(coeffs, "plates", Dict{String,Float64}()), "PAR", cfg.scattering_coeff_par) / 2.0
@@ -1520,11 +1511,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             is1 = _sum_item(rows_pix, 3, "Ri_PAR_f")
 
             v_plate2 = ip1 * ro
-            @test abs(v_plate2 - ip2) / max(abs(v_plate2), eps(Float64)) < 0.02
+            @test abs(v_plate2 - ip2) / max(abs(v_plate2), eps(Float64)) < parity_limit(:links_sensor_plates2_plate2_rel)
 
             v_sensor = ip1 * ro + ip2 * ro
-            @test abs(is2 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.02
-            @test abs(is1 - v_sensor) / max(abs(v_sensor), eps(Float64)) < 0.005
+            @test abs(is2 - v_sensor) / max(abs(v_sensor), eps(Float64)) < parity_limit(:links_sensor_plates2_is2_rel)
+            @test abs(is1 - v_sensor) / max(abs(v_sensor), eps(Float64)) < parity_limit(:links_sensor_plates2_is1_rel)
         end
     end
 
@@ -1564,11 +1555,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     vs_intercep = sum(Float64(r["Ri_q"]) for r in summary4.rows if string(r["group"]) == "sensors"; init=0.0)
     @test vs_intercep > 0.0
     vs_irr = vs_intercep / stepdur / ground_area
-    @test abs(sky_irr - vs_irr) < 0.01
+    @test abs(sky_irr - vs_irr) < parity_limit(:sensor4_vs_abs)
 
     scene_intercep = sum(Float64(r["Ri_q"]) for r in summary4.rows if string(r["group"]) != "sensors"; init=0.0)
     scene_irr = scene_intercep / stepdur / ground_area
-    @test abs(sky_irr - scene_irr) < 0.65
+    @test abs(sky_irr - scene_irr) < parity_limit(:sensor4_scene_abs)
 
     # Java fixture `test-links-stats` compares node-link counts across two pixel sizes.
     # It does not compare our internal all-direction hit count proxy.
@@ -1826,11 +1817,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             ri_par = _xml_tag_value(only(gwa_files), "Ri_PAR_0_f")
             ri_nir = _xml_tag_value(only(gwa_files), "Ri_NIR_0_f")
             if expected_first_zero
-                @test abs(ri_par) < 1e-9
-                @test abs(ri_nir) < 1e-9
+                @test abs(ri_par) < parity_limit(:ops_export_zero_abs)
+                @test abs(ri_nir) < parity_limit(:ops_export_zero_abs)
             else
-                @test abs(ri_par) > 1e-9
-                @test abs(ri_nir) > 1e-9
+                @test abs(ri_par) > parity_limit(:ops_export_zero_abs)
+                @test abs(ri_nir) > parity_limit(:ops_export_zero_abs)
             end
         end
     end
@@ -1860,11 +1851,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             ri_par = _xml_tag_value(f, "Ri_PAR_0_f")
             ri_nir = _xml_tag_value(f, "Ri_NIR_0_f")
             if i == 1
-                @test abs(ri_par) < 1e-9
-                @test abs(ri_nir) < 1e-9
+                @test abs(ri_par) < parity_limit(:ops_export_zero_abs)
+                @test abs(ri_nir) < parity_limit(:ops_export_zero_abs)
             else
-                @test abs(ri_par) > 1e-9
-                @test abs(ri_nir) > 1e-9
+                @test abs(ri_par) > parity_limit(:ops_export_zero_abs)
+                @test abs(ri_nir) > parity_limit(:ops_export_zero_abs)
             end
         end
     end
@@ -1918,7 +1909,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Java test-lightsource1/2 parity: sky-only run and emitter-only run match on receiver components.
-    for (fx_name, tol) in (("test-lightsource1", 0.09), ("test-lightsource2", 0.14))
+    for fx_name in ("test-lightsource1", "test-lightsource2")
+        tol = parity_limit(:lightsource12_max_abs; fixture=fx_name)
         cfg1, scene1, row1, step1 = _run_fixture_step(joinpath(test_root, fx_name, "config1.yml"))
         cfg2, scene2, row2, step2 = _run_fixture_step(joinpath(test_root, fx_name, "config2.yml"))
 
@@ -1978,7 +1970,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         d3 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t3)
         ks = intersect(intersect(keys(d1), keys(d2)), keys(d3))
         @test !isempty(ks)
-        @test maximum(abs((d1[k] + d2[k]) - d3[k]) for k in ks; init=0.0) < 1e-5
+        @test maximum(abs((d1[k] + d2[k]) - d3[k]) for k in ks; init=0.0) < parity_limit(:lightsource_additivity_abs)
     end
 
     # Java test-lightsource4/5/6 parity: emitted source power equals intercepted order-0 power.
@@ -2000,10 +1992,10 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         if strict_one_node
             vals = [Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows if Int(r["item_id"]) == 1]
             @test !isempty(vals)
-            @test relerr(maximum(vals), source_power) < 1e-6
+            @test relerr(maximum(vals), source_power) < parity_limit(:lightsource_power_rel)
         else
             tot = sum(Float64(r["area"]) * Float64(r["Ri_PAR_0_f"] + r["Ri_NIR_0_f"]) for r in rows; init=0.0)
-            @test relerr(tot, source_power) < 1e-6
+            @test relerr(tot, source_power) < parity_limit(:lightsource_power_rel)
         end
     end
 
@@ -2027,7 +2019,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             Float64(r["Ri_NIR_f"]) * (1.0 - Float64(r["scat_factor_NIR"]))) * Float64(r["area"]) for r in rows;
             init=0.0,
         )
-        @test relerr(tot_abs, source_power) < 1e-6
+        @test relerr(tot_abs, source_power) < parity_limit(:lightsource_power_rel)
     end
 
     # Java test-lightsource-box parity: closed box should intercept emitted lamp power.
@@ -2041,7 +2033,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     ).rows
     source_box = _model_radiance(joinpath(test_root, "test-lightsource-box", "model_box.yml"))
     tot_box = sum(Float64(r["area"]) * (Float64(r["Ri_PAR_0_f"]) + Float64(r["Ri_NIR_0_f"])) for r in rows_box; init=0.0)
-    @test relerr(tot_box, source_box) < 1e-6
+    @test relerr(tot_box, source_box) < parity_limit(:lightsource_power_rel)
 
     # Java test-lightsource-box2 parity: absorbed power with scattering matches emitted lamp power.
     cfg_box2, scene_box2, row_box2, step_box2 = _run_fixture_step(joinpath(test_root, "test-lightsource-box2", "config.yml"))
@@ -2060,7 +2052,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         ) * Float64(r["area"]) for r in rows_box2;
         init=0.0,
     )
-    @test relerr(tot_box2, source_box2) < 0.01
+    @test relerr(tot_box2, source_box2) < parity_limit(:lightsource_box2_rel)
 
     function _check_summary_component_parity(cfg_path::String; use_scattering::Bool, max_scene_rel::Union{Nothing,Float64}=nothing)
         cfg = ArchimedLight.read_light_config(cfg_path)
@@ -2106,7 +2098,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
                 max_rel = max(max_rel, relerr(riq_got, riq_exp))
             end
         end
-        @test max_rel < 1e-4
+        @test max_rel < parity_limit(:summary_component_rel)
 
         if max_scene_rel !== nothing
             ground = [
@@ -2127,8 +2119,16 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Java summary tests parity.
-    _check_summary_component_parity(joinpath(test_root, "test-summary", "config.yml"); use_scattering=false, max_scene_rel=0.002)
-    _check_summary_component_parity(joinpath(test_root, "test-summary2", "config.yml"); use_scattering=false, max_scene_rel=0.002)
+    _check_summary_component_parity(
+        joinpath(test_root, "test-summary", "config.yml");
+        use_scattering=false,
+        max_scene_rel=parity_limit(:summary_scene_rel; fixture="test-summary"),
+    )
+    _check_summary_component_parity(
+        joinpath(test_root, "test-summary2", "config.yml");
+        use_scattering=false,
+        max_scene_rel=parity_limit(:summary_scene_rel; fixture="test-summary2"),
+    )
     _check_summary_component_parity(joinpath(test_root, "test-summary3", "config.yml"); use_scattering=true)
     _check_summary_component_parity(joinpath(test_root, "test-summary4", "config.yml"); use_scattering=true)
 
@@ -2187,8 +2187,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     r_custom_0 = scene_custom_0 / max(scene_incid_custom, eps(Float64))
     r_par_n = scene_par_n / max(scene_incid_par, eps(Float64))
     r_custom_n = scene_custom_n / max(scene_incid_custom, eps(Float64))
-    @test relerr(r_par_0, r_custom_0) < 4e-4
-    @test relerr(r_par_n, r_custom_n) < 4e-4
+    @test relerr(r_par_0, r_custom_0) < parity_limit(:customband_rel)
+    @test relerr(r_par_n, r_custom_n) < parity_limit(:customband_rel)
 
     function run_fixture_series(cfg_path::String)
         cfg = ArchimedLight.read_light_config(cfg_path)
@@ -2551,8 +2551,8 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             @test !isempty(vals_irr)
             ref_irr = first(vals_irr)
             ref_energy = first(vals_energy)
-            @test maximum(abs(v - ref_irr) for v in vals_irr; init=0.0) < 1e-6
-            @test maximum(abs(v - ref_energy) for v in vals_energy; init=0.0) < 1e-6
+            @test maximum(abs(v - ref_irr) for v in vals_irr; init=0.0) < parity_limit(:absorb_cached_abs)
+            @test maximum(abs(v - ref_energy) for v in vals_energy; init=0.0) < parity_limit(:absorb_cached_abs)
         end
     end
     _check_absorption_ratios(joinpath(test_root, "test-absorb", "config.yml"); with_scattering=false)
@@ -2646,9 +2646,9 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     _, _, rel_ts1 = _run_timestep_fixture(joinpath(test_root, "test-timestep1"))
     _, _, rel_ts2 = _run_timestep_fixture(joinpath(test_root, "test-timestep2"))
     _, _, rel_ts3 = _run_timestep_fixture(joinpath(test_root, "test-timestep3"))
-    @test rel_ts1 < 0.001
-    @test rel_ts2 < 0.001
-    @test rel_ts3 < 0.1
+    @test rel_ts1 < parity_limit(:timestep_rel_ts1)
+    @test rel_ts2 < parity_limit(:timestep_rel_ts2)
+    @test rel_ts3 < parity_limit(:timestep_rel_ts3)
 
     for disk_name in ("test-save_on_disk1", "test-save_on_disk2", "test-save_on_disk3", "test-save_on_disk4", "test-save_on_disk5")
         f_disk = fixtures[disk_name]

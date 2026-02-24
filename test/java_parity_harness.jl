@@ -2,32 +2,83 @@ import CSV
 import Tables
 import Dates
 
-const PARITY_LIMITS = Dict{Symbol,Float64}(
-    # IDs/counts/order invariants.
-    :exact => 0.0,
-    :hitcount_total_rel => 5e-4,
-    :hitcount_component_rel => 1.3e-3,
-    :hitcount_component_hi_rel_turtle => 1.9e-3,
-    :hitcount_component_hi_rel_raycast => 1.8e-3,
-    :hitcount_hist_abs_turtle => 200.0,
-    :hitcount_hist_abs_raycast => 200.0,
-    :hitcount_hist_rel_turtle => 1.2e-3,
-    :hitcount_hist_rel_raycast => 1.1e-3,
-    # Irradiance / energy parity.
-    :irr_component_rel_strict => 1e-6,
-    :irr_component_rel_dense => 8e-3,
-    :irr_component_abs_sparse => 1.0,
-    :scene_riq_rel => 6e-4,
-    :scattering_total_rel_loose => 6e-3,
-    :scattering_total_rel_strict => 1e-3,
-    # Sun / sky metrics.
-    :sun_deg_snapshot => 1e-4,
-    :sun_deg_az_series => 1.2e-2,
-    :sun_deg_el_series => 4e-2,
+const PARITY_LIMITS = Dict{Tuple{Symbol,String},Float64}(
+    # Default metric tolerances.
+    (:exact, "*") => 0.0,
+    (:hitcount_total_rel, "*") => 5e-4,
+    (:hitcount_component_rel, "*") => 1.3e-3,
+    (:hitcount_component_hi_rel_turtle, "*") => 1.9e-3,
+    (:hitcount_component_hi_rel_raycast, "*") => 1.8e-3,
+    (:hitcount_hist_abs_turtle, "*") => 200.0,
+    (:hitcount_hist_abs_raycast, "*") => 200.0,
+    (:hitcount_hist_rel_turtle, "*") => 1.2e-3,
+    (:hitcount_hist_rel_raycast, "*") => 1.1e-3,
+    (:irr_component_rel_strict, "*") => 1e-6,
+    (:irr_component_rel_dense, "*") => 8e-3,
+    (:irr_component_abs_sparse, "*") => 1.0,
+    (:scene_riq_rel, "*") => 6e-4,
+    (:scattering_total_rel_loose, "*") => 6e-3,
+    (:scattering_total_rel_strict, "*") => 1e-3,
+    (:sun_deg_snapshot, "*") => 1e-4,
+    (:sun_deg_az_series, "*") => 1.2e-2,
+    (:sun_deg_el_series, "*") => 4e-2,
+    (:backend_identity_abs, "*") => 1e-12,
+    (:area_ratio_uniformity_julia_relstd, "*") => 5e-7,
+    (:area_ratio_uniformity_java_relstd, "*") => 1e-5,
+    (:area_ratio_mean_rel, "*") => 1e-5,
+    (:area_ratio_means_spread_rel, "*") => 3e-5,
+    (:area_ratio5_ratio_abs, "*") => 0.2,
+    (:area_ratio5_noratio_abs_hi, "*") => 0.2,
+    (:area_ratio5_ratio_spread, "*") => 30.0,
+    (:area_ratio5_noratio_first_last_ratio, "*") => 2.0,
+    (:links_sensor_plate_balance_rel, "*") => 1e-3,
+    (:links_sensor_plates2_plate2_rel, "*") => 1e-2,
+    (:links_sensor_plates2_is2_rel, "*") => 1e-2,
+    (:links_sensor_plates2_is1_rel, "*") => 5e-4,
+    (:sensor4_vs_abs, "*") => 1e-3,
+    (:sensor4_scene_abs, "*") => 0.4,
+    (:ops_export_zero_abs, "*") => 1e-9,
+    (:lightsource_additivity_abs, "*") => 1e-5,
+    (:lightsource_power_rel, "*") => 1e-6,
+    (:lightsource_box2_rel, "*") => 3e-3,
+    (:summary_component_rel, "*") => 1e-4,
+    (:customband_rel, "*") => 4e-4,
+    (:absorb_cached_abs, "*") => 1e-6,
+    (:timestep_rel_ts1, "*") => 1e-3,
+    (:timestep_rel_ts2, "*") => 1e-3,
+    (:timestep_rel_ts3, "*") => 1e-1,
+    # Fixture-specific overrides.
+    (:scene_sw_series_max_abs, "test-weighted-sun") => 0.8,
+    (:scene_sw_series_max_abs, "test-save_on_disk1") => 1e-4,
+    (:scene_sw_series_max_abs, "test-save_on_disk6") => 1e-4,
+    (:scene_sw_series_mean_rel, "test-weighted-sun") => 7.5e-3,
+    (:scene_sw_series_mean_rel, "test-save_on_disk1") => 1e-6,
+    (:scene_sw_series_mean_rel, "test-save_on_disk6") => 1e-6,
+    (:scene_snapshot_sw_atol, "test-weighted-sun") => 0.8,
+    (:scene_snapshot_sw_atol, "test-save_on_disk1") => 1e-4,
+    (:scene_snapshot_sw_atol, "test-save_on_disk6") => 1e-4,
+    (:scene_snapshot_sw_rtol, "test-weighted-sun") => 1e-2,
+    (:scene_snapshot_sw_rtol, "test-save_on_disk1") => 1e-6,
+    (:scene_snapshot_sw_rtol, "test-save_on_disk6") => 1e-6,
+    (:cafeier_total_rel, "test-cafeier") => 1e-5,
+    (:cafeier_total_rel, "test-cafeier2") => 1e-5,
+    (:cafeier_total_rel, "test-cafeier_sensor") => 1e-5,
+    (:cafeier_total_rel, "test-cafeier_sensor2") => 1e-5,
+    (:cafeier_total_rel, "test-cafeier_sensor3") => 5e-4,
+    (:lightsource12_max_abs, "test-lightsource1") => 0.08,
+    (:lightsource12_max_abs, "test-lightsource2") => 0.13,
+    (:summary_scene_rel, "test-summary") => 2e-3,
+    (:summary_scene_rel, "test-summary2") => 2e-3,
 )
 
-parity_limit(metric::Symbol) = get(PARITY_LIMITS, metric) do
-    error("Missing parity limit for metric=$(metric)")
+function parity_limit(metric::Symbol; fixture::Union{Nothing,String}=nothing)
+    if fixture !== nothing
+        fk = (metric, fixture)
+        haskey(PARITY_LIMITS, fk) && return PARITY_LIMITS[fk]
+    end
+    dk = (metric, "*")
+    haskey(PARITY_LIMITS, dk) && return PARITY_LIMITS[dk]
+    error("Missing parity limit for metric=$(metric) fixture=$(something(fixture, "*"))")
 end
 
 relerr(a, b) = abs(a - b) / max(abs(b), eps(Float64))
