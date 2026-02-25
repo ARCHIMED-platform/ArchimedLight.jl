@@ -65,13 +65,20 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
                 to_above = node_ids_stack[h]
                 from_below = scatt_up[h + 1]
                 if from_below != 0
-                    pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
+                    # Java debug traces do not create transfer links between paving tiles.
+                    # Keeping these coplanar pavement↔pavement links inflates ground NIR
+                    # recirculation and shifts scattering convergence.
+                    if !(get(node_group, to_above, "") == "pavement" && get(node_group, from_below, "") == "pavement")
+                        pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
+                    end
                 end
 
                 to_below = node_ids_stack[h + 1]
                 from_above = scatt_down[h]
                 if from_above != 0
-                    pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
+                    if !(get(node_group, to_below, "") == "pavement" && get(node_group, from_above, "") == "pavement")
+                        pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
+                    end
                 end
             end
         end
