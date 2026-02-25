@@ -197,7 +197,8 @@ function _opf_geometry_component_ids(path::AbstractString)
 end
 
 function _normalized_abs_path(base::AbstractString, p::AbstractString)
-    isabspath(p) ? normpath(p) : normpath(joinpath(base, p))
+    base_abs = abspath(base)
+    isabspath(p) ? normpath(p) : normpath(abspath(joinpath(base_abs, p)))
 end
 
 function _ops_component_id_hints_by_item(path::AbstractString)
@@ -527,7 +528,7 @@ function _opf_triangulated_text_if_needed(path::AbstractString)
 end
 
 function _rewrite_ops_object_paths(lines::Vector{String}, source_ops::AbstractString, tmp_dir::AbstractString)
-    base = dirname(source_ops)
+    base = abspath(dirname(source_ops))
     rewritten = String[]
     opf_cache = Dict{String,String}()
     hints_by_object = Dict{String,Vector{Int}}()
