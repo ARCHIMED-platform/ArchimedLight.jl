@@ -319,7 +319,7 @@ function _propagate_scattering_one_band(
 
         current = next
 
-        if total_next <= thr
+        if total_next < thr
             converged = true
             break
         end
