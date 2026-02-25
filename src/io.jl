@@ -117,18 +117,6 @@ function _triangle_area3d(p1, p2, p3)
     0.5 * norm(cross(v1, v2))
 end
 
-function _node_attrs(node)
-    MultiScaleTreeGraph.attributes(node)
-end
-
-function _node_children(node)
-    MultiScaleTreeGraph.children(node)
-end
-
-function _has_attr(attrs, key::Symbol)
-    hasproperty(attrs, key)
-end
-
 function _dict_attr(attrs, key::Symbol)
     hasproperty(attrs, key) ? getproperty(attrs, key) : nothing
 end
@@ -271,7 +259,7 @@ function _collect_mesh_nodes!(
     current_object_ids::Union{Nothing,Vector{Int}}=nothing,
     current_object_cursor::Union{Nothing,Base.RefValue{Int}}=nothing,
 )
-    attrs = _node_attrs(node)
+    attrs = MultiScaleTreeGraph.attributes(node)
     group = current_group
     item_id = _node_item_id(attrs, current_item_id)
     type_name = _node_type_name(node, attrs, "")
@@ -286,7 +274,7 @@ function _collect_mesh_nodes!(
         object_cursor = Ref(1)
     end
 
-    if _has_attr(attrs, :geometry) && !_has_attr(attrs, :scene_dimensions)
+    if hasproperty(attrs, :geometry) && !hasproperty(attrs, :scene_dimensions)
         push!(meshes, PlantGeom.refmesh_to_mesh(node))
         next_id[] += 1
         push!(node_ids, next_id[])
@@ -322,7 +310,7 @@ function _collect_mesh_nodes!(
         end
     end
 
-    children = _node_children(node)
+    children = MultiScaleTreeGraph.children(node)
     if children !== nothing
         for ch in children
             _collect_mesh_nodes!(
@@ -491,8 +479,8 @@ end
 function _triangulate_face_indices(ids::Vector{Int})
     out = NTuple{3,Int}[]
     length(ids) < 3 && return out
-    for i in 2:(length(ids) - 1)
-        push!(out, (ids[1], ids[i], ids[i + 1]))
+    for i in 2:(length(ids)-1)
+        push!(out, (ids[1], ids[i], ids[i+1]))
     end
     out
 end
@@ -531,8 +519,7 @@ function _opf_triangulated_text_if_needed(path::AbstractString)
         changed[] = true
         new_txt = replace(
             new_txt,
-            r"(?s)<materialBDD>\s*</materialBDD>" =>
-                "<materialBDD>\n\t\t<material Id=\"0\">\n\t\t\t<emission>0 0 0 1</emission>\n\t\t\t<ambient>0.2 0.2 0.2 1</ambient>\n\t\t\t<diffuse>0.8 0.8 0.8 1</diffuse>\n\t\t\t<specular>0 0 0 1</specular>\n\t\t\t<shininess>0</shininess>\n\t\t</material>\n\t</materialBDD>",
+            r"(?s)<materialBDD>\s*</materialBDD>" => "<materialBDD>\n\t\t<material Id=\"0\">\n\t\t\t<emission>0 0 0 1</emission>\n\t\t\t<ambient>0.2 0.2 0.2 1</ambient>\n\t\t\t<diffuse>0.8 0.8 0.8 1</diffuse>\n\t\t\t<specular>0 0 0 1</specular>\n\t\t\t<shininess>0</shininess>\n\t\t</material>\n\t</materialBDD>",
         )
     end
 
