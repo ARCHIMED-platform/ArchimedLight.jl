@@ -554,20 +554,34 @@ function _compute_normal(points)
     n = length(points)
     n < 3 && return StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
     for k in 1:(n - 2)
-        v1 = points[k + 1] - points[k]
-        n1 = norm(v1)
-        n1 <= 0.0 && continue
-        v1n = v1 / n1
+        p0 = points[k]
+        p1 = points[k + 1]
+        p2 = points[k + 2]
 
-        v2 = points[k + 2] - points[k + 1]
-        n2 = norm(v2)
-        n2 <= 0.0 && continue
-        v2n = v2 / n2
+        v1x = Float32(p1[1] - p0[1])
+        v1y = Float32(p1[2] - p0[2])
+        v1z = Float32(p1[3] - p0[3])
+        n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
+        n1 <= 0.0f0 && continue
+        v1x /= n1
+        v1y /= n1
+        v1z /= n1
 
-        nn = cross(v1n, v2n)
-        nnorm = norm(nn)
-        nnorm <= 0.0 && continue
-        return nn / nnorm
+        v2x = Float32(p2[1] - p1[1])
+        v2y = Float32(p2[2] - p1[2])
+        v2z = Float32(p2[3] - p1[3])
+        n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
+        n2 <= 0.0f0 && continue
+        v2x /= n2
+        v2y /= n2
+        v2z /= n2
+
+        nx = (v1y * v2z) - (v1z * v2y)
+        ny = (v1z * v2x) - (v1x * v2z)
+        nz = (v1x * v2y) - (v1y * v2x)
+        nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
+        nnorm <= 0.0f0 && continue
+        return StaticArrays.SVector{3,Float64}(Float64(nx / nnorm), Float64(ny / nnorm), Float64(nz / nnorm))
     end
     StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
 end
@@ -664,8 +678,6 @@ function _project_triangle!(
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
         else
-            # Java directions are upward (z>=0 here); keep parity when internal
-            # direction conventions use incoming/downward vectors.
             dz = Float32(abs(direction[3]))
             (dz * Float32(normal[1]), dz * Float32(normal[2]))
         end
