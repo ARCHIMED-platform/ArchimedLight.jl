@@ -202,6 +202,13 @@ end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
 const _TURTLE_DIR_COMPAT_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
+const _JAVA_N16_DIR_ORDER = (1, 2, 3, 4, 5, 6, 14, 10, 7, 9, 12, 11, 8, 13, 16, 15)
+
+function _java_turtle_incoming_reordered(order::Int, dir_order::NTuple{N,Int}) where {N}
+    up = _java_turtle_upward_points_f32(order)
+    length(up) >= N || error("Invalid Java turtle reorder table for order=$(order): expected at least $(N) points, got $(length(up)).")
+    [_normalize3_java(-up[i]) for i in dir_order]
+end
 
 function _java_turtle_incoming_n6_logged()
     # Java n=6 turtle directions (upward hemisphere), logged from
@@ -220,9 +227,37 @@ function _java_turtle_incoming_n6_logged()
     ]
 end
 
+function _java_turtle_incoming_n16_logged()
+    # Java n=16 turtle directions (upward hemisphere), logged from
+    # `log-directions.csv`; negate to get incoming rays.
+    up = (
+        (3.821371e-15, 4.371139e-8, 1.0),
+        (1.5637987e-7, 0.89438856, 0.44729084),
+        (0.85061413, 0.27638108, 0.44729084),
+        (0.5257086, -0.7235755, 0.4472909),
+        (-0.5257085, -0.7235755, 0.44729084),
+        (-0.85061413, 0.2763814, 0.4472909),
+        (-4.0595705e-8, -0.9822395, 0.18763158),
+        (2.5001444e-8, -0.6070141, 0.7946911),
+        (0.35679406, 0.4910847, 0.794691),
+        (0.57730484, -0.18757768, 0.7946909),
+        (0.577346, 0.79464835, 0.18763156),
+        (-0.5773048, -0.18757758, 0.79469097),
+        (-0.35679388, 0.49108484, 0.794691),
+        (-0.57734585, 0.7946484, 0.18763156),
+        (-0.9341653, -0.30352855, 0.18763156),
+        (0.93416524, -0.30352876, 0.18763155),
+    )
+    [
+        _normalize3_java(StaticArrays.SVector{3,Float64}(-x, -y, -z))
+        for (x, y, z) in up
+    ]
+end
+
 function _java_turtle_incoming(n::Int)
     get!(_TURTLE_DIR_CACHE, n) do
         n == 6 && return _java_turtle_incoming_n6_logged()
+        n == 16 && return _java_turtle_incoming_reordered(2, _JAVA_N16_DIR_ORDER)
         order = _java_turtle_order(n)
         order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
         up = _java_turtle_upward_points(order)
@@ -232,6 +267,7 @@ end
 
 function _java_turtle_incoming_logged(n::Int)
     n == 6 && return _java_turtle_incoming_n6_logged()
+    n == 16 && return _java_turtle_incoming_n16_logged()
     # For larger sector counts, compatibility mode uses a Float32 turtle build
     # (seed/trigonometry) which is closer to Java internals than Float64 defaults.
     return get!(_TURTLE_DIR_COMPAT_CACHE, n) do
