@@ -168,9 +168,14 @@ function _opf_geometry_component_ids(path::AbstractString)
     seen = Set{Int}()
 
     for ln in lines
-        mo = match(r"<([A-Za-z]+)\b[^>]*\bclass=\"[^\"]+\"[^>]*\bid=\"([0-9]+)\"", ln)
+        mo = match(r"<([A-Za-z]+)\b([^>]*)>", ln)
         if mo !== nothing
-            push!(stack, (tag=mo.captures[1], id=parse(Int, mo.captures[2]), has_shape=false))
+            attrs = mo.captures[2]
+            has_class = match(r"(?i)\bclass\s*=\s*\"[^\"]+\"", attrs) !== nothing
+            mid = match(r"(?i)\bid\s*=\s*\"([0-9]+)\"", attrs)
+            if has_class && mid !== nothing
+                push!(stack, (tag=mo.captures[1], id=parse(Int, mid.captures[1]), has_shape=false))
+            end
         end
 
         ms = match(r"<shapeIndex>\s*([0-9]+)\s*</shapeIndex>", ln)
