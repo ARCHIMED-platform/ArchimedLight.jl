@@ -53,7 +53,7 @@ end
     # Function-first composability check: manual staged execution must match run_light_step.
     sky = ArchimedLight.compute_sky(row, cfg)
     turtle = ArchimedLight.build_turtle(cfg, sky)
-    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+    fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, cfg)
     max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64}) = maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
     max_abs_int_dict_diff(a::Dict{Int,Int}, b::Dict{Int,Int}) = maximum(abs(get(a, id, 0) - get(b, id, 0)) for id in union(keys(a), keys(b)); init=0)
     first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
@@ -529,12 +529,12 @@ end
     t6 = ArchimedLight.build_turtle(with_sectors(cfg_ref, 6), sky_ref)
     got6 = [s.direction for s in t6.sectors]
     exp6 = [
-        (0.0, 0.0, -1.0),
-        (1.5637987e-7, -0.89438856, -0.44729084),
-        (-0.85061413, -0.27638108, -0.44729084),
-        (-0.5257086, 0.7235755, -0.4472909),
-        (0.5257085, 0.7235755, -0.44729084),
-        (0.85061413, -0.2763814, -0.4472909),
+        (0.0, 0.0, 1.0),
+        (1.5637987e-7, 0.89438856, 0.44729084),
+        (0.85061413, 0.27638108, 0.44729084),
+        (0.5257086, -0.7235755, 0.4472909),
+        (-0.5257085, -0.7235755, 0.44729084),
+        (-0.85061413, 0.2763814, 0.4472909),
     ]
     @test length(got6) == length(exp6)
     for i in eachindex(exp6)
@@ -719,6 +719,62 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         end
         @test vmax <= lim
     end
+    _PARITY_DEBUG_ROWS = lowercase(strip(get(ENV, "ARCHIMEDLIGHT_PARITY_DEBUG_ROWS", "0"))) in ("1", "true", "yes", "on")
+    _PARITY_DEBUG_LABEL_FILTER = strip(get(ENV, "ARCHIMEDLIGHT_PARITY_DEBUG_LABEL_FILTER", ""))
+    _PARITY_DEBUG_MAX_ROWS = let raw = strip(get(ENV, "ARCHIMEDLIGHT_PARITY_DEBUG_MAX_ROWS", "8"))
+        parsed = try
+            parse(Int, raw)
+        catch
+            8
+        end
+        max(parsed, 1)
+    end
+
+    function _parity_debug_enabled(label::AbstractString)
+        _PARITY_DEBUG_ROWS || return false
+        isempty(_PARITY_DEBUG_LABEL_FILTER) && return true
+        occursin(_PARITY_DEBUG_LABEL_FILTER, label)
+    end
+
+    _rows_by_key(rows::Vector, key_cols::Vector{String}) = Dict(_row_key_from_dict(r, key_cols) => r for r in rows)
+    _row_subset(row, cols::Vector{String}) = Dict(c => _row_get_by_col(row, c) for c in cols)
+
+    function _log_row_mismatch_details(
+        expected_rows::Vector,
+        observed_rows::Vector,
+        key_cols::Vector{String},
+        cmp,
+        label::AbstractString,
+    )
+        exp_map = _rows_by_key(expected_rows, key_cols)
+        obs_map = _rows_by_key(observed_rows, key_cols)
+
+        miss_n = min(length(cmp.missing_keys), _PARITY_DEBUG_MAX_ROWS)
+        for i in 1:miss_n
+            key = cmp.missing_keys[i]
+            erow = get(exp_map, key, nothing)
+            @info "Parity missing key detail" label rank=i key expected_row=(erow === nothing ? nothing : _row_subset(erow, key_cols))
+        end
+
+        extra_n = min(length(cmp.extra_keys), _PARITY_DEBUG_MAX_ROWS)
+        for i in 1:extra_n
+            key = cmp.extra_keys[i]
+            orow = get(obs_map, key, nothing)
+            @info "Parity extra key detail" label rank=i key observed_row=(orow === nothing ? nothing : _row_subset(orow, key_cols))
+        end
+
+        mm_n = min(length(cmp.mismatches), _PARITY_DEBUG_MAX_ROWS)
+        for i in 1:mm_n
+            mm = cmp.mismatches[i]
+            key = mm.key
+            col = string(mm.column)
+            erow = get(exp_map, key, nothing)
+            orow = get(obs_map, key, nothing)
+            row_cols = unique(vcat(key_cols, [col]))
+            @info "Parity mismatch detail" label rank=i key column=col expected=mm.expected observed=mm.observed abs_err=mm.abs_err rel_err=mm.rel_err expected_row=(erow === nothing ? nothing : _row_subset(erow, row_cols)) observed_row=(orow === nothing ? nothing : _row_subset(orow, row_cols))
+        end
+    end
+
     function _assert_rows_match(
         expected_rows::Vector,
         observed_rows::Vector,
@@ -726,6 +782,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         value_cols::Vector{String};
         atol::Float64=1e-6,
         rtol::Float64=1e-3,
+        top_n::Int=10,
         label::AbstractString="",
     )
         cmp = compare_rows_by_key(
@@ -735,10 +792,11 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
             value_cols=value_cols,
             atol=atol,
             rtol=rtol,
-            top_n=10,
+            top_n=top_n,
         )
         if !cmp.ok
-            @info "Parity row mismatch" label missing_keys=cmp.missing_keys extra_keys=cmp.extra_keys mismatches=cmp.mismatches
+            @info "Parity row mismatch" label missing_keys=cmp.missing_keys extra_keys=cmp.extra_keys mismatch_count=cmp.mismatches_total mismatches=cmp.mismatches
+            _parity_debug_enabled(label) && _log_row_mismatch_details(expected_rows, observed_rows, key_cols, cmp, label)
         end
         @test cmp.ok
     end

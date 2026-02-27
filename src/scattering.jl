@@ -33,14 +33,14 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
             # Java PixelTable uses a stable height sort (Collections.sort on comparator).
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
-            # Mirror EnergyTransferTask: carry nearest non-virtual diffuser upward/downward
-            # across virtual sensors, then transfer between adjacent stack positions.
             n_hits = length(stack)
             node_ids_stack = Vector{Int}(undef, n_hits)
             @inbounds for i in 1:n_hits
                 node_ids_stack[i] = stack[i][2]
             end
 
+            # Mirror EnergyTransferTask: carry nearest non-virtual diffuser upward/downward
+            # across virtual sensors, then transfer between adjacent stack positions.
             scatt_up = Vector{Int}(undef, n_hits)
             up = 0
             @inbounds for h in n_hits:-1:1
@@ -64,21 +64,16 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
             @inbounds for h in (n_hits - 1):-1:1
                 to_above = node_ids_stack[h]
                 from_below = scatt_up[h + 1]
-                if from_below != 0
-                    # Java debug traces do not create transfer links between paving tiles.
-                    # Keeping these coplanar pavement↔pavement links inflates ground NIR
-                    # recirculation and shifts scattering convergence.
-                    if !(get(node_group, to_above, "") == "pavement" && get(node_group, from_below, "") == "pavement")
-                        pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
-                    end
+                if from_below != 0 &&
+                   !(get(node_group, to_above, "") == "pavement" && get(node_group, from_below, "") == "pavement")
+                    pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
                 end
 
                 to_below = node_ids_stack[h + 1]
                 from_above = scatt_down[h]
-                if from_above != 0
-                    if !(get(node_group, to_below, "") == "pavement" && get(node_group, from_above, "") == "pavement")
-                        pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
-                    end
+                if from_above != 0 &&
+                   !(get(node_group, to_below, "") == "pavement" && get(node_group, from_above, "") == "pavement")
+                    pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
                 end
             end
         end

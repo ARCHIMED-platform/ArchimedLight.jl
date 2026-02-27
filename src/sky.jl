@@ -443,7 +443,7 @@ function _midpoint_sun_position_deg(date::Dates.Date, start_h::Float64, end_h::F
     _java_sun_position_deg(doy, latitude_rad, local_mid)
 end
 
-function _auto_sun_and_direct_fraction(
+function _radiation_substeps(
     date::Dates.Date,
     start_h::Float64,
     end_h::Float64,
@@ -455,12 +455,7 @@ function _auto_sun_and_direct_fraction(
     clearness_provided::Bool,
 )
     substeps = _java_substeps_v2(date, start_h, end_h, timestep_h, latitude_rad)
-    sx = 0.0
-    sy = 0.0
-    sz = 0.0
-    total_direct_weight = 0.0
-    total_direct_energy = 0.0
-    total_diffuse_energy = 0.0
+    rows = NamedTuple[]
 
     for ss in substeps
         global_w =
@@ -481,15 +476,65 @@ function _auto_sun_and_direct_fraction(
 
         sun_az_sub, sun_el_sub = _java_sun_position_deg(ss.doy, latitude_rad, ss.sun_pos)
         diffuse_w, direct_w = _partition_global_hourly(global_w, clearness_sub, deg2rad(sun_el_sub))
-        total_diffuse_energy += diffuse_w * ss.duration
-        total_direct_energy += direct_w * ss.duration
 
-        if direct_w > 0.0
-            x, y, z = _sun_direction_from_az_el_deg(sun_az_sub, sun_el_sub)
-            sx += x * direct_w
-            sy += y * direct_w
-            sz += z * direct_w
-            total_direct_weight += direct_w
+        push!(
+            rows,
+            (
+                doy=ss.doy,
+                start=ss.start,
+                stop=ss.stop,
+                duration=ss.duration,
+                sun_azimuth_deg=sun_az_sub,
+                sun_elevation_deg=sun_el_sub,
+                global_w=global_w,
+                diffuse_w=diffuse_w,
+                direct_w=direct_w,
+            ),
+        )
+    end
+
+    rows
+end
+
+function _auto_sun_and_direct_fraction(
+    date::Dates.Date,
+    start_h::Float64,
+    end_h::Float64,
+    latitude_rad::Float64,
+    timestep_h::Float64,
+    ri_sw::Float64,
+    clearness::Float64,
+    global_from_input::Bool,
+    clearness_provided::Bool,
+)
+    substeps = _radiation_substeps(
+        date,
+        start_h,
+        end_h,
+        latitude_rad,
+        timestep_h,
+        ri_sw,
+        clearness,
+        global_from_input,
+        clearness_provided,
+    )
+    sx = 0.0
+    sy = 0.0
+    sz = 0.0
+    total_direct_weight = 0.0
+    total_direct_energy = 0.0
+    total_diffuse_energy = 0.0
+
+    for ss in substeps
+        total_diffuse_energy += ss.diffuse_w * ss.duration
+        total_direct_energy += ss.direct_w * ss.duration
+
+        if ss.direct_w > 0.0
+            x, y, z = _sun_direction_from_az_el_deg(ss.sun_azimuth_deg, ss.sun_elevation_deg)
+            sx += x * ss.direct_w
+            sy += y * ss.direct_w
+            sz += z * ss.direct_w
+            total_direct_weight += ss.direct_w
         end
     end
 

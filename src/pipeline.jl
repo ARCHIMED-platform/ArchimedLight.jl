@@ -542,7 +542,7 @@ function _extra_band_irradiance(meteo_row)
     extras
 end
 
-function _single_band_flux(total_irradiance::Float64, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
+function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
     tmp = SkyState(
         sky.sun_azimuth_deg,
         sky.sun_elevation_deg,
@@ -551,7 +551,7 @@ function _single_band_flux(total_irradiance::Float64, sky::SkyState, turtle::Tur
         sky.direct_fraction,
         sky.diffuse_fraction,
     )
-    compute_directional_fluxes(tmp, turtle, cfg).par
+    compute_directional_fluxes(meteo_row, tmp, turtle, cfg).par
 end
 
 function _compute_extra_band_light(
@@ -573,7 +573,7 @@ function _compute_extra_band_light(
     ids = [s.id for s in turtle.sectors]
     n = length(ids)
     for (band, total_irr) in extras_irr
-        flux_band = _single_band_flux(total_irr, sky, turtle, cfg)
+        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, cfg)
         first_band = compute_first_order(
             scene,
             turtle,
@@ -640,7 +640,7 @@ function run_light_step(
     sky = compute_sky(meteo_row, cfg)
     nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(cfg, sky)
-    fluxes = compute_directional_fluxes(sky, turtle, cfg)
+    fluxes = compute_directional_fluxes(meteo_row, sky, turtle, cfg)
     first = compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
     scat = _compute_scattering_with_flags(
         scene,
@@ -705,7 +705,7 @@ function run_light_series(
         sky = compute_sky(row, cfg)
         nir_interception || (sky = _disable_nir_sky_local(sky))
         turtle = build_turtle(cfg, sky)
-        fluxes = compute_directional_fluxes(sky, turtle, cfg)
+        fluxes = compute_directional_fluxes(row, sky, turtle, cfg)
 
         first =
             if use_cache

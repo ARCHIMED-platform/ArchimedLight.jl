@@ -626,6 +626,7 @@ function compare_rows_by_key(
         end
     end
 
+    mismatches_total = length(mismatches)
     # Keep diagnostics concise.
     sort!(mismatches; by=x -> (isnan(x.rel_err) ? Inf : -x.rel_err))
     if length(mismatches) > top_n
@@ -633,5 +634,11 @@ function compare_rows_by_key(
     end
 
     ok = isempty(missing_keys) && isempty(extra_keys) && isempty(mismatches)
-    return (ok=ok, missing_keys=missing_keys, extra_keys=extra_keys, mismatches=mismatches)
+    return (
+        ok=ok,
+        missing_keys=missing_keys,
+        extra_keys=extra_keys,
+        mismatches=mismatches,
+        mismatches_total=mismatches_total,
+    )
 end

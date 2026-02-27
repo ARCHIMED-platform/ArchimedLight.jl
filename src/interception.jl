@@ -608,7 +608,14 @@ function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vect
 end
 
 function _wrap_index(i::Int, n::Int)
-    mod(i, n)
+    ii = i
+    while ii < 0
+        ii += n
+    end
+    while ii >= n
+        ii -= n
+    end
+    ii
 end
 
 function _project_triangle!(
@@ -678,7 +685,8 @@ function _project_triangle!(
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
         else
-            dz = Float32(abs(direction[3]))
+            # Java fallback uses signed direction.z when normal.z is almost zero.
+            dz = Float32(direction[3])
             (dz * Float32(normal[1]), dz * Float32(normal[2]))
         end
 
