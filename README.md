@@ -96,3 +96,28 @@ Run the fast parity guard subset (hitcount + weighted sun + one scattering fixtu
 ```bash
 ARCHIMEDLIGHT_TEST_PROFILE=guard julia --project=. test/runtests.jl
 ```
+
+Run only the isolated source-built Java sky-matrix parity suite:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=sky_matrix julia --project=. test/runtests.jl
+```
+
+Build the upstream Java jar used to freeze source-driven references:
+
+```bash
+cd /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source
+mvn -q -am -pl :archimed-lib-2018 package -Dmaven.test.skip=true
+```
+
+Freeze and sync the upstream Java sky-matrix fixtures into this repo:
+
+```bash
+julia --project=. scripts/freeze_java_light_refs.jl \
+  --jar /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source/archimed-lib-2018/target/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar \
+  --upstream-tests-root /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source/archimed-lib-2018/tests \
+  --fixtures test-compare-sky06,test-compare-sky16,test-compare-sky46 \
+  --force
+```
+
+The upstream Java source repo is the source of truth for these fixture definitions; this repo stores the mirrored fixture files and frozen `expected/` references consumed by Julia.

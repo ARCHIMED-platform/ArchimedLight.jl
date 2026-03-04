@@ -2,11 +2,14 @@ using Statistics
 using LinearAlgebra: norm
 using Rotations: RotZ, AngleAxis, RotMatrix
 using StaticArrays: SVector
+using GeometryBasics
+import PlantGeom
 
 const _TEST_PROFILE = lowercase(get(ENV, "ARCHIMEDLIGHT_TEST_PROFILE", "all"))
 const _RUN_CORE_TESTS = _TEST_PROFILE in ("all", "core")
 const _RUN_PARITY_TESTS = _TEST_PROFILE in ("all", "parity")
 const _RUN_GUARD_TESTS = _TEST_PROFILE == "guard"
+const _RUN_SKY_MATRIX_TESTS = _TEST_PROFILE == "sky_matrix"
 
 if _RUN_CORE_TESTS
 @testset "Phase 0 artifacts" begin
@@ -434,6 +437,90 @@ end
     end
 end
 
+@testset "Projection tie ownership at toric borders" begin
+    p1 = SVector(-0.2, -0.2, 1.0)
+    p2 = SVector(1.8, -0.2, 1.0)
+    p3 = SVector(0.8, 1.8, 1.0)
+    direction = SVector(0.0, 0.0, 1.0)
+
+    pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
+    node_hits = Dict{Int,Int}()
+    projected_mesh_area = Dict{Int,Float64}()
+    projected_pixels_area = Dict{Int,Float64}()
+
+    ArchimedLight._project_triangle!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        101,
+        p1,
+        p2,
+        p3,
+        direction,
+        1.5,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        4,
+        4,
+        false,
+        true,
+    )
+    @test isempty(pixel_hits)
+
+    empty!(pixel_hits)
+    empty!(node_hits)
+    empty!(projected_mesh_area)
+    empty!(projected_pixels_area)
+
+    ArchimedLight._project_triangle!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        101,
+        p1,
+        p2,
+        p3,
+        direction,
+        1.5,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        4,
+        4,
+        true,
+        true,
+    )
+
+    ArchimedLight._project_triangle!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        202,
+        p1,
+        p2,
+        p3,
+        direction,
+        1.5,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        4,
+        4,
+        true,
+        true,
+    )
+
+    @test haskey(pixel_hits, 4)
+    @test pixel_hits[4][1][2] == 101
+end
+
 @testset "OPS GWA scene load" begin
     root = joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-hitcount")
     cfg = ArchimedLight.read_light_config(joinpath(root, "config.yml"))
@@ -542,6 +629,155 @@ end
         @test abs(got6[i][2] - exp6[i][2]) < 1e-6
         @test abs(got6[i][3] - exp6[i][3]) < 1e-6
     end
+
+    for n in (1, 6, 16, 46)
+        t = ArchimedLight.build_turtle(with_sectors(cfg_ref, n), sky_ref)
+        for sector in t.sectors
+            @test abs(norm(sector.direction) - 1.0) < 1e-6
+            @test sector.direction[3] >= -1e-8
+        end
+    end
+end
+
+@testset "Sky sector energy unit checks" begin
+    cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
+
+    function with_turtle(cfg::ArchimedLight.LightConfig; sectors::Int=cfg.turtle_sectors, all_in_turtle::Bool=cfg.all_in_turtle, scattering::Bool=cfg.scattering)
+        raw = copy(cfg.raw)
+        raw["all_in_turtle"] = all_in_turtle
+        raw["sky_sectors"] = sectors
+        raw["scattering"] = scattering
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            all_in_turtle,
+            sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    sun_direction(azimuth_deg::Float64, elevation_deg::Float64) = begin
+        az = deg2rad(azimuth_deg)
+        el = deg2rad(elevation_deg)
+        SVector{3,Float64}(cos(el) * sin(az), cos(el) * cos(az), sin(el))
+    end
+
+    sky_split = ArchimedLight.SkyState(215.0, 52.0, 240.0, 260.0, 0.4, 0.6)
+    cfg_split = with_turtle(cfg_ref; sectors=6, all_in_turtle=false, scattering=false)
+    turtle_split = ArchimedLight.build_turtle(cfg_split, sky_split)
+    flux_split = ArchimedLight.compute_directional_fluxes(sky_split, turtle_split, cfg_split)
+    sky_ids = findall(s -> s.source == :sky, turtle_split.sectors)
+    sun_ids = findall(s -> s.source == :sun, turtle_split.sectors)
+    @test length(turtle_split.sectors) == 7
+    @test length(sun_ids) == 1
+    @test isapprox(sum(flux_split.par), sky_split.ri_par_f; atol=1e-12, rtol=1e-12)
+    @test isapprox(sum(flux_split.nir), sky_split.ri_nir_f; atol=1e-12, rtol=1e-12)
+    @test isapprox(sum(flux_split.par[sky_ids]), sky_split.ri_par_f * sky_split.diffuse_fraction; atol=1e-12, rtol=1e-12)
+    @test isapprox(sum(flux_split.nir[sky_ids]), sky_split.ri_nir_f * sky_split.diffuse_fraction; atol=1e-12, rtol=1e-12)
+    @test isapprox(flux_split.par[first(sun_ids)], sky_split.ri_par_f * sky_split.direct_fraction; atol=1e-12, rtol=1e-12)
+    @test isapprox(flux_split.nir[first(sun_ids)], sky_split.ri_nir_f * sky_split.direct_fraction; atol=1e-12, rtol=1e-12)
+    @test maximum(abs.(turtle_split.sectors[first(sun_ids)].direction .- sun_direction(sky_split.sun_azimuth_deg, sky_split.sun_elevation_deg))) < 1e-12
+
+    sky_diffuse = ArchimedLight.SkyState(120.0, 35.0, 180.0, 120.0, 0.0, 1.0)
+    cfg_diffuse = with_turtle(cfg_ref; sectors=16, all_in_turtle=true, scattering=false)
+    turtle_diffuse = ArchimedLight.build_turtle(cfg_diffuse, sky_diffuse)
+    flux_diffuse = ArchimedLight.compute_directional_fluxes(sky_diffuse, turtle_diffuse, cfg_diffuse)
+    @test length(turtle_diffuse.sectors) == 16
+    @test all(s -> s.source == :sky, turtle_diffuse.sectors)
+    @test isapprox(sum(flux_diffuse.par), sky_diffuse.ri_par_f; atol=1e-12, rtol=1e-12)
+    @test isapprox(sum(flux_diffuse.nir), sky_diffuse.ri_nir_f; atol=1e-12, rtol=1e-12)
+    @test all(>=(0.0), flux_diffuse.par)
+    @test all(>=(0.0), flux_diffuse.nir)
+    par_weights = flux_diffuse.par ./ sum(flux_diffuse.par)
+    nir_weights = flux_diffuse.nir ./ sum(flux_diffuse.nir)
+    @test maximum(abs.(par_weights .- nir_weights)) < 1e-12
+end
+
+@testset "Single plate interception unit checks" begin
+    cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
+
+    function with_plate_cfg(cfg::ArchimedLight.LightConfig; sectors::Int=1, all_in_turtle::Bool=false, scattering::Bool=false)
+        raw = copy(cfg.raw)
+        raw["all_in_turtle"] = all_in_turtle
+        raw["sky_sectors"] = sectors
+        raw["scattering"] = scattering
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            all_in_turtle,
+            sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    points = Point3f[
+        Point3f(0.0f0, 0.0f0, 1.0f0),
+        Point3f(1.0f0, 0.0f0, 1.0f0),
+        Point3f(1.0f0, 1.0f0, 1.0f0),
+        Point3f(0.0f0, 1.0f0, 1.0f0),
+    ]
+    faces = PlantGeom.Face3[(1, 2, 3), (1, 3, 4)]
+    mesh = GeometryBasics.Mesh(points, faces)
+    scene = ArchimedLight.SceneGeometry(
+        nothing,
+        mesh,
+        [1, 1],
+        Dict(1 => 1.0),
+        Dict(1 => (0.5, 0.5, 1.0)),
+        Dict(1 => "plate"),
+        Dict(1 => "plate"),
+        Dict(1 => 1),
+        Dict(1 => 1),
+        "synthetic_one_plate",
+        (0.0, 0.0, 1.0, 1.0),
+    )
+
+    cfg = with_plate_cfg(cfg_ref; sectors=1, all_in_turtle=false, scattering=false)
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+    turtle = ArchimedLight.build_turtle(cfg, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+    first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+    total_area = sum(values(scene.total_area_per_node))
+    total_projected_area = sum(values(first_order.projected_area_per_node))
+    total_incident_power = sum(values(first_order.incident_par_power_per_node))
+
+    @test isapprox(total_projected_area, total_area; atol=1e-12, rtol=1e-12)
+    @test isapprox(total_incident_power, sky.ri_par_f * total_area; atol=1e-10, rtol=1e-10)
+
+    budget = ArchimedLight.integrate_light(
+        first_order,
+        nothing,
+        cfg;
+        step_duration_seconds=1.0,
+        component_area_per_node=scene.total_area_per_node,
+    )
+    step = ArchimedLight.LightStepResult(sky, turtle, fluxes, first_order, nothing, budget, Dict{String,Float64}())
+    rows = ArchimedLight.component_values_table(
+        scene,
+        step,
+        cfg;
+        step_duration_seconds=1.0,
+        columns=["item_id", "component_id", "area", "Ri_PAR_0_f", "Ri_PAR_0_q"],
+    ).rows
+    @test length(rows) == length(scene.total_area_per_node)
+    @test all(isapprox(Float64(r["Ri_PAR_0_f"]), sky.ri_par_f; atol=1e-10, rtol=1e-10) for r in rows)
+    @test isapprox(sum(Float64(r["Ri_PAR_0_q"]) for r in rows), total_incident_power; atol=1e-10, rtol=1e-10)
 end
 
 @testset "Pixel size validation parity" begin
@@ -666,6 +902,214 @@ end
     @test abs(s21.ri_par_f - (10.0 * 0.48)) < 1e-12
 end
 
+end
+
+if _RUN_SKY_MATRIX_TESTS
+@testset "Sky matrix parity" begin
+    fixtures = Dict(f.name => f for f in light_parity_fixtures())
+    to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
+
+    function _row_float_value_local(row, col::String)
+        sym = Symbol(col)
+        sym in propertynames(row) || return nothing
+        v = getproperty(row, sym)
+        v === missing && return nothing
+        v isa Number && return Float64(v)
+        try
+            return parse(Float64, string(v))
+        catch
+            return nothing
+        end
+    end
+
+    function _filter_finite_rows(rows::Vector, key_cols::Vector{String}, value_col::String)
+        keys = Set{Tuple}()
+        filtered = Any[]
+        for row in rows
+            v = _row_float_value_local(row, value_col)
+            if v !== nothing && isfinite(v)
+                push!(filtered, row)
+                push!(keys, Tuple(getproperty(row, Symbol(c)) for c in key_cols))
+            end
+        end
+        return filtered, keys
+    end
+
+    function _assert_rows_match(
+        expected_rows::Vector,
+        observed_rows::Vector,
+        key_cols::Vector{String},
+        value_cols::Vector{String};
+        atol::Float64=1e-6,
+        rtol::Float64=1e-3,
+        label::AbstractString="",
+    )
+        cmp = compare_rows_by_key(
+            expected_rows,
+            observed_rows;
+            key_cols=key_cols,
+            value_cols=value_cols,
+            atol=atol,
+            rtol=rtol,
+            top_n=10,
+        )
+        if !cmp.ok
+            @info "Sky matrix row mismatch" label missing_keys=cmp.missing_keys extra_keys=cmp.extra_keys mismatch_count=cmp.mismatches_total mismatches=cmp.mismatches
+        end
+        @test cmp.ok
+    end
+
+    function _format_meteo_date(v)
+        v === missing && return ""
+        if v isa Dates.Date
+            return Dates.format(v, Dates.DateFormat("yyyy/mm/dd"))
+        elseif v isa Dates.DateTime
+            return Dates.format(Dates.Date(v), Dates.DateFormat("yyyy/mm/dd"))
+        end
+        return replace(string(v), '-' => '/')
+    end
+
+    function _observed_meteo_rows(series, meteo_rows)
+        rows = Dict{String,Any}[]
+        for i in eachindex(series)
+            row = meteo_rows[i]
+            step = series[i]
+            push!(
+                rows,
+                Dict(
+                    "step_number" => i - 1,
+                    "date" => _format_meteo_date(getproperty(row, :date)),
+                    "hour_start" => string(getproperty(row, :hour_start)),
+                    "hour_end" => string(getproperty(row, :hour_end)),
+                    "sun_elevation" => step.sky.sun_elevation_deg,
+                    "sun_azimut" => step.sky.sun_azimuth_deg,
+                ),
+            )
+        end
+        rows
+    end
+
+    sky_matrix_fixtures = (
+        "test-compare-sky06",
+        "test-compare-sky16",
+        "test-compare-sky46",
+    )
+
+    for fx_name in sky_matrix_fixtures
+        fx = fixtures[fx_name]
+        component_energy_atol = fx_name == "test-compare-sky46" ? 50.0 : 1e-3
+        component_energy_rtol = fx_name == "test-compare-sky46" ? 3e-2 : 1e-3
+        scat_atol = fx_name == "test-compare-sky46" ? 1.5e-5 : 1e-6
+        scat_rtol = fx_name == "test-compare-sky46" ? 3e-2 : 1e-4
+        expected_comp_path = _expected_component_values_path(fx)
+        expected_scene_path = _expected_scene_values_path(fx)
+        expected_sun_path = _expected_sun_log_path(fx)
+        expected_summary_path = _expected_summary_path(fx)
+        expected_scat_path = _expected_scattering_log_path(fx)
+        expected_meteo_path = fx.expected_dir === nothing ? nothing : joinpath(fx.expected_dir, "meteo.csv")
+
+        @test expected_comp_path !== nothing
+        @test expected_scene_path !== nothing
+        @test expected_sun_path !== nothing
+        @test expected_summary_path !== nothing
+        @test expected_scat_path !== nothing
+        @test expected_meteo_path !== nothing
+        @test isfile(expected_meteo_path)
+
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        selected = ArchimedLight.prepare_meteo(meteo, cfg)
+        series = ArchimedLight.run_light_series(scene, selected, cfg)
+        @test length(series) == length(selected.rows)
+
+        mktempdir() do tmp
+            out_paths = ArchimedLight.write_light_outputs(
+                scene,
+                series,
+                cfg;
+                meteo_rows=selected.rows,
+                start_step_number=0,
+                outdir=joinpath(tmp, "output"),
+                write_component=true,
+                write_scene=true,
+                write_summary=true,
+                write_sun_position_log=true,
+                write_scattering_log=cfg.scattering,
+                scattering_log_bands=["PAR"],
+            )
+
+            expected_comp = read_java_csv(expected_comp_path)
+            observed_comp = read_java_csv(out_paths["component_values"])
+            sort!(expected_comp; by=r -> (to_int(getproperty(r, :step_number)), to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id))))
+            sort!(observed_comp; by=r -> (to_int(getproperty(r, :step_number)), to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id))))
+            _assert_rows_match(expected_comp, observed_comp, ["step_number", "item_id", "component_id"], ["area", "barycentre_z"]; atol=1e-6, rtol=1e-4, label="component geometry $(fx_name)")
+            expected_sky_fraction, finite_keys = _filter_finite_rows(expected_comp, ["step_number", "item_id", "component_id"], "sky_fraction")
+            observed_sky_fraction = [r for r in observed_comp if (getproperty(r, :step_number), getproperty(r, :item_id), getproperty(r, :component_id)) in finite_keys]
+            _assert_rows_match(expected_sky_fraction, observed_sky_fraction, ["step_number", "item_id", "component_id"], ["sky_fraction"]; atol=1e-4, rtol=1e-3, label="component sky fraction $(fx_name)")
+            _assert_rows_match(
+                expected_comp,
+                observed_comp,
+                ["step_number", "item_id", "component_id"],
+                ["Ri_PAR_0_q", "Ri_PAR_q", "Ra_PAR_0_q", "Ra_PAR_q", "Ri_NIR_q", "Ra_NIR_q"];
+                atol=component_energy_atol,
+                rtol=component_energy_rtol,
+                label="component energy $(fx_name)",
+            )
+
+            expected_scene = read_java_csv(expected_scene_path)
+            observed_scene = read_java_csv(out_paths["scene_values"])
+            sort!(expected_scene; by=r -> to_int(getproperty(r, :step_number)))
+            sort!(observed_scene; by=r -> to_int(getproperty(r, :step_number)))
+            scene_exact_cols = [c for c in ("date", "hour_start", "hour_end") if c in String.(propertynames(first(expected_scene))) && c in String.(propertynames(first(observed_scene)))]
+            !isempty(scene_exact_cols) && _assert_rows_match(expected_scene, observed_scene, ["step_number"], scene_exact_cols; atol=0.0, rtol=0.0, label="scene exact $(fx_name)")
+            _assert_rows_match(expected_scene, observed_scene, ["step_number"], ["RI_SW_f"]; atol=1e-4, rtol=1e-6, label="scene irradiance $(fx_name)")
+            _assert_rows_match(expected_scene, observed_scene, ["step_number"], ["plot_area"]; atol=1e-5, rtol=0.0, label="scene plot area $(fx_name)")
+
+            expected_summary = read_java_csv(expected_summary_path)
+            observed_summary = read_java_csv(out_paths["summary"])
+            sort!(expected_summary; by=r -> (to_int(getproperty(r, :step_number)), string(getproperty(r, :group)), string(getproperty(r, :type)), to_int(getproperty(r, :item_id))))
+            sort!(observed_summary; by=r -> (to_int(getproperty(r, :step_number)), string(getproperty(r, :group)), string(getproperty(r, :type)), to_int(getproperty(r, :item_id))))
+            summary_cols = [c for c in ("Ri_q", "Ra_q") if c in String.(propertynames(first(expected_summary))) && c in String.(propertynames(first(observed_summary)))]
+            @test !isempty(summary_cols)
+            _assert_rows_match(expected_summary, observed_summary, ["step_number", "group", "type", "item_id"], summary_cols; atol=1e-3, rtol=5e-4, label="summary $(fx_name)")
+
+            expected_sun = read_java_csv(expected_sun_path)
+            observed_sun = read_java_csv(out_paths["log_sun_position"])
+            sort!(expected_sun; by=r -> to_int(getproperty(r, :stepNumber)))
+            sort!(observed_sun; by=r -> to_int(getproperty(r, :stepNumber)))
+            _assert_rows_match(expected_sun, observed_sun, ["stepNumber"], ["azimuthWeighted", "elevationWeighted"]; atol=1e-4, rtol=0.0, label="sun log $(fx_name)")
+
+            expected_meteo = read_java_csv(expected_meteo_path)
+            observed_meteo = _observed_meteo_rows(series, selected.rows)
+            sort!(expected_meteo; by=r -> to_int(getproperty(r, :step_number)))
+            sort!(observed_meteo; by=r -> Int(r["step_number"]))
+            _assert_rows_match(expected_meteo, observed_meteo, ["step_number"], ["date", "hour_start", "hour_end"]; atol=0.0, rtol=0.0, label="meteo exact $(fx_name)")
+            _assert_rows_match(expected_meteo, observed_meteo, ["step_number"], ["sun_elevation", "sun_azimut"]; atol=1e-4, rtol=0.0, label="meteo sun $(fx_name)")
+
+            expected_scat = read_java_csv(expected_scat_path)
+            observed_scat = read_java_csv(out_paths["log_iteration_scat_par"])
+            sort!(expected_scat; by=r -> (to_int(getproperty(r, :step)), to_int(getproperty(r, :plantid)), to_int(getproperty(r, :nodeid)), to_int(getproperty(r, :iter))))
+            sort!(observed_scat; by=r -> (to_int(getproperty(r, :step)), to_int(getproperty(r, :plantid)), to_int(getproperty(r, :nodeid)), to_int(getproperty(r, :iter))))
+            scat_value_cols = [c for c in ("scat", "scat_W") if c in String.(propertynames(first(expected_scat))) && c in String.(propertynames(first(observed_scat)))]
+            @test !isempty(scat_value_cols)
+            scat_keys = ["step", "plantid", "nodeid", "iter"]
+            observed_scat_keys = Set(Tuple(getproperty(r, Symbol(c)) for c in scat_keys) for r in observed_scat)
+            expected_scat_keys = Set(Tuple(getproperty(r, Symbol(c)) for c in scat_keys) for r in expected_scat)
+            @test isempty(setdiff(observed_scat_keys, expected_scat_keys))
+            expected_scat_common = [r for r in expected_scat if Tuple(getproperty(r, Symbol(c)) for c in scat_keys) in observed_scat_keys]
+            _assert_rows_match(
+                expected_scat_common,
+                observed_scat,
+                scat_keys,
+                scat_value_cols;
+                atol=scat_atol,
+                rtol=scat_rtol,
+                label="scattering log $(fx_name)",
+            )
+        end
+    end
+end
 end
 
 if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS

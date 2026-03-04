@@ -602,6 +602,7 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
     component_per_node = Dict{Int,Int}()
     group_per_node = Dict{Int,String}()
     type_per_node = Dict{Int,String}()
+    group_type_hints = _group_type_hints(cfg)
     for nid in node_ids
         item_id, component_id = key_by_node[nid]
         item_per_node[nid] = item_id
@@ -615,6 +616,10 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
             elseif g == "sensors"
                 t = "Sensor"
             end
+        end
+        if (isempty(t) || t == "Mesh") && !isempty(g)
+            hints = get(group_type_hints, g, String[])
+            length(hints) == 1 && (t = hints[1])
         end
         type_per_node[nid] = t
     end
@@ -1327,19 +1332,28 @@ function scattering_iteration_log_table(
     per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
     dt = _step_duration_output_local(meteo_row, nothing)
     w_to_mj = dt / 1e6
-    node_ids = _node_ids_for_output(scene)
+    key_by_node = _interception_java_keys(scene, cfg)
+    node_ids = collect(keys(key_by_node))
+    sort!(
+        node_ids;
+        by=nid -> begin
+            item_id, component_id = key_by_node[nid]
+            (item_id, component_id, nid)
+        end,
+    )
     rows = Dict{String,Any}[]
     for (it, vals) in enumerate(per_iter)
         iter_idx = it - 1
         for nid in node_ids
             row = Dict{String,Any}()
+            item_id, component_id = key_by_node[nid]
             for c in cols
                 if c == "step"
                     row[c] = step_number
                 elseif c == "plantid"
-                    row[c] = get(scene.java_item_id_per_node, nid, -1)
+                    row[c] = item_id
                 elseif c == "nodeid"
-                    row[c] = get(scene.java_component_id_per_node, nid, nid)
+                    row[c] = component_id
                 elseif c == "iter"
                     row[c] = iter_idx
                 elseif c == "scat"

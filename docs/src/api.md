@@ -4,6 +4,7 @@
 read_light_config
 read_scene
 read_meteo
+prepare_meteo
 compute_sky
 build_turtle
 compute_directional_fluxes
@@ -14,6 +15,8 @@ compute_scattering
 integrate_light
 run_light_step
 run_light_series
+ArchimedLight._nir_interception_enabled_local
+ArchimedLight._nir_scattering_enabled_local
 component_variable_names
 component_values_table
 write_component_values_csv
@@ -33,4 +36,5 @@ simulation_output_directory
 summary_values_table
 write_summary_csv
 write_light_outputs
+sort_csv_file
 ```

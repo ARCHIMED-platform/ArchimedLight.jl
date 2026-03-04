@@ -28,6 +28,7 @@ step = run_light_step(scene, row, cfg)
 ```
 
 ## Navigation
+- See [ARCHIMED Reference](archimed_reference.md) for a detailed explanation of the original Java algorithm, the Julia port, and the modeling assumptions.
 - See [Full Example](full_example.md) for a complete runnable workflow with bundled input files.
 - See [Composable Stages](@ref) for stage-by-stage usage.
 - See [API Reference](@ref) for public signatures.

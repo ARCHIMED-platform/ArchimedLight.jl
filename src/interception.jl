@@ -33,6 +33,60 @@ function _cfg_toricity(cfg::LightConfig)
     return true
 end
 
+function _cfg_debug_drop_leading_hit(cfg::LightConfig)
+    raw = cfg.raw
+    spec = get(raw, "debug_drop_leading_hit", nothing)
+    if spec === nothing
+        props = get(raw, "prop", nothing)
+        if props isa AbstractDict
+            spec = get(props, "debug_drop_leading_hit", nothing)
+        end
+    end
+    spec isa AbstractDict || return nothing
+    d = _to_string_dict(spec)
+    node_id = try
+        Int(get(d, "node_id", 0))
+    catch
+        0
+    end
+    x = try
+        Int(get(d, "x", -1))
+    catch
+        -1
+    end
+    y = try
+        Int(get(d, "y", -1))
+    catch
+        -1
+    end
+    node_id > 0 || return nothing
+    x >= 0 || return nothing
+    y >= 0 || return nothing
+    return (node_id=node_id, x=x, y=y)
+end
+
+function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg::LightConfig)
+    spec = _cfg_debug_drop_leading_hit(cfg)
+    spec === nothing && return
+    idx = spec.x + 1 + spec.y * plotbox.nx
+    stack = get(pixel_hits, idx, nothing)
+    stack === nothing && return
+    isempty(stack) && return
+
+    sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+    top = stack[1]
+    top_nid = _hit_node(top)
+    top_nid == spec.node_id || return
+
+    deleteat!(stack, 1)
+    if isempty(stack)
+        delete!(pixel_hits, idx)
+    end
+
+    node_hits[top_nid] = max(0, get(node_hits, top_nid, 0) - 1)
+    projected_pixels_area[top_nid] = max(0.0, get(projected_pixels_area, top_nid, 0.0) - plotbox.pixel_area)
+end
+
 function _cfg_plot_paving(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
     models isa AbstractVector || return 0
@@ -177,10 +231,10 @@ end
 
 function _group_light_emitters(cfg::LightConfig)
     models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{Tuple{String,String},NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+    models isa AbstractVector || return Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
 
     base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    out = Dict{Tuple{String,String},NamedTuple{(:par,:nir),Tuple{Float64,Float64}}}()
+    out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
     for m in models
         mp = String(m)
         path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
@@ -330,7 +384,7 @@ function _emitter_transfer_weights(
                 src in emitter_nodes || continue
 
                 to = 0
-                for j in (i + 1):length(stack)
+                for j in (i+1):length(stack)
                     nid = stack[j][2]
                     nid in emitter_nodes && continue
                     to = nid
@@ -441,10 +495,10 @@ function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::Lig
     )
 end
 
-function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false)
+function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
-    mode = upper_hit ? "u1" : "u0"
+    mode = (upper_hit ? "u1" : "u0") * (strict_java_float ? "_sf1" : "_sf0")
     joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * "_" * mode * ".jls")
 end
 
@@ -553,10 +607,10 @@ end
 function _compute_normal(points)
     n = length(points)
     n < 3 && return StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
-    for k in 1:(n - 2)
+    for k in 1:(n-2)
         p0 = points[k]
-        p1 = points[k + 1]
-        p2 = points[k + 2]
+        p1 = points[k+1]
+        p2 = points[k+2]
 
         v1x = Float32(p1[1] - p0[1])
         v1y = Float32(p1[2] - p0[2])
@@ -584,6 +638,41 @@ function _compute_normal(points)
         return StaticArrays.SVector{3,Float64}(Float64(nx / nnorm), Float64(ny / nnorm), Float64(nz / nnorm))
     end
     StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
+end
+
+function _compute_normal_f32(points)
+    length(points) < 2 && return StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
+    @inbounds for n in 1:(length(points)-2)
+        p0 = points[n]
+        p1 = points[n+1]
+        p2 = points[n+2]
+
+        v1x = Float32(p1[1] - p0[1])
+        v1y = Float32(p1[2] - p0[2])
+        v1z = Float32(p1[3] - p0[3])
+        n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
+        n1 <= 0.0f0 && continue
+        v1x /= n1
+        v1y /= n1
+        v1z /= n1
+
+        v2x = Float32(p2[1] - p1[1])
+        v2y = Float32(p2[2] - p1[2])
+        v2z = Float32(p2[3] - p1[3])
+        n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
+        n2 <= 0.0f0 && continue
+        v2x /= n2
+        v2y /= n2
+        v2z /= n2
+
+        nx = (v1y * v2z) - (v1z * v2y)
+        ny = (v1z * v2x) - (v1x * v2z)
+        nz = (v1x * v2y) - (v1y * v2x)
+        nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
+        nnorm <= 0.0f0 && continue
+        return StaticArrays.SVector{3,Float32}(nx / nnorm, ny / nnorm, nz / nnorm)
+    end
+    StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
 end
 
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
@@ -637,6 +726,7 @@ function _project_triangle!(
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
+    strict_java_float::Bool,
 )
     v = (p1, p2, p3)
     projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
@@ -680,7 +770,7 @@ function _project_triangle!(
         _get_border_pixels(a, b, iMin, minY, maxY)
     end
 
-    normal = _compute_normal(pix_points)
+    normal = strict_java_float ? _compute_normal_f32(pix_points) : _compute_normal(pix_points)
     slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
@@ -697,13 +787,13 @@ function _project_triangle!(
     tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
     buffered_hits = Tuple{Int,Float64}[]
     nb_hits = 0
-    @inbounds for i in iMin:(iMax - 1)
+    @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
         zi = z0 - slopeX_f32 * Float32(ni)
-        ymin_i = minY[ni + 1]
-        ymax_i = maxY[ni + 1]
+        ymin_i = minY[ni+1]
+        ymax_i = maxY[ni+1]
 
-        for j in ymin_i:(ymax_i - 1)
+        for j in ymin_i:(ymax_i-1)
             nj = j - jMin
             zpix = zi - slopeY_f32 * Float32(nj)
             zpix = clamp(zpix, Float32(kMin), Float32(kMax))
@@ -758,8 +848,9 @@ function _rasterize_direction_java(
     virtual_nodes=Set{Int}(),
     upper_hit::Bool=false,
 )
+    strict_java_float = _strict_java_float(cfg)
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit)
+        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
@@ -803,6 +894,7 @@ end
 function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
+    strict_java_float = _strict_java_float(cfg)
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
@@ -831,18 +923,21 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
             plotbox.ny,
             toricity,
             use_upper_hit,
+            strict_java_float,
         )
     end
+
+    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg)
 
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false)
+function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
     if cache_ctx === nothing
         return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     end
 
-    path = _projection_cache_path(cache_ctx, direction, upper_hit)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
@@ -853,6 +948,15 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
         _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+end
+
+function _strict_java_float(cfg::LightConfig)
+    raw = cfg.raw
+    top = _cfg_get(raw, ["strict_java_float", "java_strict_float"], nothing)
+    props = get(raw, "prop", Dict{String,Any}())
+    propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
+    v = _cfg_get(propsd, ["strict_java_float", "java_strict_float"], top)
+    return _as_bool(v, false)
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)

@@ -8,6 +8,8 @@ import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Dates
 
+const _NEXT_SCENE_NODE_ID = Ref(1)
+
 function _to_string_dict(x)
     out = Dict{String,Any}()
     for (k, v) in x
@@ -288,6 +290,14 @@ function _read_ops_relaxed(path::AbstractString)
     PlantGeom.read_ops(path; _OPS_RELAXED_KWARGS...)
 end
 
+function _relabel_scene_node_ids!(root)
+    MultiScaleTreeGraph.traverse!(root) do node
+        setfield!(node, :id, _NEXT_SCENE_NODE_ID[])
+        _NEXT_SCENE_NODE_ID[] += 1
+    end
+    return root
+end
+
 function _scene_xy_bounds_from_mtg(mtg)
     haskey(mtg, :scene_dimensions) || return nothing
     dims = mtg[:scene_dimensions]
@@ -319,6 +329,7 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     else
         error("Unsupported scene extension: $ext")
     end
+    _relabel_scene_node_ids!(mtg)
     _build_scene_geometry(mtg, path, _scene_xy_bounds_from_mtg(mtg))
 end
 
