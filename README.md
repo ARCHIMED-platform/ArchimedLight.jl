@@ -103,6 +103,18 @@ Run only the isolated source-built Java sky-matrix parity suite:
 ARCHIMEDLIGHT_TEST_PROFILE=sky_matrix julia --project=. test/runtests.jl
 ```
 
+Run only the explicit synthetic simple-scene cases:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=synthetic julia --project=. test/runtests.jl
+```
+
+Run one named synthetic case only:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=synthetic ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=. test/runtests.jl
+```
+
 Build the upstream Java jar used to freeze source-driven references:
 
 ```bash
