@@ -145,10 +145,23 @@ function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::
             upper_hit=upper_hit,
         )
     end
-    return pa_by_sector, hits_by_sector, node_ids
+    emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
+    emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
+    emitter_weights =
+        isempty(emitter_nodes) ? Dict{Tuple{Int,Int},Float64}() :
+        _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
+    return pa_by_sector, hits_by_sector, node_ids, emit_par, emit_nir, emitter_weights
 end
 
-function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::DirectionalFluxes, node_ids_all)
+function _combine_sector_responses(
+    pa_by_sector,
+    hits_by_sector,
+    fluxes::DirectionalFluxes,
+    node_ids_all,
+    emit_par::Dict{Int,Float64}=Dict{Int,Float64}(),
+    emit_nir::Dict{Int,Float64}=Dict{Int,Float64}(),
+    emitter_weights::Dict{Tuple{Int,Int},Float64}=Dict{Tuple{Int,Int},Float64}(),
+)
     node_ids = Set{Int}()
     for k in node_ids_all
         push!(node_ids, k)
@@ -183,6 +196,11 @@ function _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes::Directi
         for (nid, h) in hits_by_sector[i]
             hits_per_node[nid] = get(hits_per_node, nid, 0) + h
         end
+    end
+
+    for ((to, src), w) in emitter_weights
+        incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + w * get(emit_par, src, 0.0)
+        incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + w * get(emit_nir, src, 0.0)
     end
 
     FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
@@ -696,7 +714,14 @@ function run_light_series(
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
     abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
     use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
-    cache = Dict{UInt64,Tuple{Vector{Dict{Int,Float64}},Vector{Dict{Int,Int}},Vector{Int}}}()
+    cache = Dict{UInt64,Tuple{
+        Vector{Dict{Int,Float64}},
+        Vector{Dict{Int,Int}},
+        Vector{Int},
+        Dict{Int,Float64},
+        Dict{Int,Float64},
+        Dict{Tuple{Int,Int},Float64},
+    }}()
     rows_eff = _prepare_meteo_rows_for_series(meteo, cfg)
     out = Vector{LightStepResult}(undef, length(rows_eff))
     for i in eachindex(rows_eff)
@@ -710,11 +735,11 @@ function run_light_series(
         first =
             if use_cache
                 key = _turtle_cache_key(turtle, cfg)
-                pa_by_sector, hits_by_sector, node_ids =
+                pa_by_sector, hits_by_sector, node_ids, emit_par, emit_nir, emitter_weights =
                     get!(cache, key) do
                         _build_sector_responses(scene, turtle, cfg)
                     end
-                _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes, node_ids)
+                _combine_sector_responses(pa_by_sector, hits_by_sector, fluxes, node_ids, emit_par, emit_nir, emitter_weights)
             else
                 compute_first_order(scene, turtle, fluxes, cfg; backend=ib)
             end

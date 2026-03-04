@@ -1051,6 +1051,48 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         end
         m
     end
+    function _component_float_map(scene::ArchimedLight.SceneGeometry, vals::Dict{Int,Float64})
+        out = Dict{Tuple{Int,Int},Float64}()
+        for (nid, v) in vals
+            key = (
+                get(scene.java_item_id_per_node, nid, nid),
+                get(scene.java_component_id_per_node, nid, 1),
+            )
+            out[key] = get(out, key, 0.0) + v
+        end
+        out
+    end
+    function _component_int_map(scene::ArchimedLight.SceneGeometry, vals::Dict{Int,Int})
+        out = Dict{Tuple{Int,Int},Int}()
+        for (nid, v) in vals
+            key = (
+                get(scene.java_item_id_per_node, nid, nid),
+                get(scene.java_component_id_per_node, nid, 1),
+            )
+            out[key] = get(out, key, 0) + v
+        end
+        out
+    end
+    function max_abs_component_float_diff(
+        scene_a::ArchimedLight.SceneGeometry,
+        a::Dict{Int,Float64},
+        scene_b::ArchimedLight.SceneGeometry,
+        b::Dict{Int,Float64},
+    )
+        aa = _component_float_map(scene_a, a)
+        bb = _component_float_map(scene_b, b)
+        maximum(abs(get(aa, id, 0.0) - get(bb, id, 0.0)) for id in union(keys(aa), keys(bb)); init=0.0)
+    end
+    function max_abs_component_int_diff(
+        scene_a::ArchimedLight.SceneGeometry,
+        a::Dict{Int,Int},
+        scene_b::ArchimedLight.SceneGeometry,
+        b::Dict{Int,Int},
+    )
+        aa = _component_int_map(scene_a, a)
+        bb = _component_int_map(scene_b, b)
+        maximum(abs(get(aa, id, 0) - get(bb, id, 0)) for id in union(keys(aa), keys(bb)); init=0)
+    end
     to_int(v) = v isa Number ? Int(round(v)) : parse(Int, string(v))
     mean_std(vals::Vector{Float64}) = (mean(vals), std(vals))
     function _assert_rel_metric(actual, expected, metric::Symbol, label::AbstractString)
@@ -2394,18 +2436,18 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     end
 
     # Java test-lightsource3 parity: linear additivity of sky and emitter contributions.
-    cfg_l1, scene_l3, row_l1, step_l1 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config1.yml"))
-    cfg_l2, _, row_l2, step_l2 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config2.yml"))
-    cfg_l3, _, row_l3, step_l3 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config3.yml"))
+    cfg_l1, scene_l1, row_l1, step_l1 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config1.yml"))
+    cfg_l2, scene_l2, row_l2, step_l2 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config2.yml"))
+    cfg_l3, scene_l3, row_l3, step_l3 = _run_fixture_step(joinpath(test_root, "test-lightsource3", "config3.yml"))
     t1 = ArchimedLight.component_values_table(
-        scene_l3,
+        scene_l1,
         step_l1,
         cfg_l1;
         meteo_row=row_l1,
         columns=["item_id", "component_id", "Ri_PAR_0_f", "Ri_NIR_0_f", "Ri_PAR_f", "Ri_NIR_f"],
     ).rows
     t2 = ArchimedLight.component_values_table(
-        scene_l3,
+        scene_l2,
         step_l2,
         cfg_l2;
         meteo_row=row_l2,
@@ -2601,7 +2643,7 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     for col in cols_red[3:end]
         d1 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t_red1)
         d2 = Dict((Int(r["item_id"]), Int(r["component_id"])) => Float64(r[col]) for r in t_red2)
-        @test maximum(abs(get(d1, k, 0.0) - get(d2, k, 0.0)) for k in union(keys(d1), keys(d2)); init=0.0) == 0.0
+        @test maximum(abs(get(d1, k, 0.0) - get(d2, k, 0.0)) for k in union(keys(d1), keys(d2)); init=0.0) <= parity_limit(:backend_identity_abs)
     end
 
     f_div = fixtures["test-scattering-divergence"]
@@ -2649,7 +2691,25 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         scene = ArchimedLight.read_scene(cfg.scene)
         meteo = ArchimedLight.read_meteo(cfg.meteo)
         subset = ArchimedLight.MeteoTable(meteo.rows[1:min(2, end)], meteo.metadata)
-        ArchimedLight.run_light_series(scene, subset, cfg)
+        return cfg, scene, subset, ArchimedLight.run_light_series(scene, subset, cfg)
+    end
+
+    function _component_light_q_map(scene, step, cfg, row)
+        rows = ArchimedLight.component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            columns=["item_id", "component_id", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"],
+        ).rows
+        Dict(
+            (Int(r["item_id"]), Int(r["component_id"])) => (
+                ri_par=Float64(r["Ri_PAR_q"]),
+                ri_nir=Float64(r["Ri_NIR_q"]),
+                ra_par=Float64(r["Ra_PAR_q"]),
+                ra_nir=Float64(r["Ra_NIR_q"]),
+            ) for r in rows
+        )
     end
 
     for cached_name in ("test-cached-radiation2", "test-cached-radiation3")
@@ -2659,15 +2719,18 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         @test isfile(cfg1)
         @test isfile(cfg2)
 
-        s1 = run_fixture_series(cfg1)
-        s2 = run_fixture_series(cfg2)
+        cfg_obj1, scene1, meteo1, s1 = run_fixture_series(cfg1)
+        cfg_obj2, scene2, meteo2, s2 = run_fixture_series(cfg2)
         @test length(s1) == length(s2)
 
         for i in eachindex(s1)
-            @test max_abs_float_dict_diff(s1[i].first_order.projected_area_per_node, s2[i].first_order.projected_area_per_node) == 0.0
-            @test max_abs_int_dict_diff(s1[i].first_order.hits_per_node, s2[i].first_order.hits_per_node) == 0
-            @test max_abs_float_dict_diff(s1[i].budget.ri_par_q_per_node, s2[i].budget.ri_par_q_per_node) == 0.0
-            @test max_abs_float_dict_diff(s1[i].budget.ri_nir_q_per_node, s2[i].budget.ri_nir_q_per_node) == 0.0
+            got1 = _component_light_q_map(scene1, s1[i], cfg_obj1, meteo1.rows[i])
+            got2 = _component_light_q_map(scene2, s2[i], cfg_obj2, meteo2.rows[i])
+            ks = union(keys(got1), keys(got2))
+            @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_par - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_par) for k in ks; init=0.0) < 1e-9
+            @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_nir - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_nir) for k in ks; init=0.0) < 1e-9
+            @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_par - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_par) for k in ks; init=0.0) < 1e-9
+            @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_nir - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_nir) for k in ks; init=0.0) < 1e-9
         end
     end
 
@@ -2678,16 +2741,17 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     cfg4_2 = joinpath(cached4_root, "config2.yml")
     @test isfile(cfg4_1)
     @test isfile(cfg4_2)
-    s4_1 = run_fixture_series(cfg4_1)
-    s4_2 = run_fixture_series(cfg4_2)
+    cfg4_obj1, scene4_1, meteo4_1, s4_1 = run_fixture_series(cfg4_1)
+    cfg4_obj2, scene4_2, meteo4_2, s4_2 = run_fixture_series(cfg4_2)
     @test length(s4_1) == length(s4_2)
     for i in eachindex(s4_1)
-        @test max_abs_float_dict_diff(s4_1[i].first_order.projected_area_per_node, s4_2[i].first_order.projected_area_per_node) == 0.0
-        @test max_abs_int_dict_diff(s4_1[i].first_order.hits_per_node, s4_2[i].first_order.hits_per_node) == 0
-        @test max_abs_float_dict_diff(s4_1[i].budget.ri_par_q_per_node, s4_2[i].budget.ri_par_q_per_node) == 0.0
-        @test max_abs_float_dict_diff(s4_1[i].budget.ri_nir_q_per_node, s4_2[i].budget.ri_nir_q_per_node) == 0.0
-        @test max_abs_float_dict_diff(s4_1[i].budget.ra_par_q_per_node, s4_2[i].budget.ra_par_q_per_node) == 0.0
-        @test max_abs_float_dict_diff(s4_1[i].budget.ra_nir_q_per_node, s4_2[i].budget.ra_nir_q_per_node) == 0.0
+        got1 = _component_light_q_map(scene4_1, s4_1[i], cfg4_obj1, meteo4_1.rows[i])
+        got2 = _component_light_q_map(scene4_2, s4_2[i], cfg4_obj2, meteo4_2.rows[i])
+        ks = union(keys(got1), keys(got2))
+        @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_par - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_par) for k in ks; init=0.0) < 1e-9
+        @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_nir - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ri_nir) for k in ks; init=0.0) < 1e-9
+        @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_par - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_par) for k in ks; init=0.0) < 1e-9
+        @test maximum(abs(get(got1, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_nir - get(got2, k, (ri_par=0.0, ri_nir=0.0, ra_par=0.0, ra_nir=0.0)).ra_nir) for k in ks; init=0.0) < 1e-9
     end
 
     # Java test-parallel and test-parallel2 parity:

@@ -120,7 +120,7 @@ The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` wit
 `single_plate_direct`, `stacked_scattering`, `partial_overlap_direct`,
 `tilted_plate_projection`, `oblique_shadow`, `toricity_wraparound`,
 `toricity_cross_border_shadow`, `toricity_diffuse_cross_border_shadow`,
-`virtual_sensor_transparency`, `single_plate_absorptance`,
+`toricity_scattering_cross_border`, `virtual_sensor_transparency`, `single_plate_absorptance`,
 `two_planes_shadow_absorptance`, and `cached_series_parity`.
 
 Build the upstream Java jar used to freeze source-driven references:

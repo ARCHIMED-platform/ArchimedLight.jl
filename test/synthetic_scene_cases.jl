@@ -451,6 +451,67 @@ if _SYNTHETIC_TEST_PROFILE == "synthetic"
     end
     end
 
+    if _synthetic_case_enabled("toricity_scattering_cross_border")
+    @testset "Scenario: toricity creates a wrapped scattering source across the plot edge" begin
+        inputs = (
+            scene=[
+                (x0=0.8, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", item_id=1),
+                (x0=0.0, x1=0.8, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+            ],
+            sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
+            cfg_notoric=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false),
+            cfg_toric=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=true),
+        )
+        expected = (
+            no_toric_upper_ri_par_0_q=0.0,
+            no_toric_upper_ri_par_q=0.0,
+            no_toric_lower_ri_par_0_q=80.00000119209906,
+            no_toric_lower_ri_par_q=80.00000119209906,
+            toric_upper_ri_par_0_q=20.00000476837205,
+            toric_upper_ri_par_q=20.678303998693803,
+            toric_lower_ri_par_0_q=80.00000119209906,
+            toric_lower_ri_par_q=80.6975728110636,
+            toric_lower_scattered_par_q=0.6975716189645285,
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+
+        cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
+        turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
+        flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
+        first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
+        scat_notoric = ArchimedLight.compute_scattering(scene, turtle_notoric, first_notoric, cfg_notoric)
+        budget_notoric = ArchimedLight.integrate_light(first_notoric, scat_notoric, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
+        turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
+        flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
+        first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
+        scat_toric = ArchimedLight.compute_scattering(scene, turtle_toric, first_toric, cfg_toric)
+        budget_toric = ArchimedLight.integrate_light(first_toric, scat_toric, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(budget_notoric.ri_par_q_per_node, 1, 0.0), expected.no_toric_upper_ri_par_q; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
+        @test isapprox(get(budget_notoric.ri_par_q_per_node, 2, 0.0), expected.no_toric_lower_ri_par_q; atol=1e-5, rtol=1e-9)
+
+        @test isapprox(get(budget_toric.ri_par_0_q_per_node, 1, 0.0), expected.toric_upper_ri_par_0_q; atol=1e-5, rtol=1e-9)
+        @test isapprox(get(budget_toric.ri_par_q_per_node, 1, 0.0), expected.toric_upper_ri_par_q; atol=1e-5, rtol=1e-9)
+        @test isapprox(get(budget_toric.ri_par_0_q_per_node, 2, 0.0), expected.toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
+        @test isapprox(get(budget_toric.ri_par_q_per_node, 2, 0.0), expected.toric_lower_ri_par_q; atol=1e-5, rtol=1e-9)
+        @test isapprox(get(scat_toric.added_par_power_per_node, 2, 0.0), expected.toric_lower_scattered_par_q; atol=1e-5, rtol=1e-9)
+
+        @test isapprox(
+            get(budget_toric.ri_par_q_per_node, 2, 0.0) - get(budget_toric.ri_par_0_q_per_node, 2, 0.0),
+            expected.toric_lower_scattered_par_q;
+            atol=1e-5,
+            rtol=1e-9,
+        )
+        @test get(budget_toric.ri_par_q_per_node, 1, 0.0) > get(budget_notoric.ri_par_q_per_node, 1, 0.0)
+        @test get(budget_toric.ri_par_q_per_node, 2, 0.0) > get(budget_notoric.ri_par_q_per_node, 2, 0.0)
+    end
+    end
+
     if _synthetic_case_enabled("virtual_sensor_transparency")
     @testset "Scenario: virtual sensor receives light without blocking lower plate" begin
         inputs = (
