@@ -701,54 +701,110 @@ end
     @test maximum(abs.(par_weights .- nir_weights)) < 1e-12
 end
 
+function _synthetic_plate_cfg(
+    cfg::ArchimedLight.LightConfig;
+    sectors::Int=1,
+    all_in_turtle::Bool=false,
+    scattering::Bool=false,
+    pixel_size::Float64=cfg.pixel_size,
+)
+    raw = copy(cfg.raw)
+    raw["all_in_turtle"] = all_in_turtle
+    raw["sky_sectors"] = sectors
+    raw["scattering"] = scattering
+    raw["pixel_size"] = pixel_size * 100.0
+    raw["models"] = String[]
+    ArchimedLight.LightConfig(
+        cfg.scene,
+        cfg.meteo,
+        all_in_turtle,
+        sectors,
+        pixel_size,
+        cfg.area_ratio,
+        scattering,
+        cfg.scattering_max_iter,
+        cfg.scattering_stop_ratio,
+        cfg.scattering_coeff_par,
+        cfg.scattering_coeff_nir,
+        cfg.cache_radiation,
+        raw,
+    )
+end
+
+function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
+    points = GeometryBasics.Point{3,Float32}[]
+    faces = PlantGeom.Face3[]
+    face2node = Int[]
+    total_area_per_node = Dict{Int,Float64}()
+    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    node_group = Dict{Int,String}()
+    node_type = Dict{Int,String}()
+    java_item_id_per_node = Dict{Int,Int}()
+    java_component_id_per_node = Dict{Int,Int}()
+
+    xmins = Float64[]
+    ymins = Float64[]
+    xmaxs = Float64[]
+    ymaxs = Float64[]
+
+    for (i, spec) in enumerate(specs)
+        x0 = Float64(spec.x0)
+        x1 = Float64(spec.x1)
+        y0 = Float64(spec.y0)
+        y1 = Float64(spec.y1)
+        z = Float64(spec.z)
+        item_id = get(spec, :item_id, i)
+        component_id = get(spec, :component_id, 1)
+        group = String(get(spec, :group, "plate"))
+        type = String(get(spec, :type, "plate"))
+
+        push!(xmins, x0)
+        push!(ymins, y0)
+        push!(xmaxs, x1)
+        push!(ymaxs, y1)
+
+        base = length(points)
+        zf = Float32(z)
+        append!(
+            points,
+            GeometryBasics.Point{3,Float32}[
+                GeometryBasics.Point{3,Float32}(Float32(x0), Float32(y0), zf),
+                GeometryBasics.Point{3,Float32}(Float32(x1), Float32(y0), zf),
+                GeometryBasics.Point{3,Float32}(Float32(x1), Float32(y1), zf),
+                GeometryBasics.Point{3,Float32}(Float32(x0), Float32(y1), zf),
+            ],
+        )
+        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(face2node, [i, i])
+        total_area_per_node[i] = (x1 - x0) * (y1 - y0)
+        barycenter_per_node[i] = ((x0 + x1) / 2, (y0 + y1) / 2, z)
+        node_group[i] = group
+        node_type[i] = type
+        java_item_id_per_node[i] = item_id
+        java_component_id_per_node[i] = component_id
+    end
+
+    ArchimedLight.SceneGeometry(
+        nothing,
+        GeometryBasics.Mesh(points, faces),
+        face2node,
+        total_area_per_node,
+        barycenter_per_node,
+        node_group,
+        node_type,
+        java_item_id_per_node,
+        java_component_id_per_node,
+        "synthetic_horizontal_planes",
+        (minimum(xmins), minimum(ymins), maximum(xmaxs), maximum(ymaxs)),
+    )
+end
+
 @testset "Single plate interception unit checks" begin
     cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
 
-    function with_plate_cfg(cfg::ArchimedLight.LightConfig; sectors::Int=1, all_in_turtle::Bool=false, scattering::Bool=false)
-        raw = copy(cfg.raw)
-        raw["all_in_turtle"] = all_in_turtle
-        raw["sky_sectors"] = sectors
-        raw["scattering"] = scattering
-        ArchimedLight.LightConfig(
-            cfg.scene,
-            cfg.meteo,
-            all_in_turtle,
-            sectors,
-            cfg.pixel_size,
-            cfg.area_ratio,
-            scattering,
-            cfg.scattering_max_iter,
-            cfg.scattering_stop_ratio,
-            cfg.scattering_coeff_par,
-            cfg.scattering_coeff_nir,
-            cfg.cache_radiation,
-            raw,
-        )
-    end
+    scene = _synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate")])
 
-    points = Point3f[
-        Point3f(0.0f0, 0.0f0, 1.0f0),
-        Point3f(1.0f0, 0.0f0, 1.0f0),
-        Point3f(1.0f0, 1.0f0, 1.0f0),
-        Point3f(0.0f0, 1.0f0, 1.0f0),
-    ]
-    faces = PlantGeom.Face3[(1, 2, 3), (1, 3, 4)]
-    mesh = GeometryBasics.Mesh(points, faces)
-    scene = ArchimedLight.SceneGeometry(
-        nothing,
-        mesh,
-        [1, 1],
-        Dict(1 => 1.0),
-        Dict(1 => (0.5, 0.5, 1.0)),
-        Dict(1 => "plate"),
-        Dict(1 => "plate"),
-        Dict(1 => 1),
-        Dict(1 => 1),
-        "synthetic_one_plate",
-        (0.0, 0.0, 1.0, 1.0),
-    )
-
-    cfg = with_plate_cfg(cfg_ref; sectors=1, all_in_turtle=false, scattering=false)
+    cfg = _synthetic_plate_cfg(cfg_ref; sectors=1, all_in_turtle=false, scattering=false)
     sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
     turtle = ArchimedLight.build_turtle(cfg, sky)
     fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
@@ -778,6 +834,112 @@ end
     @test length(rows) == length(scene.total_area_per_node)
     @test all(isapprox(Float64(r["Ri_PAR_0_f"]), sky.ri_par_f; atol=1e-10, rtol=1e-10) for r in rows)
     @test isapprox(sum(Float64(r["Ri_PAR_0_q"]) for r in rows), total_incident_power; atol=1e-10, rtol=1e-10)
+end
+
+@testset "Two stacked plates scattering unit checks" begin
+    cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
+
+    scene = _synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate"),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate"),
+    ])
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+
+    cfg_no_scat = _synthetic_plate_cfg(cfg_ref; sectors=6, all_in_turtle=false, scattering=false, pixel_size=0.01)
+    turtle_no_scat = ArchimedLight.build_turtle(cfg_no_scat, sky)
+    flux_no_scat = ArchimedLight.compute_directional_fluxes(sky, turtle_no_scat, cfg_no_scat)
+    first_no_scat = ArchimedLight.compute_first_order(scene, turtle_no_scat, flux_no_scat, cfg_no_scat)
+
+    @test isapprox(get(first_no_scat.projected_area_per_node, 1, 0.0), 1.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(first_no_scat.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(first_no_scat.incident_par_power_per_node, 1, 0.0), sky.ri_par_f; atol=1e-9, rtol=1e-9)
+    @test isapprox(get(first_no_scat.incident_par_power_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+
+    budget_no_scat = ArchimedLight.integrate_light(
+        first_no_scat,
+        nothing,
+        cfg_no_scat;
+        step_duration_seconds=1.0,
+        component_area_per_node=scene.total_area_per_node,
+    )
+    @test isapprox(get(budget_no_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(get(budget_no_scat.ri_par_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+
+    cfg_scat = _synthetic_plate_cfg(cfg_ref; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01)
+    turtle_scat = ArchimedLight.build_turtle(cfg_scat, sky)
+    flux_scat = ArchimedLight.compute_directional_fluxes(sky, turtle_scat, cfg_scat)
+    first_scat = ArchimedLight.compute_first_order(scene, turtle_scat, flux_scat, cfg_scat)
+    scat = ArchimedLight.compute_scattering(scene, turtle_scat, first_scat, cfg_scat)
+
+    @test get(scat.added_par_power_per_node, 2, 0.0) > 0.0
+    @test get(scat.added_par_power_per_node, 1, 0.0) > 0.0
+
+    budget_scat = ArchimedLight.integrate_light(
+        first_scat,
+        scat,
+        cfg_scat;
+        step_duration_seconds=1.0,
+        component_area_per_node=scene.total_area_per_node,
+    )
+    @test isapprox(get(budget_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+    @test get(budget_scat.ri_par_q_per_node, 2, 0.0) > 0.0
+    @test get(budget_scat.ri_par_q_per_node, 2, 0.0) ≈ get(scat.added_par_power_per_node, 2, 0.0) atol=1e-10 rtol=1e-10
+    @test get(budget_scat.ri_par_q_per_node, 1, 0.0) > get(budget_scat.ri_par_0_q_per_node, 1, 0.0)
+
+    step_scat = ArchimedLight.LightStepResult(sky, turtle_scat, flux_scat, first_scat, scat, budget_scat, Dict{String,Float64}())
+    rows = ArchimedLight.component_values_table(
+        scene,
+        step_scat,
+        cfg_scat;
+        step_duration_seconds=1.0,
+        columns=["item_id", "component_id", "Ri_PAR_0_q", "Ri_PAR_q"],
+    ).rows
+    row_by_item = Dict(Int(r["item_id"]) => r for r in rows)
+    @test isapprox(Float64(row_by_item[2]["Ri_PAR_0_q"]), 0.0; atol=1e-12, rtol=1e-12)
+    @test Float64(row_by_item[2]["Ri_PAR_q"]) > 0.0
+    @test Float64(row_by_item[1]["Ri_PAR_q"]) > Float64(row_by_item[1]["Ri_PAR_0_q"])
+end
+
+@testset "Partial overlap plates direct interception unit checks" begin
+    cfg_ref = ArchimedLight.read_light_config(joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"))
+    scene = _synthetic_horizontal_scene([
+        (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate"),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate"),
+    ])
+    cfg = _synthetic_plate_cfg(cfg_ref; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01)
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+    turtle = ArchimedLight.build_turtle(cfg, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+    first_order = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+
+    @test isapprox(get(first_order.projected_area_per_node, 1, 0.0), 0.5; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(first_order.projected_area_per_node, 2, 0.0), 0.5; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(first_order.incident_par_power_per_node, 1, 0.0), 50.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(get(first_order.incident_par_power_per_node, 2, 0.0), 50.0; atol=1e-9, rtol=1e-9)
+
+    budget = ArchimedLight.integrate_light(
+        first_order,
+        nothing,
+        cfg;
+        step_duration_seconds=1.0,
+        component_area_per_node=scene.total_area_per_node,
+    )
+    @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), 50.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(get(budget.ri_par_0_q_per_node, 2, 0.0), 50.0; atol=1e-9, rtol=1e-9)
+
+    step = ArchimedLight.LightStepResult(sky, turtle, fluxes, first_order, nothing, budget, Dict{String,Float64}())
+    rows = ArchimedLight.component_values_table(
+        scene,
+        step,
+        cfg;
+        step_duration_seconds=1.0,
+        columns=["item_id", "area", "Ri_PAR_0_q"],
+    ).rows
+    row_by_item = Dict(Int(r["item_id"]) => r for r in rows)
+    @test isapprox(Float64(row_by_item[1]["area"]), 0.5; atol=1e-12, rtol=1e-12)
+    @test isapprox(Float64(row_by_item[2]["area"]), 1.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(Float64(row_by_item[1]["Ri_PAR_0_q"]), 50.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(Float64(row_by_item[2]["Ri_PAR_0_q"]), 50.0; atol=1e-9, rtol=1e-9)
 end
 
 @testset "Pixel size validation parity" begin
