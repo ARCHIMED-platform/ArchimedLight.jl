@@ -18,6 +18,7 @@ function _synthetic_cfg(
     all_in_turtle::Bool=false,
     scattering::Bool=false,
     pixel_size::Float64=0.01,
+    toricity::Bool=true,
     cache_radiation::Bool=false,
     models::Vector{String}=String[],
 )
@@ -26,6 +27,7 @@ function _synthetic_cfg(
     raw["sky_sectors"] = sectors
     raw["scattering"] = scattering
     raw["pixel_size"] = pixel_size * 100.0
+    raw["toricity"] = toricity
     raw["cache_radiation"] = cache_radiation
     raw["models"] = models
     ArchimedLight.LightConfig(
@@ -318,6 +320,45 @@ if _SYNTHETIC_TEST_PROFILE == "synthetic"
         @test isapprox(get(first_shadow.incident_par_power_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
         @test isapprox(get(first_clear.incident_par_power_per_node, 2, 0.0), 100.0; atol=1e-5, rtol=1e-7)
         @test get(first_shadow.incident_par_power_per_node, 2, 0.0) < 0.02 * get(first_clear.incident_par_power_per_node, 2, 0.0)
+    end
+    end
+
+    if _synthetic_case_enabled("toricity_wraparound")
+    @testset "Scenario: toricity wraps edge-crossing plate across plot border" begin
+        inputs = (
+            scene=[
+                (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", item_id=1),
+            ],
+            sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
+            cfg_notoric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false),
+            cfg_toric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=true),
+        )
+        expected = (
+            no_toric_projected_area=0.0,
+            no_toric_ri_par_0_q=0.0,
+            toric_projected_area=0.4,
+            toric_ri_par_0_q=40.0,
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+
+        cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
+        turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
+        flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
+        first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
+        budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
+        turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
+        flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
+        first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
+        budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(get(first_notoric.projected_area_per_node, 1, 0.0), expected.no_toric_projected_area; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 1, 0.0), expected.no_toric_ri_par_0_q; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(first_toric.projected_area_per_node, 1, 0.0), expected.toric_projected_area; atol=1e-6, rtol=1e-9)
+        @test isapprox(get(budget_toric.ri_par_0_q_per_node, 1, 0.0), expected.toric_ri_par_0_q; atol=1e-5, rtol=1e-9)
+        @test get(first_toric.projected_area_per_node, 1, 0.0) > get(first_notoric.projected_area_per_node, 1, 0.0)
     end
     end
 

@@ -118,8 +118,9 @@ ARCHIMEDLIGHT_TEST_PROFILE=synthetic ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_sha
 The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit
 `inputs` and `expected` blocks. Current case names include:
 `single_plate_direct`, `stacked_scattering`, `partial_overlap_direct`,
-`tilted_plate_projection`, `oblique_shadow`, `virtual_sensor_transparency`,
-`single_plate_absorptance`, `two_planes_shadow_absorptance`, and `cached_series_parity`.
+`tilted_plate_projection`, `oblique_shadow`, `toricity_wraparound`,
+`virtual_sensor_transparency`, `single_plate_absorptance`,
+`two_planes_shadow_absorptance`, and `cached_series_parity`.
 
 Build the upstream Java jar used to freeze source-driven references:
 
