@@ -46,6 +46,22 @@ function _synthetic_cfg(
 end
 
 function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
+    quad_specs = map(specs) do spec
+        (
+            p1=(spec.x0, spec.y0, spec.z),
+            p2=(spec.x1, spec.y0, spec.z),
+            p3=(spec.x1, spec.y1, spec.z),
+            p4=(spec.x0, spec.y1, spec.z),
+            item_id=get(spec, :item_id, 1),
+            component_id=get(spec, :component_id, 1),
+            group=get(spec, :group, "plate"),
+            type=get(spec, :type, "plate"),
+        )
+    end
+    _synthetic_quad_scene(quad_specs)
+end
+
+function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
     faces = PlantGeom.Face3[]
     face2node = Int[]
@@ -59,10 +75,10 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
     xs = Float64[]
     ys = Float64[]
     for (i, spec) in enumerate(specs)
-        p1 = (spec.x0, spec.y0, spec.z)
-        p2 = (spec.x1, spec.y0, spec.z)
-        p3 = (spec.x1, spec.y1, spec.z)
-        p4 = (spec.x0, spec.y1, spec.z)
+        p1 = ntuple(j -> Float64(spec.p1[j]), 3)
+        p2 = ntuple(j -> Float64(spec.p2[j]), 3)
+        p3 = ntuple(j -> Float64(spec.p3[j]), 3)
+        p4 = ntuple(j -> Float64(spec.p4[j]), 3)
         append!(xs, (p1[1], p2[1], p3[1], p4[1]))
         append!(ys, (p1[2], p2[2], p3[2], p4[2]))
 
@@ -148,6 +164,205 @@ if _SYNTHETIC_TEST_PROFILE == "synthetic"
     cfg_ref = ArchimedLight.read_light_config(
         joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"),
     )
+
+    if _synthetic_case_enabled("single_plate_direct")
+    @testset "Scenario: single 1 m² plate under zenith direct PAR" begin
+        inputs = (
+            scene=[(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1)],
+            sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
+            cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
+        )
+        expected = (
+            projected_area=1.0,
+            incident_par_q=100.0,
+            ri_par_0_f=100.0,
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+        cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
+        turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
+        first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+        budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.incident_par_q; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(budget.ri_par_0_f_per_node, 1, 0.0), expected.ri_par_0_f; atol=1e-10, rtol=1e-10)
+    end
+    end
+
+    if _synthetic_case_enabled("stacked_scattering")
+    @testset "Scenario: two aligned plates, lower receives only scattered PAR" begin
+        inputs = (
+            scene=[
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", item_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+            ],
+            sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
+            cfg_no_scat=(; sectors=6, all_in_turtle=false, scattering=false, pixel_size=0.01),
+            cfg_scat=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01),
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+        cfg_no_scat = _synthetic_cfg(cfg_ref; inputs.cfg_no_scat...)
+        turtle_no_scat = ArchimedLight.build_turtle(cfg_no_scat, inputs.sky)
+        flux_no_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_no_scat, cfg_no_scat)
+        first_no_scat = ArchimedLight.compute_first_order(scene, turtle_no_scat, flux_no_scat, cfg_no_scat)
+        budget_no_scat = ArchimedLight.integrate_light(first_no_scat, nothing, cfg_no_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(get(first_no_scat.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(budget_no_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+        @test isapprox(get(budget_no_scat.ri_par_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+
+        cfg_scat = _synthetic_cfg(cfg_ref; inputs.cfg_scat...)
+        turtle_scat = ArchimedLight.build_turtle(cfg_scat, inputs.sky)
+        flux_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_scat, cfg_scat)
+        first_scat = ArchimedLight.compute_first_order(scene, turtle_scat, flux_scat, cfg_scat)
+        scat = ArchimedLight.compute_scattering(scene, turtle_scat, first_scat, cfg_scat)
+        budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test get(scat.added_par_power_per_node, 2, 0.0) > 0.0
+        @test isapprox(get(budget_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+        @test get(budget_scat.ri_par_q_per_node, 2, 0.0) > 0.0
+        @test get(budget_scat.ri_par_q_per_node, 2, 0.0) ≈ get(scat.added_par_power_per_node, 2, 0.0) atol=1e-10 rtol=1e-10
+    end
+    end
+
+    if _synthetic_case_enabled("partial_overlap_direct")
+    @testset "Scenario: upper half-plate shadows half of lower plate" begin
+        inputs = (
+            scene=[
+                (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", item_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", item_id=2),
+            ],
+            sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
+            cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
+        )
+        expected = (
+            upper_projected=0.5,
+            lower_projected=0.5,
+            upper_ri_par_0_q=50.0,
+            lower_ri_par_0_q=50.0,
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+        cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
+        turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
+        first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+        budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.upper_projected; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(first.projected_area_per_node, 2, 0.0), expected.lower_projected; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+        @test isapprox(get(budget.ri_par_0_q_per_node, 2, 0.0), expected.lower_ri_par_0_q; atol=1e-9, rtol=1e-9)
+    end
+    end
+
+    if _synthetic_case_enabled("tilted_plate_projection")
+    @testset "Scenario: 1 m² plate tilted by 60 degrees" begin
+        tilt_deg = 60.0
+        c = cosd(tilt_deg)
+        s = sind(tilt_deg)
+        inputs = (
+            scene=[(
+                p1=(0.0, 0.0, 0.0),
+                p2=(1.0, 0.0, 0.0),
+                p3=(1.0, c, s),
+                p4=(0.0, c, s),
+                group="tilted",
+                type="plate",
+                item_id=1,
+            )],
+            sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
+            cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
+        )
+        expected = (area=1.0, projected_area=c, ri_par_0_q=100.0 * c)
+
+        scene = _synthetic_quad_scene(inputs.scene)
+        cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
+        turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
+        first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
+        budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        @test isapprox(scene.total_area_per_node[1], expected.area; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
+    end
+    end
+
+    if _synthetic_case_enabled("oblique_shadow")
+    @testset "Scenario: oblique sun shadow with lateral offset plates" begin
+        inputs = (
+            scene=[
+                (x0=1.0, x1=2.0, y0=0.0, y1=1.0, z=1.0, group="upper_offset", type="plate", item_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+            ],
+            sky_shadow=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
+            sky_clear=ArchimedLight.SkyState(0.0, 45.0, 100.0, 0.0, 1.0, 0.0),
+            cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+        cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
+
+        turtle_shadow = ArchimedLight.build_turtle(cfg, inputs.sky_shadow)
+        flux_shadow = ArchimedLight.compute_directional_fluxes(inputs.sky_shadow, turtle_shadow, cfg)
+        first_shadow = ArchimedLight.compute_first_order(scene, turtle_shadow, flux_shadow, cfg)
+
+        turtle_clear = ArchimedLight.build_turtle(cfg, inputs.sky_clear)
+        flux_clear = ArchimedLight.compute_directional_fluxes(inputs.sky_clear, turtle_clear, cfg)
+        first_clear = ArchimedLight.compute_first_order(scene, turtle_clear, flux_clear, cfg)
+
+        @test isapprox(get(first_shadow.incident_par_power_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+        @test isapprox(get(first_clear.incident_par_power_per_node, 2, 0.0), 100.0; atol=1e-5, rtol=1e-7)
+        @test get(first_shadow.incident_par_power_per_node, 2, 0.0) < 0.02 * get(first_clear.incident_par_power_per_node, 2, 0.0)
+    end
+    end
+
+    if _synthetic_case_enabled("virtual_sensor_transparency")
+    @testset "Scenario: virtual sensor receives light without blocking lower plate" begin
+        inputs = (
+            scene=[
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensors", type="pave", item_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+            ],
+            sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
+            cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
+            sensor_model="""
+            ---
+            Group: sensors
+            Type:
+              pave:
+                  Interception:
+                      model: VirtualSensor
+            ...
+            """,
+        )
+
+        scene = _synthetic_horizontal_scene(inputs.scene)
+        cfg_opaque = _synthetic_cfg(cfg_ref; inputs.cfg...)
+        turtle_opaque = ArchimedLight.build_turtle(cfg_opaque, inputs.sky)
+        flux_opaque = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_opaque, cfg_opaque)
+        first_opaque = ArchimedLight.compute_first_order(scene, turtle_opaque, flux_opaque, cfg_opaque)
+        budget_opaque = ArchimedLight.integrate_light(first_opaque, nothing, cfg_opaque; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+        mktempdir() do tmp
+            sensor_model = joinpath(tmp, "model_sensor.yml")
+            write(sensor_model, inputs.sensor_model)
+            cfg_sensor = _synthetic_cfg(cfg_ref; models=[sensor_model], inputs.cfg...)
+            turtle_sensor = ArchimedLight.build_turtle(cfg_sensor, inputs.sky)
+            flux_sensor = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_sensor, cfg_sensor)
+            first_sensor = ArchimedLight.compute_first_order(scene, turtle_sensor, flux_sensor, cfg_sensor)
+            budget_sensor = ArchimedLight.integrate_light(first_sensor, nothing, cfg_sensor; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+
+            @test isapprox(get(budget_opaque.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(budget_sensor.ri_par_0_q_per_node, 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(budget_sensor.ri_par_0_q_per_node, 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+        end
+    end
+    end
 
     if _synthetic_case_enabled("single_plate_absorptance")
     @testset "Scenario: single 1 m² plate with explicit absorptance" begin
