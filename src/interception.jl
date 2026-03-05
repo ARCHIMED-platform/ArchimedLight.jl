@@ -728,17 +728,74 @@ function _project_triangle!(
     upper_hit::Bool,
     strict_java_float::Bool,
 )
+    _project_triangle!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        node_id,
+        p1,
+        p2,
+        p3,
+        direction,
+        origin_x,
+        origin_y,
+        x_pix,
+        y_pix,
+        pixel_area,
+        nx,
+        ny,
+        toricity,
+        upper_hit,
+        strict_java_float,
+        1.0f0,
+    )
+end
+
+function _project_triangle!(
+    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
+    node_hits::Dict{Int,Int},
+    projected_mesh_area::Dict{Int,Float64},
+    projected_pixels_area::Dict{Int,Float64},
+    node_id::Int,
+    p1,
+    p2,
+    p3,
+    direction,
+    origin_x::Float64,
+    origin_y::Float64,
+    x_pix::Float64,
+    y_pix::Float64,
+    pixel_area::Float64,
+    nx::Int,
+    ny::Int,
+    toricity::Bool,
+    upper_hit::Bool,
+    strict_java_float::Bool,
+    unit_scale::Float32,
+)
     v = (p1, p2, p3)
     projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
     pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
+    u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
+    ox = Float32(origin_x) * u
+    oy = Float32(origin_y) * u
+    pxs = Float32(x_pix) * u
+    pys = Float32(y_pix) * u
+    dirx = Float32(direction[1])
+    diry = Float32(direction[2])
+    dirz = Float32(direction[3])
 
     @inbounds for k in 1:3
-        pp = _project_point_ground(v[k], direction)
-        pp === nothing && return
-        projected[k] = StaticArrays.SVector{3,Float64}(pp[1], pp[2], 0.0)
-        x = Float32((Float32(pp[1]) - Float32(origin_x)) / Float32(x_pix))
-        y = Float32((Float32(pp[2]) - Float32(origin_y)) / Float32(y_pix))
-        z = Float32(pp[3])
+        dirz == 0.0f0 && return
+        pz = Float32(v[k][3]) * u
+        dz = -pz / dirz
+        xw = Float32(v[k][1]) * u + dirx * dz
+        yw = Float32(v[k][2]) * u + diry * dz
+        projected[k] = StaticArrays.SVector{3,Float64}(Float64(xw / u), Float64(yw / u), 0.0)
+        x = Float32((xw - ox) / pxs)
+        y = Float32((yw - oy) / pys)
+        z = pz
         pix_points[k] = StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
     end
 
@@ -808,7 +865,7 @@ function _project_triangle!(
 
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
-                zpix_f32 = Float64(zpix)
+                zpix_f32 = Float64(zpix / u)
                 push!(buffered_hits, (idx, zpix_f32))
             end
         end
@@ -895,6 +952,7 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
     strict_java_float = _strict_java_float(cfg)
+    unit_scale = Float32(_projection_unit_scale(cfg))
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
@@ -924,6 +982,7 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
             toricity,
             use_upper_hit,
             strict_java_float,
+            unit_scale,
         )
     end
 
@@ -959,23 +1018,45 @@ function _strict_java_float(cfg::LightConfig)
     return _as_bool(v, false)
 end
 
+function _projection_unit_scale(cfg::LightConfig)
+    raw = cfg.raw
+    top = _cfg_get(raw, ["projection_unit_scale"], nothing)
+    props = get(raw, "prop", Dict{String,Any}())
+    propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
+    v = _cfg_get(propsd, ["projection_unit_scale"], top)
+    s = try
+        v === nothing ? 1.0 : Float64(v)
+    catch
+        1.0
+    end
+    return (isfinite(s) && s > 0.0) ? s : 1.0
+end
+
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
-    x_min = plotbox.origin_x
-    y_min = plotbox.origin_y
-    x_max = plotbox.origin_x + plotbox.xdim
-    y_max = plotbox.origin_y + plotbox.ydim
+    # Match Java BoxPaving behavior: compute paving in cm with float-based coordinates.
+    x_min_m = Float32(plotbox.origin_x)
+    y_min_m = Float32(plotbox.origin_y)
+    x_max_m = Float32(plotbox.origin_x + plotbox.xdim)
+    y_max_m = Float32(plotbox.origin_y + plotbox.ydim)
 
-    plot_area = plotbox.xdim * plotbox.ydim
-    cobble_area = plot_area / max(cobble_count, 1)
-    cobble_edge = sqrt(cobble_area)
+    plot_x_m = Float64(Float32(x_max_m - x_min_m))
+    plot_y_m = Float64(Float32(y_max_m - y_min_m))
+    plot_area_m2 = plot_x_m * plot_y_m
+    cobble_area_m2 = plot_area_m2 / max(cobble_count, 1)
+    cobble_edge_m = sqrt(cobble_area_m2)
 
-    nx = max(1, floor(Int, plotbox.xdim / cobble_edge))
-    ny = max(1, floor(Int, plotbox.ydim / cobble_edge))
-    cobble_x = plotbox.xdim / nx
-    cobble_y = plotbox.ydim / ny
+    nx = max(1, floor(Int, plot_x_m / cobble_edge_m))
+    ny = max(1, floor(Int, plot_y_m / cobble_edge_m))
+    cobble_x_cm = (plot_x_m / nx) * 100.0
+    cobble_y_cm = (plot_y_m / ny) * 100.0
 
-    min_size = 1e-4
-    z = 0.005
+    x_min_cm = Float64(Float32(x_min_m * 100.0f0))
+    y_min_cm = Float64(Float32(y_min_m * 100.0f0))
+    x_max_cm = Float64(Float32(x_max_m * 100.0f0))
+    y_max_cm = Float64(Float32(y_max_m * 100.0f0))
+
+    min_size_cm = 1e-4
+    z_cm = Float32(0.5)
 
     vertices = StaticArrays.SVector{3,Float64}[]
     faces = PlantGeom.Face3[]
@@ -983,31 +1064,51 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     node_area = Dict{Int,Float64}()
 
     node_id = first_node_id
-    x = x_min
-    while x < x_max
-        x_size = (x + cobble_x > x_max) ? (x_max - x) : cobble_x
-        if x_size > min_size
-            y = y_min
-            while y < y_max
-                y_size = (y + cobble_y > y_max) ? (y_max - y) : cobble_y
-                if y_size > min_size
-                    p1 = StaticArrays.SVector{3,Float64}(x, y, z)
-                    p2 = StaticArrays.SVector{3,Float64}(x + x_size, y, z)
-                    p3 = StaticArrays.SVector{3,Float64}(x + x_size, y + y_size, z)
-                    p4 = StaticArrays.SVector{3,Float64}(x, y + y_size, z)
+    x_cm = x_min_cm
+    while x_cm < x_max_cm
+        x_size_cm = (x_cm + cobble_x_cm > x_max_cm) ? (x_max_cm - x_cm) : cobble_x_cm
+        if x_size_cm > min_size_cm
+            y_cm = y_min_cm
+            while y_cm < y_max_cm
+                y_size_cm = (y_cm + cobble_y_cm > y_max_cm) ? (y_max_cm - y_cm) : cobble_y_cm
+                if y_size_cm > min_size_cm
+                    x_center_cm = x_cm + (x_size_cm / 2.0)
+                    y_center_cm = y_cm + (y_size_cm / 2.0)
+
+                    x0 = Float32(-x_size_cm / 2.0)
+                    x1 = Float32(x_size_cm / 2.0)
+                    y0 = Float32(-y_size_cm / 2.0)
+                    y1 = Float32(y_size_cm / 2.0)
+                    xc = Float32(x_center_cm)
+                    yc = Float32(y_center_cm)
+                    # Match Java cm->m conversion path (float scaling by 0.01f).
+                    p1x = Float32(x0 + xc) * 0.01f0
+                    p2x = Float32(x1 + xc) * 0.01f0
+                    p3x = Float32(x1 + xc) * 0.01f0
+                    p4x = Float32(x0 + xc) * 0.01f0
+                    p1y = Float32(y0 + yc) * 0.01f0
+                    p2y = Float32(y0 + yc) * 0.01f0
+                    p3y = Float32(y1 + yc) * 0.01f0
+                    p4y = Float32(y1 + yc) * 0.01f0
+                    z_m = z_cm * 0.01f0
+
+                    p1 = StaticArrays.SVector{3,Float64}(Float64(p1x), Float64(p1y), Float64(z_m))
+                    p2 = StaticArrays.SVector{3,Float64}(Float64(p2x), Float64(p2y), Float64(z_m))
+                    p3 = StaticArrays.SVector{3,Float64}(Float64(p3x), Float64(p3y), Float64(z_m))
+                    p4 = StaticArrays.SVector{3,Float64}(Float64(p4x), Float64(p4y), Float64(z_m))
 
                     base = length(vertices)
                     push!(vertices, p1, p2, p3, p4)
                     push!(faces, PlantGeom.Face3(base + 1, base + 2, base + 3))
                     push!(faces, PlantGeom.Face3(base + 1, base + 3, base + 4))
                     push!(face2node, node_id, node_id)
-                    node_area[node_id] = x_size * y_size
+                    node_area[node_id] = (x_size_cm * y_size_cm) / 10000.0
                     node_id += 1
                 end
-                y += cobble_y
+                y_cm += cobble_y_cm
             end
         end
-        x += cobble_x
+        x_cm += cobble_x_cm
     end
 
     return vertices, faces, face2node, node_area
