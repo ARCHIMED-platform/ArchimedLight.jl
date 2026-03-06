@@ -123,6 +123,9 @@ The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` wit
 `toricity_scattering_cross_border`, `virtual_sensor_transparency`, `single_plate_absorptance`,
 `two_planes_shadow_absorptance`, and `cached_series_parity`.
 
+Additional explicit fixture-based simple-plant unit checks are part of the `core` profile:
+`test-scattering-two-simpleplants` and `test-toricity-two-simpleplants-border`.
+
 Build the upstream Java jar used to freeze source-driven references:
 
 ```bash
@@ -141,3 +144,5 @@ julia --project=. scripts/freeze_java_light_refs.jl \
 ```
 
 The upstream Java source repo is the source of truth for these fixture definitions; this repo stores the mirrored fixture files and frozen `expected/` references consumed by Julia.
+
+`scripts/freeze_java_light_refs.jl` launches Java with `-Djava.awt.headless=true` by default to avoid macOS AWT/AppKit hangs when running the x86_64 JDK8 binary under Rosetta.

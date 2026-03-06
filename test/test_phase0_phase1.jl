@@ -467,6 +467,7 @@ end
         4,
         false,
         true,
+        false,
     )
     @test isempty(pixel_hits)
 
@@ -494,6 +495,7 @@ end
         4,
         true,
         true,
+        false,
     )
 
     ArchimedLight._project_triangle!(
@@ -515,10 +517,54 @@ end
         4,
         true,
         true,
+        false,
     )
 
     @test haskey(pixel_hits, 4)
     @test pixel_hits[4][1][2] == 101
+end
+
+@testset "Java border regression (two_coffee dir11)" begin
+    # Triangle observed in Java MPDBG for component 3807 (item 1), dir 11.
+    # With Java-style float plotbox dimensions this triangle has zero projected hits.
+    p1 = SVector(9.436084747314453, 1.3599450588226318, 0.8249936699867249)
+    p2 = SVector(9.442224502563477, 1.3915793895721436, 0.8200978636741638)
+    p3 = SVector(9.452533721923828, 1.370529294013977, 0.8249191641807556)
+    direction = SVector(-0.5773048400878906, -0.18757759034633636, 0.7946910262107849)
+
+    function _projected_indices(x_pix::Float64, y_pix::Float64)
+        pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
+        node_hits = Dict{Int,Int}()
+        projected_mesh_area = Dict{Int,Float64}()
+        projected_pixels_area = Dict{Int,Float64}()
+        ArchimedLight._project_triangle!(
+            pixel_hits,
+            node_hits,
+            projected_mesh_area,
+            projected_pixels_area,
+            1742,
+            p1,
+            p2,
+            p3,
+            direction,
+            0.0,
+            0.0,
+            x_pix,
+            y_pix,
+            0.0023995282865554575,
+            325,
+            613,
+            true,
+            true,
+            false,
+        )
+        return sort(collect(keys(pixel_hits)))
+    end
+
+    # Pre-fix (double-derived) pixel dimensions produced one spurious hit at (205,31).
+    @test _projected_indices(0.04903036132194984, 0.048939641109298535) == [10281]
+    # Java-aligned float dimensions must produce no hit.
+    @test isempty(_projected_indices(0.0490303635597229, 0.04893964156508446))
 end
 
 @testset "OPS GWA scene load" begin
@@ -1626,6 +1672,82 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
     r_scat = fixture_parity_report(f_scat)
     @test r_scat.expected_scattering_total !== nothing
     _assert_rel_metric(r_scat.julia_scattering_total, r_scat.expected_scattering_total, :scattering_total_rel_loose, "test-scattering-one-plate total scattering")
+
+    function _cfg_with_scene_flags(cfg::ArchimedLight.LightConfig; scattering::Bool=cfg.scattering, toricity::Bool=Bool(get(cfg.raw, "toricity", true)))
+        raw = copy(cfg.raw)
+        raw["scattering"] = scattering
+        raw["toricity"] = toricity
+        ArchimedLight.LightConfig(
+            cfg.scene,
+            cfg.meteo,
+            cfg.all_in_turtle,
+            cfg.turtle_sectors,
+            cfg.pixel_size,
+            cfg.area_ratio,
+            scattering,
+            cfg.scattering_max_iter,
+            cfg.scattering_stop_ratio,
+            cfg.scattering_coeff_par,
+            cfg.scattering_coeff_nir,
+            cfg.cache_radiation,
+            raw,
+        )
+    end
+
+    function _ri_par_item_totals(scene::ArchimedLight.SceneGeometry, step::ArchimedLight.LightStepResult, cfg::ArchimedLight.LightConfig)
+        key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
+        ri0 = Dict{Int,Float64}()
+        ri = Dict{Int,Float64}()
+        for (nid, (item_id, _component_id)) in key_by_node
+            ri0[item_id] = get(ri0, item_id, 0.0) + get(step.budget.ri_par_0_q_per_node, nid, 0.0)
+            ri[item_id] = get(ri, item_id, 0.0) + get(step.budget.ri_par_q_per_node, nid, 0.0)
+        end
+        (ri0=ri0, ri=ri)
+    end
+
+    @testset "Two simple plants stacked fixture" begin
+        fx = fixtures["test-scattering-two-simpleplants"]
+        cfg = ArchimedLight.read_light_config(fx.config_path)
+        scene = ArchimedLight.read_scene(cfg.scene)
+        row = first(ArchimedLight.read_meteo(cfg.meteo).rows)
+
+        cfg_no_scat = _cfg_with_scene_flags(cfg; scattering=false)
+        step_no_scat = ArchimedLight.run_light_step(scene, row, cfg_no_scat)
+        item_no_scat = _ri_par_item_totals(scene, step_no_scat, cfg_no_scat)
+
+        step_scat = ArchimedLight.run_light_step(scene, row, cfg)
+        item_scat = _ri_par_item_totals(scene, step_scat, cfg)
+
+        @test get(item_no_scat.ri0, 1, 0.0) > 100.0
+        @test isapprox(get(item_no_scat.ri0, 2, 0.0), 0.0; atol=1e-8, rtol=0.0)
+        @test isapprox(get(item_no_scat.ri, 2, 0.0), 0.0; atol=1e-8, rtol=0.0)
+
+        @test isapprox(get(item_scat.ri0, 2, 0.0), 0.0; atol=1e-8, rtol=0.0)
+        @test get(item_scat.ri, 2, 0.0) > 10.0
+        @test get(item_scat.ri, 2, 0.0) > get(item_no_scat.ri, 2, 0.0) + 1.0
+    end
+
+    @testset "Two simple plants border toricity fixture" begin
+        fx = fixtures["test-toricity-two-simpleplants-border"]
+        cfg_toric = ArchimedLight.read_light_config(fx.config_path)
+        cfg_notoric = _cfg_with_scene_flags(cfg_toric; toricity=false)
+        scene = ArchimedLight.read_scene(cfg_toric.scene)
+        row = first(ArchimedLight.read_meteo(cfg_toric.meteo).rows)
+
+        step_notoric = ArchimedLight.run_light_step(scene, row, cfg_notoric)
+        item_notoric = _ri_par_item_totals(scene, step_notoric, cfg_notoric)
+
+        step_toric = ArchimedLight.run_light_step(scene, row, cfg_toric)
+        item_toric = _ri_par_item_totals(scene, step_toric, cfg_toric)
+
+        i1_n = get(item_notoric.ri0, 1, 0.0)
+        i2_n = get(item_notoric.ri0, 2, 0.0)
+        i1_t = get(item_toric.ri0, 1, 0.0)
+        i2_t = get(item_toric.ri0, 2, 0.0)
+
+        @test i1_t > i1_n * 1.05
+        @test i2_t < i2_n * 0.95
+    end
 
     if _RUN_PARITY_TESTS
     f_scat2 = fixtures["test-scattering-two-plates"]
@@ -2873,41 +2995,15 @@ if _RUN_PARITY_TESTS || _RUN_GUARD_TESTS
         observed_scene = ArchimedLight.scene_values_table(scene, series, cfg; meteo_rows=selected.rows, columns=scene_cols).rows
         sort!(observed_scene; by=r -> Int(r["step_number"]))
 
-        comp_value_cols = [c for c in comp_cols if !(c in ("step_number", "item_id", "component_id"))]
-        comp_geom_cols = [c for c in comp_value_cols if c == "barycentre_z"]
-        comp_energy_cols = [c for c in comp_value_cols if c != "barycentre_z"]
-
-        if !isempty(comp_geom_cols)
-            _assert_rows_match(
-                expected_comp,
-                observed_comp,
-                ["step_number", "item_id", "component_id"],
-                comp_geom_cols;
-                atol=1e-6,
-                rtol=1e-4,
-                label="compare fixture component geometry $(fx_name)",
-            )
-        end
-
-        comp_energy_atol = 1e-3
-        comp_energy_rtol = 3e-3
-        if fx_name == "test-compare-cafeier1"
-            # Residual deterministic Java/Jl drift remains isolated to radiative columns
-            # in this legacy fixture; keep other compare fixtures strict.
-            comp_energy_atol = 8.0
-            comp_energy_rtol = 0.12
-        end
-        if !isempty(comp_energy_cols)
-            _assert_rows_match(
-                expected_comp,
-                observed_comp,
-                ["step_number", "item_id", "component_id"],
-                comp_energy_cols;
-                atol=comp_energy_atol,
-                rtol=comp_energy_rtol,
-                label="compare fixture component snapshot $(fx_name)",
-            )
-        end
+        _assert_rows_match(
+            expected_comp,
+            observed_comp,
+            ["step_number", "item_id", "component_id"],
+            [c for c in comp_cols if !(c in ("step_number", "item_id", "component_id"))];
+            atol=1e-3,
+            rtol=3e-3,
+            label="compare fixture component snapshot $(fx_name)",
+        )
         _assert_rows_match(
             expected_scene,
             observed_scene,

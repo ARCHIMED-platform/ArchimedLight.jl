@@ -565,20 +565,30 @@ function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
     # Java fixtures enforce a strict upper bound at 50 cm.
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
 
-    x0, y0, x1, y1 = _extract_scene_xy_bounds(scene, vertices)
-    xdim = max(x1 - x0, pixel_size)
-    ydim = max(y1 - y0, pixel_size)
+    # Match Java PlotBox numeric path:
+    # - scene corners are Point2f (Float32)
+    # - table size uses double division from float-backed plot dimensions
+    # - pixel dimensions are stored as float
+    x0_raw, y0_raw, x1_raw, y1_raw = _extract_scene_xy_bounds(scene, vertices)
+    x0 = Float32(min(x0_raw, x1_raw))
+    y0 = Float32(min(y0_raw, y1_raw))
+    x1 = Float32(max(x0_raw, x1_raw))
+    y1 = Float32(max(y0_raw, y1_raw))
+
+    xdim = max(Float64(x1 - x0), pixel_size)
+    ydim = max(Float64(y1 - y0), pixel_size)
 
     nx = max(1, floor(Int, xdim / pixel_size))
     ny = max(1, floor(Int, ydim / pixel_size))
 
-    pix_x = xdim / nx
-    pix_y = ydim / ny
-    pixel_area = (xdim * ydim) / (nx * ny)
+    pix_x = Float64(Float32(xdim / nx))
+    pix_y = Float64(Float32(ydim / ny))
+    plot_area = Float64(Float32(Float32(xdim) * Float32(ydim)))
+    pixel_area = plot_area / (nx * ny)
 
     (
-        origin_x=x0,
-        origin_y=y0,
+        origin_x=Float64(x0),
+        origin_y=Float64(y0),
         xdim=xdim,
         ydim=ydim,
         nx=nx,
