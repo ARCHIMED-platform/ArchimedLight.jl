@@ -1,0 +1,15 @@
+[deps]
+ArchimedLight = "ca362a0f-208d-4994-8e0e-d922fd0d438a"
+Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PlantGeom = "5edaa67e-25db-4eb9-bf81-05d793b2238d"
+ReferenceTests = "324d217c-45ce-50fc-942e-d289b448e8cf"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+
+[sources]
+ArchimedLight = { path = ".." }
