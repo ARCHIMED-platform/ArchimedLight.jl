@@ -11,7 +11,7 @@ Julia reimplementation of the ARCHIMED light model with a function-first API.
 - Sky and turtle discretization
 - First-order interception by CPU raster/z-buffer
 - Iterative scattering
-- Java parity test harness for light-only fixtures
+- Fast manual fixture tests (`test/fast_fixtures`) + release-only heavy artifact regression
 
 Energy balance, transpiration, and photosynthesis are intentionally out of scope.
 

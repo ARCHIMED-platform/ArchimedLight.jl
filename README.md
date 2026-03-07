@@ -151,7 +151,7 @@ Optional: bind the artifact in `Artifacts.toml` by providing the download URL:
 julia --project=. scripts/build_release_fixture_artifact.jl \
   --test-root /path/to/heavy-test-root \
   --tarball /tmp/archimedlight-release-fixtures.tar.gz \
-  --url https://example.org/archimedlight-release-fixtures.tar.gz
+  --url https://github.com/ARCHIMED-platform/ArchimedLight.jl/releases/download/v0.0.1/archimedlight-release-fixtures-v0.0.1.tar.gz
 ```
 
 Run release-only heavy regression:
