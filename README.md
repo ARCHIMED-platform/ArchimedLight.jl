@@ -62,7 +62,7 @@ sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 - Run with:
 
 ```bash
-julia --project=. example/full_featured_example.jl
+julia --project=test example/full_featured_example.jl
 ```
 
 ## Stage flexibility
@@ -82,7 +82,7 @@ julia --project=. example/full_featured_example.jl
 Run the default fast suite:
 
 ```bash
-julia --project=. test/runtests.jl
+julia --project=test test/runtests.jl
 ```
 
 This runs core checks, fast manual fixtures, and synthetic scene unit tests in one command.
@@ -91,13 +91,13 @@ This runs core checks, fast manual fixtures, and synthetic scene unit tests in o
 Run one named synthetic case only:
 
 ```bash
-ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=test test/runtests.jl
 ```
 
 Run one named fast fixture case only:
 
 ```bash
-ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=test test/runtests.jl
 ```
 
 The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit
@@ -142,7 +142,7 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
 Run release-only heavy regression:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_TEST_PROFILE=release julia --project=test test/runtests.jl
 ```
 
 You can also bypass artifacts and point directly to a local extracted release dataset:
@@ -150,7 +150,7 @@ You can also bypass artifacts and point directly to a local extracted release da
 ```bash
 ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=. test/runtests.jl
+julia --project=test test/runtests.jl
 ```
 
 Optional (release dataset fixture filter):
@@ -159,5 +159,5 @@ Optional (release dataset fixture filter):
 ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
 ARCHIMEDLIGHT_FIXTURE_FILTER=test-compare-simpleplant \
-julia --project=. test/runtests.jl
+julia --project=test test/runtests.jl
 ```
