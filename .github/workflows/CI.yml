@@ -13,21 +13,12 @@ concurrency:
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
   fast:
-    name: Fast tests (${{ matrix.profile }})
+    name: Fast tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: write
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        profile:
-          - core
-          - synthetic
-          - fixtures
-    env:
-      ARCHIMEDLIGHT_TEST_PROFILE: ${{ matrix.profile }}
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -38,15 +29,13 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
   compat:
-    name: Compatibility matrix (core, manual)
+    name: Compatibility matrix (fast, manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
       actions: write
       contents: read
-    env:
-      ARCHIMEDLIGHT_TEST_PROFILE: core
     strategy:
       fail-fast: false
       matrix:

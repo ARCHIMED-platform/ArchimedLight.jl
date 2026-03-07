@@ -85,34 +85,19 @@ Run the default fast suite:
 julia --project=. test/runtests.jl
 ```
 
-Run only core smoke/unit checks:
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=core julia --project=. test/runtests.jl
-```
-
-Run synthetic explicit scene unit tests:
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=synthetic julia --project=. test/runtests.jl
-```
-
-Run fast fixture regression (manual, config-driven examples):
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=fixtures julia --project=. test/runtests.jl
-```
+This runs core checks, fast manual fixtures, and synthetic scene unit tests in one command.
+`ARCHIMEDLIGHT_TEST_PROFILE` is reserved for `release` only.
 
 Run one named synthetic case only:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=synthetic ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=. test/runtests.jl
 ```
 
 Run one named fast fixture case only:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=fixtures ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=. test/runtests.jl
 ```
 
 The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit

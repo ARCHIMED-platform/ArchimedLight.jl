@@ -1,11 +1,3 @@
-using Test
-using CSV
-using Tables
-using CairoMakie
-using ReferenceTests
-
-const _TEST_PROFILE = lowercase(get(ENV, "ARCHIMEDLIGHT_TEST_PROFILE", "all"))
-const _RUN_FAST_FIXTURE_TESTS = _TEST_PROFILE in ("all", "fixtures")
 const _FAST_FIXTURE_CASE_FILTER = Set(
     filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_FAST_FIXTURE_CASE", ""), ",")))),
 )
@@ -58,77 +50,76 @@ function _render_ri_par_f_figure(scene, step, cfg; title::String)
     return fig
 end
 
-if _RUN_FAST_FIXTURE_TESTS
-    @testset "Fast fixtures (manual, config-driven)" begin
-        @testset "Sky only" begin
-            if _fast_case_enabled("sky_06_direct")
-                case_root = joinpath(@__DIR__, "fast_fixtures", "sky_06_direct", "input")
-                cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-                meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
-                row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
-                sky = ArchimedLight.compute_sky(row, cfg)
-                turtle = ArchimedLight.build_turtle(cfg, sky)
-                flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+@testset "Fast fixtures (manual, config-driven)" begin
+    @testset "Sky only" begin
+        if _fast_case_enabled("sky_06_direct")
+            case_root = joinpath(@__DIR__, "fast_fixtures", "sky_06_direct", "input")
+            cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
+            meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
+            row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
+            sky = ArchimedLight.compute_sky(row, cfg)
+            turtle = ArchimedLight.build_turtle(cfg, sky)
+            flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
 
-                @test cfg.turtle_sectors == 6
-                @test cfg.all_in_turtle == false
-                @test length(turtle.sectors) == 7
-                @test count(s -> s.source == :sun, turtle.sectors) == 1
-                @test all(v -> v >= 0.0, flux.par)
-                @test all(v -> v >= 0.0, flux.nir)
-                @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
-                @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
-            end
-
-            if _fast_case_enabled("sky_16_turtle")
-                case_root = joinpath(@__DIR__, "fast_fixtures", "sky_16_turtle", "input")
-                cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-                meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
-                row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
-                sky = ArchimedLight.compute_sky(row, cfg)
-                turtle = ArchimedLight.build_turtle(cfg, sky)
-                flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
-
-                @test cfg.turtle_sectors == 16
-                @test cfg.all_in_turtle == true
-                @test length(turtle.sectors) == 16
-                @test count(s -> s.source == :sun, turtle.sectors) == 0
-                @test all(v -> v >= 0.0, flux.par)
-                @test all(v -> v >= 0.0, flux.nir)
-                @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
-                @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
-            end
-
-            if _fast_case_enabled("sky_46_direct")
-                case_root = joinpath(@__DIR__, "fast_fixtures", "sky_46_direct", "input")
-                cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-                meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
-                row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
-                sky = ArchimedLight.compute_sky(row, cfg)
-                turtle = ArchimedLight.build_turtle(cfg, sky)
-                flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
-
-                @test cfg.turtle_sectors == 46
-                @test cfg.all_in_turtle == false
-                @test length(turtle.sectors) == 47
-                @test count(s -> s.source == :sun, turtle.sectors) == 1
-                @test all(v -> v >= 0.0, flux.par)
-                @test all(v -> v >= 0.0, flux.nir)
-                @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
-                @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
-            end
+            @test cfg.turtle_sectors == 6
+            @test cfg.all_in_turtle == false
+            @test length(turtle.sectors) == 7
+            @test count(s -> s.source == :sun, turtle.sectors) == 1
+            @test all(v -> v >= 0.0, flux.par)
+            @test all(v -> v >= 0.0, flux.nir)
+            @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
+            @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
         end
 
-        @testset "Simple plant (numeric + visual refs)" begin
-            if _fast_case_enabled("simpleplant_16_notoric")
-                case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric")
-                cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-                scene = ArchimedLight.read_scene(cfg.scene)
-                meteo = ArchimedLight.read_meteo(cfg.meteo)
-                selected = ArchimedLight.prepare_meteo(meteo, cfg)
-                series = ArchimedLight.run_light_series(scene, meteo, cfg)
-                step = first(series)
-                meteo_row = first(selected.rows)
+        if _fast_case_enabled("sky_16_turtle")
+            case_root = joinpath(@__DIR__, "fast_fixtures", "sky_16_turtle", "input")
+            cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
+            meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
+            row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
+            sky = ArchimedLight.compute_sky(row, cfg)
+            turtle = ArchimedLight.build_turtle(cfg, sky)
+            flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+
+            @test cfg.turtle_sectors == 16
+            @test cfg.all_in_turtle == true
+            @test length(turtle.sectors) == 16
+            @test count(s -> s.source == :sun, turtle.sectors) == 0
+            @test all(v -> v >= 0.0, flux.par)
+            @test all(v -> v >= 0.0, flux.nir)
+            @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
+            @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
+        end
+
+        if _fast_case_enabled("sky_46_direct")
+            case_root = joinpath(@__DIR__, "fast_fixtures", "sky_46_direct", "input")
+            cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
+            meteo = ArchimedLight.read_meteo(joinpath(case_root, "meteo.csv"))
+            row = first(ArchimedLight.prepare_meteo(meteo, cfg).rows)
+            sky = ArchimedLight.compute_sky(row, cfg)
+            turtle = ArchimedLight.build_turtle(cfg, sky)
+            flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+
+            @test cfg.turtle_sectors == 46
+            @test cfg.all_in_turtle == false
+            @test length(turtle.sectors) == 47
+            @test count(s -> s.source == :sun, turtle.sectors) == 1
+            @test all(v -> v >= 0.0, flux.par)
+            @test all(v -> v >= 0.0, flux.nir)
+            @test isapprox(sum(flux.par), sky.ri_par_f; atol=1e-6, rtol=1e-6)
+            @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
+        end
+    end
+
+    @testset "Simple plant (numeric + visual refs)" begin
+        if _fast_case_enabled("simpleplant_16_notoric")
+            case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric")
+            cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
+            scene = ArchimedLight.read_scene(cfg.scene)
+            meteo = ArchimedLight.read_meteo(cfg.meteo)
+            selected = ArchimedLight.prepare_meteo(meteo, cfg)
+            series = ArchimedLight.run_light_series(scene, meteo, cfg)
+            step = first(series)
+            meteo_row = first(selected.rows)
 
                 tmpdir = mktempdir()
                 observed_csv = joinpath(tmpdir, "component_values.csv")
@@ -160,18 +151,18 @@ if _RUN_FAST_FIXTURE_TESTS
 
                 fig = _render_ri_par_f_figure(scene, step, cfg; title="simpleplant_16_notoric | Ri_PAR_f")
                 ref_png = joinpath(case_root, "expected", "ri_par_f_step0.png")
-                @test_reference relpath(ref_png, @__DIR__) fig by=ReferenceTests.psnr_equality(35)
-            end
+                @test_reference relpath(ref_png, @__DIR__) fig by = ReferenceTests.psnr_equality(35)
+        end
 
-            if _fast_case_enabled("simpleplant_16_toric")
-                case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_toric")
-                cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-                scene = ArchimedLight.read_scene(cfg.scene)
-                meteo = ArchimedLight.read_meteo(cfg.meteo)
-                selected = ArchimedLight.prepare_meteo(meteo, cfg)
-                series = ArchimedLight.run_light_series(scene, meteo, cfg)
-                step = first(series)
-                meteo_row = first(selected.rows)
+        if _fast_case_enabled("simpleplant_16_toric")
+            case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_toric")
+            cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
+            scene = ArchimedLight.read_scene(cfg.scene)
+            meteo = ArchimedLight.read_meteo(cfg.meteo)
+            selected = ArchimedLight.prepare_meteo(meteo, cfg)
+            series = ArchimedLight.run_light_series(scene, meteo, cfg)
+            step = first(series)
+            meteo_row = first(selected.rows)
 
                 tmpdir = mktempdir()
                 observed_csv = joinpath(tmpdir, "component_values.csv")
@@ -203,8 +194,7 @@ if _RUN_FAST_FIXTURE_TESTS
 
                 fig = _render_ri_par_f_figure(scene, step, cfg; title="simpleplant_16_toric | Ri_PAR_f")
                 ref_png = joinpath(case_root, "expected", "ri_par_f_step0.png")
-                @test_reference relpath(ref_png, @__DIR__) fig by=ReferenceTests.psnr_equality(35)
-            end
+                @test_reference relpath(ref_png, @__DIR__) fig by = ReferenceTests.psnr_equality(35)
         end
     end
 end
