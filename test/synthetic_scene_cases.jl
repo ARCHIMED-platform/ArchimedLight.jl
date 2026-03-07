@@ -164,7 +164,7 @@ end
 if _SYNTHETIC_TEST_PROFILE == "synthetic"
 @testset "Synthetic scene cases" begin
     cfg_ref = ArchimedLight.read_light_config(
-        joinpath(dirname(@__DIR__), "java_implementation", "archimed-lib-2018", "tests", "test-links-stats", "config.yml"),
+        joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"),
     )
 
     if _synthetic_case_enabled("single_plate_direct")

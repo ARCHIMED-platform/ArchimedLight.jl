@@ -1,6 +1,7 @@
 using Test
 using ArchimedLight
 
-include("java_parity_harness.jl")
-include("test_phase0_phase1.jl")
+include("test_core.jl")
+include("test_fast_fixtures.jl")
 include("synthetic_scene_cases.jl")
+include("test_release.jl")

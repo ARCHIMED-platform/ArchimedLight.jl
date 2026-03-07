@@ -1,0 +1,4 @@
+#' latitude: -21.1
+#' altitude: 1200.0
+date;hour_start;hour_end;temperature;relativeHumidity;clearness;wind
+2019/09/22;12:00:00;12:30:00;18;60;0.68;4

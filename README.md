@@ -7,7 +7,7 @@ Julia reimplementation of the ARCHIMED light interception pipeline with a compos
 - Sky + turtle discretization
 - First-order interception (CPU raster/z-buffer)
 - Iterative scattering (CPU reference)
-- Java parity harness (curated light-only fixtures)
+- Julia-native fixture regression harness (numeric + visual references)
 
 Energy balance, transpiration and photosynthesis are intentionally out of scope for now.
 
@@ -74,45 +74,45 @@ julia --project=. example/full_featured_example.jl
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend (`RasterCPUBackend()` also available).
 - `compute_scattering(...; mode=:raycast)` / `compute_scattering(...; mode=:links)` keep Java-style mode selection; backend objects are also available (`RaycastScatteringBackend()`, `LinksScatteringBackend()`).
 - Component output variables are validated for light-only scope: scattering outputs require `scattering: true`; photosynthesis/energy-balance/TIR outputs are intentionally rejected (compute later with PlantBiophysics).
-- `pixel_size` is validated with Java parity bounds (`0 < pixel_size <= 0.5` meters).
+- `pixel_size` is validated with ARCHIMED-compatible bounds (`0 < pixel_size <= 0.5` meters).
 - `cache_pixel_table: true` (or `save_on_disk: true`) enables on-disk direction projection cache under `<output_directory>/pixel_tables_cache`.
 - `build_turtle` follows Java-compatible sector sets for `1, 6, 16, 46, 136, 406`.
 
 ## Testing
-Run the parity and smoke suite:
+Run the default fast suite:
 
 ```bash
 julia --project=. test/runtests.jl
 ```
 
-Run only the frozen-reference parity suite:
+Run only core smoke/unit checks:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=parity julia --project=. test/runtests.jl
+ARCHIMEDLIGHT_TEST_PROFILE=core julia --project=. test/runtests.jl
 ```
 
-Run the fast parity guard subset (hitcount + weighted sun + one scattering fixture):
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=guard julia --project=. test/runtests.jl
-```
-
-Run only the isolated source-built Java sky-matrix parity suite:
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=sky_matrix julia --project=. test/runtests.jl
-```
-
-Run only the explicit synthetic simple-scene cases:
+Run synthetic explicit scene unit tests:
 
 ```bash
 ARCHIMEDLIGHT_TEST_PROFILE=synthetic julia --project=. test/runtests.jl
+```
+
+Run fast fixture regression (manual, config-driven examples):
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=fixtures julia --project=. test/runtests.jl
 ```
 
 Run one named synthetic case only:
 
 ```bash
 ARCHIMEDLIGHT_TEST_PROFILE=synthetic ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=. test/runtests.jl
+```
+
+Run one named fast fixture case only:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=fixtures ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=. test/runtests.jl
 ```
 
 The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit
@@ -123,26 +123,56 @@ The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` wit
 `toricity_scattering_cross_border`, `virtual_sensor_transparency`, `single_plate_absorptance`,
 `two_planes_shadow_absorptance`, and `cached_series_parity`.
 
-Additional explicit fixture-based simple-plant unit checks are part of the `core` profile:
-`test-scattering-two-simpleplants` and `test-toricity-two-simpleplants-border`.
+Fast fixture inputs/references are under `test/fast_fixtures/` and are intended to be readable
+as usage examples.
 
-Build the upstream Java jar used to freeze source-driven references:
-
-```bash
-cd /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source
-mvn -q -am -pl :archimed-lib-2018 package -Dmaven.test.skip=true
-```
-
-Freeze and sync the upstream Java sky-matrix fixtures into this repo:
+Generate or refresh fast fixture references (simple-plant numeric CSV + image):
 
 ```bash
-julia --project=. scripts/freeze_java_light_refs.jl \
-  --jar /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source/archimed-lib-2018/target/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar \
-  --upstream-tests-root /Users/rvezy/Documents/dev/ARCHIMED/archimed-2018-source/archimed-lib-2018/tests \
-  --fixtures test-compare-sky06,test-compare-sky16,test-compare-sky46 \
-  --force
+julia --project=. scripts/generate_fast_fixture_references.jl
 ```
 
-The upstream Java source repo is the source of truth for these fixture definitions; this repo stores the mirrored fixture files and frozen `expected/` references consumed by Julia.
+## Release-only heavy regression (artifact)
 
-`scripts/freeze_java_light_refs.jl` launches Java with `-Djava.awt.headless=true` by default to avoid macOS AWT/AppKit hangs when running the x86_64 JDK8 binary under Rosetta.
+Heavy full-fixture regression can be kept outside the package repository and run only before
+releases.
+
+Build an artifact tarball from a heavy fixture dataset checkout:
+
+```bash
+julia --project=. scripts/build_release_fixture_artifact.jl \
+  --test-root /path/to/heavy-test-root \
+  --tarball /tmp/archimedlight-release-fixtures.tar.gz
+```
+
+Optional: bind the artifact in `Artifacts.toml` by providing the download URL:
+
+```bash
+julia --project=. scripts/build_release_fixture_artifact.jl \
+  --test-root /path/to/heavy-test-root \
+  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
+  --url https://example.org/archimedlight-release-fixtures.tar.gz
+```
+
+Run release-only heavy regression:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=release julia --project=. test/runtests.jl
+```
+
+You can also bypass artifacts and point directly to a local extracted release dataset:
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=release \
+ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
+julia --project=. test/runtests.jl
+```
+
+Optional (release dataset fixture filter):
+
+```bash
+ARCHIMEDLIGHT_TEST_PROFILE=release \
+ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
+ARCHIMEDLIGHT_FIXTURE_FILTER=test-compare-simpleplant \
+julia --project=. test/runtests.jl
+```

@@ -12,6 +12,7 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MultiScaleTreeGraph = "dd4a991b-8a45-4075-bede-262ee62d5583"
 PlantGeom = "5edaa67e-25db-4eb9-bf81-05d793b2238d"
 PlantMeteo = "4630fe09-e0fb-4da5-a846-781cb73437b6"
+ReferenceTests = "324d217c-45ce-50fc-942e-d289b448e8cf"
 Rotations = "6038ab10-8711-5258-84ad-4b1120ba62dc"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
@@ -26,13 +27,15 @@ GeometryBasics = "0.5"
 MultiScaleTreeGraph = "0.15.0"
 PlantGeom = "0.17.0"
 PlantMeteo = "0.8"
+ReferenceTests = "0.10.6"
 StaticArrays = "1"
 Tables = "1"
 YAML = "0.4"
 julia = "1.10"
 
 [extras]
+ReferenceTests = "324d217c-45ce-50fc-942e-d289b448e8cf"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "ReferenceTests"]

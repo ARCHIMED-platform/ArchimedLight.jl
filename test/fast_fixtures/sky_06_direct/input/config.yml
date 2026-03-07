@@ -1,0 +1,18 @@
+---
+scene: scene/simple.ops
+models:
+  - model_simple.yml
+  - model_soil.yml
+meteo: meteo.csv
+scene_rotation: 0
+photosynthesis: false
+sky_sectors: 6
+all_in_turtle: false
+radiation_timestep: 15
+scattering: false
+pixel_size: 40
+cache_pixel_table: false
+toricity: false
+cache_radiation: false
+output_directory: output
+write_summary: false
