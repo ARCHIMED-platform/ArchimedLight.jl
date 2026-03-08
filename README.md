@@ -122,7 +122,8 @@ julia --project=. scripts/generate_fast_fixture_references.jl
 Heavy full-fixture regression can be kept outside the package repository and run only before
 releases.
 
-Build an artifact tarball from a heavy fixture dataset checkout:
+Build a data-only artifact tarball from a heavy fixture dataset checkout (fixtures + references +
+reference images + manifest):
 
 ```bash
 julia --project=. scripts/build_release_fixture_artifact.jl \
@@ -152,6 +153,9 @@ ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
 julia --project=test test/runtests.jl
 ```
+
+Release test scripts are local in this repository (`test/release/`) and consume only data from the
+artifact/dataset. During release runs, per-fixture progress is logged with start/end timestamps.
 
 Optional (release dataset fixture filter):
 

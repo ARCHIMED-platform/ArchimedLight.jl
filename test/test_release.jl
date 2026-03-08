@@ -19,9 +19,19 @@ isempty(dataset_root) && error(
 )
 isdir(dataset_root) || error("Release dataset directory does not exist: $(dataset_root)")
 
-release_runtests = joinpath(dataset_root, "runtests_release.jl")
-isfile(release_runtests) || error(
-    "Missing release entrypoint: $(release_runtests). Expected release dataset to provide runtests_release.jl.",
-)
+manifest_path = joinpath(dataset_root, "fixtures_manifest.toml")
+isfile(manifest_path) || error("Missing fixtures manifest in release dataset: $(manifest_path)")
 
-include(release_runtests)
+old_data_root = get(ENV, "ARCHIMEDLIGHT_RELEASE_DATA_ROOT", nothing)
+ENV["ARCHIMEDLIGHT_RELEASE_DATA_ROOT"] = dataset_root
+try
+    include(joinpath(@__DIR__, "release", "harness.jl"))
+    include(joinpath(@__DIR__, "release", "runner.jl"))
+    run_release_fixture_regression!()
+finally
+    if old_data_root === nothing
+        delete!(ENV, "ARCHIMEDLIGHT_RELEASE_DATA_ROOT")
+    else
+        ENV["ARCHIMEDLIGHT_RELEASE_DATA_ROOT"] = old_data_root
+    end
+end
