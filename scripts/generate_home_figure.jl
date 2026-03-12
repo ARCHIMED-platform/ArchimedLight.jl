@@ -11,25 +11,40 @@ using PlantGeom
 
 const OUT_PATH = joinpath(REPO_ROOT, "docs", "src", "assets", "coffee_scene_light_interception.png")
 const BG = RGBf(0.982, 0.978, 0.969)
+const HOME_FIGURE_PLOT_PAVING = 2500
+const HOME_FIGURE_GROUND_SPAN = 45.0
 
 function _coffee_fixture()
     cfg = read_light_config(
         joinpath(REPO_ROOT, "java_implementation", "archimed-lib-2018", "tests", "test-cafeier", "config.yml"),
     )
+    cfg.raw["plot_paving_override"] = HOME_FIGURE_PLOT_PAVING
     scene = read_scene(cfg.scene)
     meteo = read_meteo(cfg.meteo)
     step = run_light_step(scene, first(meteo.rows), cfg)
     return cfg, scene, step
 end
 
-function _ri_par_colorrange(scene, step, cfg)
+function _ri_par_colorrange(scene, step, cfg, window)
     meta = ArchimedLight._output_node_metadata(scene, cfg)
     vals = Float64[]
+    ground_vals = Float64[]
     for nid in meta.node_ids
         v = get(step.budget.ri_par_f_per_node, nid, NaN)
-        isfinite(v) && push!(vals, v)
+        isfinite(v) || continue
+        push!(vals, v)
+        get(meta.group_per_node, nid, "") == "pavement" || continue
+        x, y, _ = get(meta.barycenter_per_node, nid, (NaN, NaN, NaN))
+        window.xmin <= x <= window.xmax || continue
+        window.ymin <= y <= window.ymax || continue
+        push!(ground_vals, v)
     end
     isempty(vals) && return (0.0, 1.0)
+    if !isempty(ground_vals)
+        hi = maximum(ground_vals)
+        lo = max(0.0, hi - HOME_FIGURE_GROUND_SPAN)
+        return (lo, hi)
+    end
     hi = max(maximum(vals), eps(Float64))
     return (0.0, hi)
 end
@@ -68,17 +83,17 @@ function _set_camera!(ax, scene)
     xy_span = max(window.xmax - window.xmin, window.ymax - window.ymin)
     z_span = max(window.zmax - window.zmin, 0.6)
     radius = max(1.2, 0.55 * max(xy_span, z_span))
-    eye = Point3f(xmid - 0.92radius, ymid - 1.02radius, zmid + 0.88radius)
+    eye = Point3f(xmid + 1.18radius, ymid - 0.78radius, zmid + 0.96radius)
     lookat = Point3f(xmid, ymid, zmid)
     update_cam!(ax.scene, eye, lookat, Vec3f(0, 0, 1))
-    ax.scene.camera_controls.fov[] = 21.0
+    ax.scene.camera_controls.fov[] = 19.0
     return nothing
 end
 
 function main()
     cfg, scene, step = _coffee_fixture()
     window = _display_window(scene)
-    colorrange = _ri_par_colorrange(scene, step, cfg)
+    colorrange = _ri_par_colorrange(scene, step, cfg, window)
     viz_mtg = visual_scene_mtg(
         scene,
         cfg,
