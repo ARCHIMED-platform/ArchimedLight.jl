@@ -4,9 +4,14 @@ CurrentModule = ArchimedLight
 
 # ArchimedLight.jl
 
-Julia reimplementation of the ARCHIMED light model with a function-first API.
+Julia reimplementation of the ARCHIMED light model.
+
+![Coffee scene light interception](assets/coffee_scene_light_interception.png)
+
+The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script builds a visualization MTG with `visual_scene_mtg(...)`, which materializes the ARCHIMED cobblestone paving as regular geometry nodes and writes `Ri_PAR_f` back onto every plotted node before calling `plantviz(..., color=:Ri_PAR_f)`.
 
 ## Scope
+
 - Scene/config/meteo ingestion (`.ops`, `.opf`, `.gwa` + YAML + meteo files)
 - Sky and turtle discretization
 - First-order interception by CPU raster/z-buffer
@@ -16,6 +21,7 @@ Julia reimplementation of the ARCHIMED light model with a function-first API.
 Energy balance, transpiration, and photosynthesis are intentionally out of scope.
 
 ## Quick Start
+
 ```julia
 using ArchimedLight
 

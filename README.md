@@ -2,6 +2,10 @@
 
 Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
 
+![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
+
+The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script builds a visualization MTG with `visual_scene_mtg(...)`, which materializes the ARCHIMED cobblestone paving as regular geometry nodes and writes `Ri_PAR_f` back onto every plotted node before calling `plantviz(..., color=:Ri_PAR_f)`.
+
 ## Current scope
 - Scene/config/meteo input pipeline
 - Sky + turtle discretization

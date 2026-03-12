@@ -15,6 +15,10 @@ compute_scattering
 integrate_light
 run_light_step
 run_light_series
+attach_node_values!
+attach_light_step!
+attach_light_series!
+visual_scene_mtg
 ArchimedLight._nir_interception_enabled_local
 ArchimedLight._nir_scattering_enabled_local
 component_variable_names

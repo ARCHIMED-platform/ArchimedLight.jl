@@ -7,6 +7,7 @@ include("turtle.jl")
 include("interception.jl")
 include("scattering.jl")
 include("pipeline.jl")
+include("attach.jl")
 include("output.jl")
 
 export LightConfig
@@ -36,6 +37,10 @@ export compute_scattering
 export integrate_light
 export run_light_step
 export run_light_series
+export attach_node_values!
+export attach_light_step!
+export attach_light_series!
+export visual_scene_mtg
 export component_variable_names
 export component_values_table
 export write_component_values_csv
