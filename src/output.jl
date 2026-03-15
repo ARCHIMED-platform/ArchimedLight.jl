@@ -267,14 +267,7 @@ function _config_debug_enabled(cfg::LightConfig)
 end
 
 function _export_ops_raw_value(cfg::LightConfig)
-    if haskey(cfg.raw, "export_ops")
-        return cfg.raw["export_ops"]
-    end
-    props = get(cfg.raw, "prop", nothing)
-    if props isa AbstractDict && haskey(props, "export_ops")
-        return props["export_ops"]
-    end
-    return nothing
+    get(cfg.raw, "export_ops", nothing)
 end
 
 function _available_export_step_numbers(start_step_number::Int, nsteps::Int)

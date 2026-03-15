@@ -26,7 +26,7 @@ export LightStepResult
 
 export read_scene
 export read_light_config
-export set_parameter!
+export refresh_light_config!
 export read_meteo
 export prepare_meteo
 export compute_sky

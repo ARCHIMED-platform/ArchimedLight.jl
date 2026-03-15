@@ -16,13 +16,14 @@ function _synthetic_cfg(
     models::Vector{String}=String[],
 )
     out = deepcopy(cfg)
-    ArchimedLight.set_parameter!(out, all_in_turtle, "config", "all_in_turtle")
-    ArchimedLight.set_parameter!(out, sectors, "config", "sky_sectors")
-    ArchimedLight.set_parameter!(out, scattering, "config", "scattering")
-    ArchimedLight.set_parameter!(out, pixel_size * 100.0, "config", "pixel_size")
-    ArchimedLight.set_parameter!(out, toricity, "config", "toricity")
-    ArchimedLight.set_parameter!(out, cache_radiation, "config", "cache_radiation")
-    ArchimedLight.set_parameter!(out, models, "config", "models")
+    out.raw["all_in_turtle"] = all_in_turtle
+    out.raw["sky_sectors"] = sectors
+    out.raw["scattering"] = scattering
+    out.raw["pixel_size"] = pixel_size * 100.0
+    out.raw["toricity"] = toricity
+    out.raw["cache_radiation"] = cache_radiation
+    out.raw["models"] = models
+    ArchimedLight.refresh_light_config!(out; reload_models=true)
     return out
 end
 

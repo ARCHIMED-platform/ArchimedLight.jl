@@ -31,14 +31,7 @@ function _as_bool_local_turtle(x, default::Bool)
 end
 
 function _use_java_logged_turtle_dirs(cfg::LightConfig)
-    raw = cfg.raw
-    v = get(raw, "java_logged_turtle_dirs", nothing)
-    if v === nothing
-        props = get(raw, "properties", nothing)
-        if props isa AbstractDict
-            v = get(props, "java_logged_turtle_dirs", nothing)
-        end
-    end
+    v = get(cfg.raw, "java_logged_turtle_dirs", nothing)
     if v === nothing
         v = get(ENV, "ARCHIMEDLIGHT_JAVA_LOGGED_TURTLE_DIRS", nothing)
     end
@@ -387,7 +380,7 @@ end
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
 sector when `cfg.all_in_turtle == false`.
 
-Set `java_logged_turtle_dirs: true` (or `properties.java_logged_turtle_dirs: true`) in the
+Set `java_logged_turtle_dirs: true` in the
 light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
 Float32 Java-style construction for larger sector counts).
 """

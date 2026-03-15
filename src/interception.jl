@@ -21,26 +21,11 @@ function _normalize_group_name_local(x)
 end
 
 function _cfg_toricity(cfg::LightConfig)
-    raw = cfg.raw
-    if haskey(raw, "toricity")
-        return _as_bool_local(raw["toricity"], true)
-    end
-    props = get(raw, "prop", nothing)
-    if props isa AbstractDict && haskey(props, "toricity")
-        return _as_bool_local(props["toricity"], true)
-    end
-    return true
+    _as_bool_local(get(cfg.raw, "toricity", true), true)
 end
 
 function _cfg_debug_drop_leading_hit(cfg::LightConfig)
-    raw = cfg.raw
-    spec = get(raw, "debug_drop_leading_hit", nothing)
-    if spec === nothing
-        props = get(raw, "prop", nothing)
-        if props isa AbstractDict
-            spec = get(props, "debug_drop_leading_hit", nothing)
-        end
-    end
+    spec = get(cfg.raw, "debug_drop_leading_hit", nothing)
     spec isa AbstractDict || return nothing
     node_id = try
         Int(get(spec, "node_id", 0))
@@ -339,19 +324,13 @@ function _emitter_transfer_weights(
 end
 
 function _cfg_cache_pixel_table(cfg::LightConfig)
-    raw = cfg.raw
-    if haskey(raw, "cache_pixel_table")
-        return _as_bool_local(raw["cache_pixel_table"], false)
+    if haskey(cfg.raw, "cache_pixel_table")
+        return _as_bool_local(cfg.raw["cache_pixel_table"], false)
     end
-    if haskey(raw, "save_on_disk")
-        return _as_bool_local(raw["save_on_disk"], false)
+    if haskey(cfg.raw, "save_on_disk")
+        return _as_bool_local(cfg.raw["save_on_disk"], false)
     end
-    props = get(raw, "prop", nothing)
-    if props isa AbstractDict
-        haskey(props, "cache_pixel_table") && return _as_bool_local(props["cache_pixel_table"], false)
-        haskey(props, "save_on_disk") && return _as_bool_local(props["save_on_disk"], false)
-    end
-    return false
+    false
 end
 
 function _projection_cache_dir(cfg::LightConfig)

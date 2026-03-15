@@ -49,10 +49,13 @@ function _model_paths_from_raw(d::AbstractDict{String,Any}, scene::AbstractStrin
     [_join_if_relative(base, string(m)) for m in models]
 end
 
-function _refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
+function refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
     d = cfg.raw
     base = get(d, "__base_dir", dirname(cfg.source_path))
     d["__base_dir"] = base
+
+    haskey(d, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
+    haskey(d, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
 
     cfg.scene = _join_if_relative(base, string(d["scene"]))
     cfg.meteo = _join_if_relative(base, string(d["meteo"]))
@@ -75,34 +78,6 @@ function _refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
         ]
     end
     return cfg
-end
-
-function _set_nested_value!(target, keys, value)
-    isempty(keys) && error("set_parameter!: missing parameter path.")
-    current = target
-    for key in keys[1:end-1]
-        if current isa AbstractVector
-            idx = Int(key)
-            1 <= idx <= length(current) || error("set_parameter!: index $(idx) is out of bounds.")
-            current = current[idx]
-            continue
-        end
-        ks = string(key)
-        if !haskey(current, ks) || !(current[ks] isa AbstractDict || current[ks] isa AbstractVector)
-            current[ks] = OrderedDict{String,Any}()
-        end
-        current = current[ks]
-    end
-
-    last_key = last(keys)
-    if current isa AbstractVector
-        idx = Int(last_key)
-        1 <= idx <= length(current) || error("set_parameter!: index $(idx) is out of bounds.")
-        current[idx] = value
-    else
-        current[string(last_key)] = value
-    end
-    return target
 end
 
 function _safe_output_relpath(path::AbstractString)
@@ -144,34 +119,7 @@ function read_light_config(path::AbstractString)
         String[],
         OrderedDict{String,Any}[],
     )
-    return _refresh_light_config!(cfg; reload_models=true)
-end
-
-"""
-    set_parameter!(cfg, value, keys...)
-
-Mutate one imported configuration/model parameter in place.
-Use `"config"` as the first key to update `cfg.raw`, or `"models", i, ...`
-to update the `i`-th loaded model YAML document.
-"""
-function set_parameter!(cfg::LightConfig, value, keys...)
-    isempty(keys) && error("set_parameter!: missing parameter path.")
-    scope = string(first(keys))
-    if scope == "config"
-        _set_nested_value!(cfg.raw, keys[2:end], value)
-        return _refresh_light_config!(cfg; reload_models=!isempty(keys[2:end]) && string(keys[2]) == "models")
-    elseif scope == "models"
-        length(keys) >= 2 || error("set_parameter!: missing model index.")
-        idx = Int(keys[2])
-        1 <= idx <= length(cfg.model_raw) || error("set_parameter!: model index $(idx) is out of bounds.")
-        if length(keys) == 2
-            cfg.model_raw[idx] = value
-            return cfg
-        end
-        _set_nested_value!(cfg.model_raw[idx], keys[3:end], value)
-        return cfg
-    end
-    error("set_parameter!: first key must be \"config\" or \"models\".")
+    return refresh_light_config!(cfg; reload_models=true)
 end
 
 """

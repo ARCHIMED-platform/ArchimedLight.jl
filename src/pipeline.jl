@@ -275,29 +275,8 @@ function _row_datetime_interval_local(row; index::Int=0)
     end
 end
 
-function _cfg_lookup_value_local(cfg::LightConfig, keys::Vector{String})
-    function _dict_lookup(d, k::String)
-        d isa AbstractDict || return nothing
-        haskey(d, k) && return d[k]
-        lk = lowercase(k)
-        for (dk, dv) in d
-            lowercase(string(dk)) == lk && return dv
-        end
-        return nothing
-    end
-
-    props = get(cfg.raw, "prop", nothing)
-    for d in (props, cfg.raw)
-        for k in keys
-            v = _dict_lookup(d, k)
-            v !== nothing && return v
-        end
-    end
-    return nothing
-end
-
 function _cfg_meteo_range_spec_local(cfg::LightConfig)
-    v = _cfg_lookup_value_local(cfg, ["meteo_range", "meteorange", "meteoRange"])
+    v = get(cfg.raw, "meteo_range", nothing)
     v === nothing && return nothing
     s = strip(string(v))
     isempty(s) ? nothing : s
@@ -318,10 +297,10 @@ function _parse_bool_strict_local(v, field_name::String)
     error("invalid $(field_name) value: $(repr(v))")
 end
 
-function _cfg_bool_override_local(cfg::LightConfig, keys::Vector{String})
-    v = _cfg_lookup_value_local(cfg, keys)
+function _cfg_bool_override_local(cfg::LightConfig, key::String)
+    v = get(cfg.raw, key, nothing)
     v === nothing && return nothing
-    _parse_bool_strict_local(v, keys[1])
+    _parse_bool_strict_local(v, key)
 end
 
 """
@@ -332,7 +311,7 @@ Default behavior remains enabled whenever scattering is enabled.
 """
 function _nir_scattering_enabled_local(cfg::LightConfig)
     cfg.scattering || return false
-    override = _cfg_bool_override_local(cfg, ["nir_scattering", "nirScattering"])
+    override = _cfg_bool_override_local(cfg, "nir_scattering")
     override === nothing ? true : override
 end
 
@@ -343,7 +322,7 @@ NIR interception activation with optional explicit override (`nir_interception`)
 Default behavior remains enabled.
 """
 function _nir_interception_enabled_local(cfg::LightConfig)
-    override = _cfg_bool_override_local(cfg, ["nir_interception", "nirInterception"])
+    override = _cfg_bool_override_local(cfg, "nir_interception")
     override === nothing ? true : override
 end
 

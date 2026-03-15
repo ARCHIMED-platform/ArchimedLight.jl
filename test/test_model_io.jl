@@ -43,8 +43,9 @@ import MultiScaleTreeGraph
         cfg = ArchimedLight.read_light_config(cfg_path)
         @test collect(keys(cfg.raw))[1:5] == ["scene", "models", "meteo", "pixel_size", "scattering"]
 
-        ArchimedLight.set_parameter!(cfg, 2.5, "config", "pixel_size")
-        ArchimedLight.set_parameter!(cfg, 0.25, "models", 1, "Type", "Leaf", "Interception", "transparency")
+        cfg.raw["pixel_size"] = 2.5
+        ArchimedLight.refresh_light_config!(cfg)
+        cfg.model_raw[1]["Type"]["Leaf"]["Interception"]["transparency"] = 0.25
 
         @test isapprox(cfg.pixel_size, 0.025; atol=1e-12)
 
@@ -62,8 +63,8 @@ import MultiScaleTreeGraph
     @testset "Scene export writes OPF attrs" begin
         case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input")
         cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-        ArchimedLight.set_parameter!(cfg, true, "config", "export_ops")
-        ArchimedLight.set_parameter!(cfg, OrderedDict("Ri_PAR_0_q" => true), "config", "opf_variables")
+        cfg.raw["export_ops"] = true
+        cfg.raw["opf_variables"] = OrderedDict("Ri_PAR_0_q" => true)
 
         scene = ArchimedLight.read_scene(cfg.scene)
         meteo = ArchimedLight.read_meteo(cfg.meteo)
