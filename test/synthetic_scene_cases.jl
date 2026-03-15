@@ -15,29 +15,15 @@ function _synthetic_cfg(
     cache_radiation::Bool=false,
     models::Vector{String}=String[],
 )
-    raw = copy(cfg.raw)
-    raw["all_in_turtle"] = all_in_turtle
-    raw["sky_sectors"] = sectors
-    raw["scattering"] = scattering
-    raw["pixel_size"] = pixel_size * 100.0
-    raw["toricity"] = toricity
-    raw["cache_radiation"] = cache_radiation
-    raw["models"] = models
-    ArchimedLight.LightConfig(
-        cfg.scene,
-        cfg.meteo,
-        all_in_turtle,
-        sectors,
-        pixel_size,
-        cfg.area_ratio,
-        scattering,
-        cfg.scattering_max_iter,
-        cfg.scattering_stop_ratio,
-        cfg.scattering_coeff_par,
-        cfg.scattering_coeff_nir,
-        cache_radiation,
-        raw,
-    )
+    out = deepcopy(cfg)
+    ArchimedLight.set_parameter!(out, all_in_turtle, "config", "all_in_turtle")
+    ArchimedLight.set_parameter!(out, sectors, "config", "sky_sectors")
+    ArchimedLight.set_parameter!(out, scattering, "config", "scattering")
+    ArchimedLight.set_parameter!(out, pixel_size * 100.0, "config", "pixel_size")
+    ArchimedLight.set_parameter!(out, toricity, "config", "toricity")
+    ArchimedLight.set_parameter!(out, cache_radiation, "config", "cache_radiation")
+    ArchimedLight.set_parameter!(out, models, "config", "models")
+    return out
 end
 
 function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})

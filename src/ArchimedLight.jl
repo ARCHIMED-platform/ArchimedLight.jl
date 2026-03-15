@@ -26,6 +26,7 @@ export LightStepResult
 
 export read_scene
 export read_light_config
+export set_parameter!
 export read_meteo
 export prepare_meteo
 export compute_sky
@@ -57,6 +58,7 @@ export node_links_dir_table
 export write_node_links_dir_csv
 export output_directory
 export simulation_output_directory
+export write_light_inputs
 export summary_values_table
 export write_summary_csv
 export write_light_outputs

@@ -26,6 +26,10 @@ end
     include("synthetic_scene_cases.jl")
 end
 
+@testset "Model IO" begin
+    include("test_model_io.jl")
+end
+
 if _RUN_RELEASE_TESTS
     @testset "Release tests" begin
         include("test_release.jl")

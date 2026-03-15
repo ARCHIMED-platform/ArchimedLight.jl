@@ -1,7 +1,6 @@
 import GeometryBasics
 import StaticArrays
 import PlantGeom
-import YAML
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Serialization
@@ -43,19 +42,18 @@ function _cfg_debug_drop_leading_hit(cfg::LightConfig)
         end
     end
     spec isa AbstractDict || return nothing
-    d = _to_string_dict(spec)
     node_id = try
-        Int(get(d, "node_id", 0))
+        Int(get(spec, "node_id", 0))
     catch
         0
     end
     x = try
-        Int(get(d, "x", -1))
+        Int(get(spec, "x", -1))
     catch
         -1
     end
     y = try
-        Int(get(d, "y", -1))
+        Int(get(spec, "y", -1))
     catch
         -1
     end
@@ -88,65 +86,38 @@ function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_
 end
 
 function _cfg_plot_paving(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return 0
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     best = 0
-    for m in models
-        mp = String(m)
-        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
-        isfile(path) || continue
-        txt = read(path, String)
-        for mm in eachmatch(r"plot_paving\s*:\s*([0-9]+)", txt)
+    for model in cfg.model_raw
+        types = get(model, "Type", nothing)
+        types isa AbstractDict || continue
+        for (_, tconf) in types
+            tconf isa AbstractDict || continue
             v = try
-                parse(Int, mm.captures[1])
+                Int(get(tconf, "plot_paving", 0))
             catch
                 0
             end
             best = max(best, v)
         end
     end
-    best
+    return best
 end
 
 function _virtual_sensor_groups(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Set{String}()
-
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     out = Set{String}()
-    for m in models
-        mp = String(m)
-        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
-        isfile(path) || continue
-        d = try
-            YAML.load_file(path)
-        catch
-            nothing
-        end
-        d isa AbstractDict || continue
-        d = _to_string_dict(d)
-
-        group = haskey(d, "Group") ? _normalize_group_name_local(d["Group"]) : ""
+    for model in cfg.model_raw
+        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
         isempty(group) && continue
 
-        types = get(d, "Type", nothing)
+        types = get(model, "Type", nothing)
         types isa AbstractDict || continue
-        for (_, tconf0) in types
-            tconf0 isa AbstractDict || continue
-            tconf = _to_string_dict(tconf0)
+        for (_, tconf) in types
+            tconf isa AbstractDict || continue
             inter = get(tconf, "Interception", nothing)
             inter isa AbstractDict || continue
-            inter = _to_string_dict(inter)
             iuse = get(inter, "use", nothing)
-            iconf =
-                if iuse !== nothing && haskey(inter, string(iuse))
-                    inter[string(iuse)]
-                else
-                    inter
-                end
+            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
             iconf isa AbstractDict || continue
-            iconf = _to_string_dict(iconf)
             model = lowercase(strip(string(get(iconf, "model", ""))))
             if model == "virtualsensor"
                 push!(out, group)
@@ -168,43 +139,20 @@ function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig
 end
 
 function _ignored_group_types(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{String,Set{String}}()
-
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     out = Dict{String,Set{String}}()
-    for m in models
-        mp = String(m)
-        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
-        isfile(path) || continue
-        d = try
-            YAML.load_file(path)
-        catch
-            nothing
-        end
-        d isa AbstractDict || continue
-        d = _to_string_dict(d)
-
-        group = haskey(d, "Group") ? _normalize_group_name_local(d["Group"]) : ""
+    for model in cfg.model_raw
+        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
         isempty(group) && continue
 
-        types = get(d, "Type", nothing)
+        types = get(model, "Type", nothing)
         types isa AbstractDict || continue
-        for (type_name0, tconf0) in types
-            tconf0 isa AbstractDict || continue
-            tconf = _to_string_dict(tconf0)
+        for (type_name0, tconf) in types
+            tconf isa AbstractDict || continue
             inter = get(tconf, "Interception", nothing)
             inter isa AbstractDict || continue
-            inter = _to_string_dict(inter)
             iuse = get(inter, "use", nothing)
-            iconf =
-                if iuse !== nothing && haskey(inter, string(iuse))
-                    inter[string(iuse)]
-                else
-                    inter
-                end
+            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
             iconf isa AbstractDict || continue
-            iconf = _to_string_dict(iconf)
             model = lowercase(strip(string(get(iconf, "model", ""))))
             model == "ignore" || continue
             tname = strip(string(type_name0))
@@ -230,36 +178,20 @@ function _is_ignored_node(
 end
 
 function _group_light_emitters(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for m in models
-        mp = String(m)
-        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
-        isfile(path) || continue
-        d = try
-            YAML.load_file(path)
-        catch
-            nothing
-        end
-        d isa AbstractDict || continue
-        d = _to_string_dict(d)
-
-        group = haskey(d, "Group") ? strip(string(d["Group"])) : ""
+    for model in cfg.model_raw
+        group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
         isempty(group) && continue
 
-        types = get(d, "Type", nothing)
+        types = get(model, "Type", nothing)
         types isa AbstractDict || continue
 
-        for (type_name0, tconf0) in types
-            tconf0 isa AbstractDict || continue
-            tconf = _to_string_dict(tconf0)
+        for (type_name0, tconf) in types
+            tconf isa AbstractDict || continue
             type_name = strip(string(type_name0))
             em0 = get(tconf, "LightEmitter", nothing)
             em0 isa AbstractDict || continue
-            em = _to_string_dict(em0)
+            em = em0
             model = lowercase(strip(string(get(em, "model", ""))))
             model == "lambertianemitter" || continue
 
@@ -278,14 +210,13 @@ function _group_light_emitters(cfg::LightConfig)
             gnir = 0.52
             g0 = get(em, "gamma", nothing)
             if g0 isa AbstractDict
-                g = _to_string_dict(g0)
                 gpar = try
-                    Float64(get(g, "PAR", gpar))
+                    Float64(get(g0, "PAR", gpar))
                 catch
                     gpar
                 end
                 gnir = try
-                    Float64(get(g, "NIR", gnir))
+                    Float64(get(g0, "NIR", gnir))
                 catch
                     gnir
                 end
@@ -1021,19 +952,13 @@ end
 
 function _strict_java_float(cfg::LightConfig)
     raw = cfg.raw
-    top = _cfg_get(raw, ["strict_java_float", "java_strict_float"], nothing)
-    props = get(raw, "prop", Dict{String,Any}())
-    propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
-    v = _cfg_get(propsd, ["strict_java_float", "java_strict_float"], top)
+    v = get(raw, "strict_java_float", nothing)
     return _as_bool(v, false)
 end
 
 function _projection_unit_scale(cfg::LightConfig)
     raw = cfg.raw
-    top = _cfg_get(raw, ["projection_unit_scale"], nothing)
-    props = get(raw, "prop", Dict{String,Any}())
-    propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
-    v = _cfg_get(propsd, ["projection_unit_scale"], top)
+    v = get(raw, "projection_unit_scale", nothing)
     s = try
         v === nothing ? 1.0 : Float64(v)
     catch

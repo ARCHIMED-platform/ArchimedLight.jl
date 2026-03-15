@@ -97,34 +97,17 @@ end
 
 function fixture_runtime_data(fx::JuliaFixture)
     cfg0 = ArchimedLight.read_light_config(fx.config_path)
-    raw = copy(cfg0.raw)
-    scene_path = cfg0.scene
-    meteo_path = cfg0.meteo
+    cfg = deepcopy(cfg0)
     if fx.scene_override !== nothing
         scene_path = normpath(joinpath(dirname(fx.config_path), fx.scene_override))
-        raw["scene"] = scene_path
+        ArchimedLight.set_parameter!(cfg, scene_path, "config", "scene")
     end
     if fx.meteo_override !== nothing
         meteo_path = normpath(joinpath(dirname(fx.config_path), fx.meteo_override))
-        raw["meteo"] = meteo_path
+        ArchimedLight.set_parameter!(cfg, meteo_path, "config", "meteo")
     end
-    scattering = fx.force_scattering === nothing ? cfg0.scattering : Bool(fx.force_scattering)
-    raw["scattering"] = scattering
-    cfg = ArchimedLight.LightConfig(
-        scene_path,
-        meteo_path,
-        cfg0.all_in_turtle,
-        cfg0.turtle_sectors,
-        cfg0.pixel_size,
-        cfg0.area_ratio,
-        scattering,
-        cfg0.scattering_max_iter,
-        cfg0.scattering_stop_ratio,
-        cfg0.scattering_coeff_par,
-        cfg0.scattering_coeff_nir,
-        cfg0.cache_radiation,
-        raw,
-    )
+    scattering = fx.force_scattering === nothing ? cfg.scattering : Bool(fx.force_scattering)
+    ArchimedLight.set_parameter!(cfg, scattering, "config", "scattering")
 
     scene = ArchimedLight.read_scene(cfg.scene)
     meteo = ArchimedLight.read_meteo(cfg.meteo)

@@ -307,33 +307,6 @@ function _ops_export_step_numbers(cfg::LightConfig, start_step_number::Int, nste
     return [n]
 end
 
-function _parse_ops_object_rows(path::AbstractString)
-    rows = NamedTuple[]
-    for (lineno, line) in enumerate(readlines(path))
-        s = strip(replace(line, '\r' => ""))
-        isempty(s) && continue
-        startswith(s, "#") && continue
-        startswith(s, "T") && continue
-        toks = split(s)
-        length(toks) >= 3 || continue
-        scene_id = try
-            parse(Int, toks[1])
-        catch
-            continue
-        end
-        plant_id = try
-            parse(Int, toks[2])
-        catch
-            continue
-        end
-        rel_path = toks[3]
-        ext = lowercase(splitext(rel_path)[2])
-        (ext == ".gwa" || ext == ".opf") || continue
-        push!(rows, (lineno=lineno, scene_id=scene_id, plant_id=plant_id, rel_path=rel_path, tokens=toks))
-    end
-    rows
-end
-
 function _ops_export_variables(cfg::LightConfig)
     d = get(cfg.raw, "opf_variables", nothing)
     d isa AbstractDict || return ["Ri_PAR_0_f", "Ri_NIR_0_f"]
@@ -348,80 +321,9 @@ function _ops_export_variables(cfg::LightConfig)
     isempty(vars) ? ["Ri_PAR_0_f", "Ri_NIR_0_f"] : _canonical_component_variable_order(vars)
 end
 
-function _float_or_zero(v)
-    if v isa Number
-        return Float64(v)
-    end
-    try
-        parse(Float64, string(v))
-    catch
-        return 0.0
-    end
-end
-
-function _ops_component_value_map(scene::SceneGeometry, step::LightStepResult, cfg::LightConfig, meteo_row, vars::Vector{String})
-    cols = String["item_id", "component_id"]
-    append!(cols, vars)
-    rows = component_values_table(scene, step, cfg; meteo_row=meteo_row, columns=cols, unavailable="0").rows
-    out = Dict{Tuple{Int,Int},Dict{String,Float64}}()
-    for r in rows
-        key = (Int(r["item_id"]), Int(r["component_id"]))
-        vals = Dict{String,Float64}()
-        for v in vars
-            vals[v] = _float_or_zero(get(r, v, 0.0))
-        end
-        out[key] = vals
-    end
-    out
-end
-
-function _write_gwa_with_ops_variables(
-    src::AbstractString,
-    dst::AbstractString,
-    plant_id::Int,
-    vars::Vector{String},
-    val_map::Dict{Tuple{Int,Int},Dict{String,Float64}},
-)
-    lines = readlines(src)
-    out = String[]
-    current_mesh_id = nothing
-    for line in lines
-        s = strip(line)
-        m = match(r"<mesh\b[^>]*\bid=\"([0-9]+)\"", s)
-        if m !== nothing
-            current_mesh_id = parse(Int, m.captures[1])
-        end
-        if occursin("</mesh>", s) && current_mesh_id !== nothing
-            vals = get(val_map, (plant_id, current_mesh_id), Dict{String,Float64}())
-            for v in vars
-                push!(out, "    <$v>$(get(vals, v, 0.0))</$v>")
-            end
-            current_mesh_id = nothing
-        end
-        push!(out, line)
-    end
-    mkpath(dirname(dst))
-    write(dst, join(out, "\n") * "\n")
-    return dst
-end
-
-function _write_ops_for_step(source_ops::AbstractString, dst_ops::AbstractString, exported_names_by_line::Dict{Int,String})
-    lines = readlines(source_ops)
-    out = String[]
-    for (lineno, line) in enumerate(lines)
-        if haskey(exported_names_by_line, lineno)
-            toks = split(strip(replace(line, '\r' => "")))
-            if length(toks) >= 3
-                toks[3] = exported_names_by_line[lineno]
-                push!(out, join(toks, '\t'))
-                continue
-            end
-        end
-        push!(out, line)
-    end
-    mkpath(dirname(dst_ops))
-    write(dst_ops, join(out, "\n") * "\n")
-    return dst_ops
+function _opf_overwrite_variables(cfg::LightConfig)
+    haskey(cfg.raw, "opf_overwrite_variables") || return true
+    return _as_bool(cfg.raw["opf_overwrite_variables"], true)
 end
 
 function _write_export_ops_outputs(
@@ -438,10 +340,10 @@ function _write_export_ops_outputs(
     source_scene = scene.source_path
     ext = lowercase(splitext(source_scene)[2])
     ext == ".ops" || error("export_ops currently requires an OPS scene source, got: $(source_scene)")
-    object_rows = _parse_ops_object_rows(source_scene)
-    isempty(object_rows) && error("export_ops: no OPF/GWA objects found in scene: $(source_scene)")
 
     vars = _ops_export_variables(cfg)
+    meta = _output_node_metadata(scene, cfg)
+    overwrite = _opf_overwrite_variables(cfg)
     step_by_number = Dict((start_step_number + i) => i for i in eachindex(steps))
     out = Dict{String,String}()
     for step_number in selected_step_numbers
@@ -449,29 +351,37 @@ function _write_export_ops_outputs(
         idx > 0 || continue
         step = steps[idx]
         row = meteo_rows[idx]
-        val_map = _ops_component_value_map(scene, step, cfg, row, vars)
+        table = component_values_table(
+            scene,
+            step,
+            cfg;
+            meteo_row=row,
+            step_number=step_number - 1,
+            columns=vars,
+            unavailable="NA",
+        )
+        value_maps = Dict{Symbol,Dict{Int,Any}}(
+            Symbol(var) => Dict{Int,Any}(nid => table.rows[i][var] for (i, nid) in enumerate(meta.node_ids)) for var in vars
+        )
 
-        exported_names_by_line = Dict{Int,String}()
-        for obj in object_rows
-            src_obj = isabspath(obj.rel_path) ? obj.rel_path : normpath(joinpath(dirname(source_scene), obj.rel_path))
-            obj_ext = lowercase(splitext(src_obj)[2])
-            stem = splitext(basename(src_obj))[1]
-            step_tag = lpad(string(step_number), 5, '0')
-            dst_name = "$(stem)-step$(step_tag)$(obj_ext)"
-            dst_path = joinpath(outroot, dst_name)
-            if obj_ext == ".gwa"
-                _write_gwa_with_ops_variables(src_obj, dst_path, obj.plant_id, vars, val_map)
-            else
-                mkpath(dirname(dst_path))
-                cp(src_obj, dst_path; force=true)
+        scene_copy = deepcopy(scene.mtg)
+        scene_node_ids = Set(meta.node_ids)
+        MultiScaleTreeGraph.traverse!(scene_copy) do node
+            nid = Int(MultiScaleTreeGraph.node_id(node))
+            if nid in scene_node_ids
+                for (attr, values) in value_maps
+                    if overwrite || !haskey(node, attr)
+                        node[attr] = get(values, nid, "NA")
+                    end
+                end
             end
-            exported_names_by_line[obj.lineno] = dst_name
+            return true
         end
 
         scene_stem = splitext(basename(source_scene))[1]
         step_tag = lpad(string(step_number), 5, '0')
         dst_ops = joinpath(outroot, "$(scene_stem)-step$(step_tag).ops")
-        _write_ops_for_step(source_scene, dst_ops, exported_names_by_line)
+        PlantGeom.write_ops(dst_ops, scene_copy; write_objects=true, preserve_file_paths=true)
         out["ops_step_$(step_tag)"] = dst_ops
     end
     return out
@@ -647,24 +557,11 @@ function _java_id_maps(scene::SceneGeometry, cfg::LightConfig)
 end
 
 function _group_type_hints(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{String,Vector{String}}()
-
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     out = Dict{String,Vector{String}}()
-    for m in models
-        path = isabspath(String(m)) ? String(m) : normpath(joinpath(base, String(m)))
-        isfile(path) || continue
-        d = try
-            YAML.load_file(path)
-        catch
-            nothing
-        end
-        d isa AbstractDict || continue
-        dd = _to_string_dict(d)
-        group = haskey(dd, "Group") ? strip(string(dd["Group"])) : ""
+    for model in cfg.model_raw
+        group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
         isempty(group) && continue
-        types = get(dd, "Type", nothing)
+        types = get(model, "Type", nothing)
         types isa AbstractDict || continue
         names = String[]
         for k in keys(types)
@@ -1678,6 +1575,7 @@ function write_light_outputs(
     write_sun_position_log::Union{Nothing,Bool}=nothing,
     write_scattering_log::Union{Nothing,Bool}=nothing,
     write_export_ops::Union{Nothing,Bool}=nothing,
+    write_inputs::Union{Nothing,Bool}=nothing,
     scattering_log_bands::AbstractVector{<:AbstractString}=["PAR"],
 )
     rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
@@ -1694,6 +1592,7 @@ function write_light_outputs(
     do_sun_log = isnothing(write_sun_position_log) ? debug_default : Bool(write_sun_position_log)
     do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.scattering) : Bool(write_scattering_log)
     do_export_ops = isnothing(write_export_ops) ? (_export_ops_raw_value(cfg) !== nothing) : Bool(write_export_ops)
+    do_inputs = isnothing(write_inputs) ? do_export_ops : Bool(write_inputs)
 
     if do_component
         path = joinpath(outroot, "component_values.csv")
@@ -1757,6 +1656,27 @@ function write_light_outputs(
 
     if do_export_ops
         merge!(out, _write_export_ops_outputs(scene, steps, cfg, rows_in, outroot, start_step_number))
+    end
+
+    if do_inputs
+        scene_exports = sort(
+            [(k, v) for (k, v) in out if startswith(k, "ops_step_")];
+            by=first,
+        )
+        if length(scene_exports) == 1
+            _, scene_path = only(scene_exports)
+            out["config"] = write_light_inputs(outroot, cfg; scene_rel=relpath(scene_path, outroot))
+        elseif length(scene_exports) > 1
+            for (key, scene_path) in scene_exports
+                tag = replace(key, "ops_step_" => "")
+                out["config_step_$(tag)"] = write_light_inputs(
+                    outroot,
+                    cfg;
+                    scene_rel=relpath(scene_path, outroot),
+                    config_name="config-step$(tag).yml",
+                )
+            end
+        end
     end
 
     out

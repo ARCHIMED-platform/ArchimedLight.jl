@@ -7,24 +7,9 @@ import Tables
 import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Dates
+import OrderedCollections: OrderedDict
 
 const _NEXT_SCENE_NODE_ID = Ref(1)
-
-function _to_string_dict(x)
-    out = Dict{String,Any}()
-    for (k, v) in x
-        ks = string(k)
-        out[ks] = v isa AbstractDict ? _to_string_dict(v) : v
-    end
-    out
-end
-
-function _cfg_get(d::Dict{String,Any}, keys::Vector{String}, default)
-    for k in keys
-        haskey(d, k) && return d[k]
-    end
-    return default
-end
 
 function _as_bool(x, default::Bool)
     x === nothing && return default
@@ -53,6 +38,84 @@ function _join_if_relative(base::AbstractString, p::AbstractString)
     isabspath(p) ? p : normpath(joinpath(base, p))
 end
 
+function _load_yaml_ordered(path::AbstractString)
+    YAML.load_file(path; dicttype=OrderedDict{String,Any})
+end
+
+function _model_paths_from_raw(d::AbstractDict{String,Any}, scene::AbstractString)
+    models = get(d, "models", nothing)
+    models isa AbstractVector || return String[]
+    base = get(d, "__base_dir", dirname(scene))
+    [_join_if_relative(base, string(m)) for m in models]
+end
+
+function _refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
+    d = cfg.raw
+    base = get(d, "__base_dir", dirname(cfg.source_path))
+    d["__base_dir"] = base
+
+    cfg.scene = _join_if_relative(base, string(d["scene"]))
+    cfg.meteo = _join_if_relative(base, string(d["meteo"]))
+    cfg.all_in_turtle = _as_bool(get(d, "all_in_turtle", false), false)
+    cfg.turtle_sectors = _as_int(get(d, "sky_sectors", 46), 46)
+    cfg.pixel_size = _as_float(get(d, "pixel_size", 0.25), 0.25) / 100.0
+    cfg.area_ratio = _as_bool(get(d, "area_ratio", true), true)
+    cfg.scattering = _as_bool(get(d, "scattering", true), true)
+    cfg.scattering_max_iter = _as_int(get(d, "scattering_max_iter", 20), 20)
+    cfg.scattering_stop_ratio = _as_float(get(d, "scattering_stop_ratio", 0.01), 0.01)
+    cfg.scattering_coeff_par = _as_float(get(d, "scattering_coeff_par", 0.15), 0.15)
+    cfg.scattering_coeff_nir = _as_float(get(d, "scattering_coeff_nir", 0.30), 0.30)
+    cfg.cache_radiation = _as_bool(get(d, "cache_radiation", false), false)
+
+    model_paths = _model_paths_from_raw(d, cfg.scene)
+    if reload_models || model_paths != cfg.model_paths
+        cfg.model_paths = model_paths
+        cfg.model_raw = OrderedDict{String,Any}[
+            isfile(path) ? _load_yaml_ordered(path) : OrderedDict{String,Any}() for path in model_paths
+        ]
+    end
+    return cfg
+end
+
+function _set_nested_value!(target, keys, value)
+    isempty(keys) && error("set_parameter!: missing parameter path.")
+    current = target
+    for key in keys[1:end-1]
+        if current isa AbstractVector
+            idx = Int(key)
+            1 <= idx <= length(current) || error("set_parameter!: index $(idx) is out of bounds.")
+            current = current[idx]
+            continue
+        end
+        ks = string(key)
+        if !haskey(current, ks) || !(current[ks] isa AbstractDict || current[ks] isa AbstractVector)
+            current[ks] = OrderedDict{String,Any}()
+        end
+        current = current[ks]
+    end
+
+    last_key = last(keys)
+    if current isa AbstractVector
+        idx = Int(last_key)
+        1 <= idx <= length(current) || error("set_parameter!: index $(idx) is out of bounds.")
+        current[idx] = value
+    else
+        current[string(last_key)] = value
+    end
+    return target
+end
+
+function _safe_output_relpath(path::AbstractString)
+    raw = replace(path, '\\' => '/')
+    tokens = filter(!isempty, split(raw, '/'))
+    isempty(tokens) && return basename(path)
+    rel = joinpath(tokens...)
+    if isabspath(rel) || startswith(normpath(rel), "..")
+        return basename(rel)
+    end
+    return rel
+end
+
 """
     read_light_config(path)::LightConfig
 
@@ -61,56 +124,97 @@ Read a YAML configuration file and normalize ARCHIMED light options into a `Ligh
 `pixel_size` is interpreted like Java input files (centimeters) and converted to meters.
 """
 function read_light_config(path::AbstractString)
-    raw = YAML.load_file(path)
-    d = raw isa AbstractDict ? _to_string_dict(raw) : Dict{String,Any}()
-    base = dirname(path)
-    d["__base_dir"] = base
-
-    scene_rel = _cfg_get(d, ["scene", "scene_file"], "")
-    meteo_rel = _cfg_get(d, ["meteo", "meteo_file"], "")
-    scene = _join_if_relative(base, string(scene_rel))
-    meteo = _join_if_relative(base, string(meteo_rel))
-
-    props = get(d, "prop", Dict{String,Any}())
-    propsd = props isa AbstractDict ? _to_string_dict(props) : Dict{String,Any}()
-
-    all_in_turtle = _as_bool(_cfg_get(propsd, ["all_in_turtle"], get(d, "all_in_turtle", nothing)), false)
-    turtle_sectors = _as_int(
-        _cfg_get(propsd, ["turtle_nb_sectors", "turtle_sectors", "sky_sectors"], _cfg_get(d, ["turtle_sectors", "sky_sectors"], nothing)),
-        46
+    d = _load_yaml_ordered(path)
+    d["__base_dir"] = dirname(path)
+    cfg = LightConfig(
+        "",
+        "",
+        false,
+        46,
+        0.0025,
+        true,
+        true,
+        20,
+        0.01,
+        0.15,
+        0.30,
+        false,
+        d,
+        String(path),
+        String[],
+        OrderedDict{String,Any}[],
     )
-    # Java config uses centimeters; internal computations use meters.
-    pixel_size_cm = _as_float(_cfg_get(propsd, ["pixel_size"], get(d, "pixel_size", nothing)), 0.25)
-    pixel_size = pixel_size_cm / 100.0
-    area_ratio = _as_bool(_cfg_get(propsd, ["area_ratio"], get(d, "area_ratio", nothing)), true)
-    scattering = _as_bool(_cfg_get(propsd, ["scattering"], get(d, "scattering", nothing)), true)
-    scattering_max_iter = _as_int(
-        _cfg_get(propsd, ["scattering_max_iter", "scat_max_iter"], get(d, "scattering_max_iter", nothing)),
-        20
-    )
-    scattering_stop_ratio = _as_float(
-        _cfg_get(propsd, ["scattering_stop_ratio", "scat_stop_ratio"], get(d, "scattering_stop_ratio", nothing)),
-        0.01
-    )
-    scattering_coeff_par = _as_float(_cfg_get(propsd, ["scattering_coeff_par"], get(d, "scattering_coeff_par", nothing)), 0.15)
-    scattering_coeff_nir = _as_float(_cfg_get(propsd, ["scattering_coeff_nir"], get(d, "scattering_coeff_nir", nothing)), 0.30)
-    cache_radiation = _as_bool(_cfg_get(propsd, ["cache_radiation"], get(d, "cache_radiation", nothing)), false)
+    return _refresh_light_config!(cfg; reload_models=true)
+end
 
-    return LightConfig(
-        scene,
-        meteo,
-        all_in_turtle,
-        turtle_sectors,
-        pixel_size,
-        area_ratio,
-        scattering,
-        scattering_max_iter,
-        scattering_stop_ratio,
-        scattering_coeff_par,
-        scattering_coeff_nir,
-        cache_radiation,
-        d
-    )
+"""
+    set_parameter!(cfg, value, keys...)
+
+Mutate one imported configuration/model parameter in place.
+Use `"config"` as the first key to update `cfg.raw`, or `"models", i, ...`
+to update the `i`-th loaded model YAML document.
+"""
+function set_parameter!(cfg::LightConfig, value, keys...)
+    isempty(keys) && error("set_parameter!: missing parameter path.")
+    scope = string(first(keys))
+    if scope == "config"
+        _set_nested_value!(cfg.raw, keys[2:end], value)
+        return _refresh_light_config!(cfg; reload_models=!isempty(keys[2:end]) && string(keys[2]) == "models")
+    elseif scope == "models"
+        length(keys) >= 2 || error("set_parameter!: missing model index.")
+        idx = Int(keys[2])
+        1 <= idx <= length(cfg.model_raw) || error("set_parameter!: model index $(idx) is out of bounds.")
+        if length(keys) == 2
+            cfg.model_raw[idx] = value
+            return cfg
+        end
+        _set_nested_value!(cfg.model_raw[idx], keys[3:end], value)
+        return cfg
+    end
+    error("set_parameter!: first key must be \"config\" or \"models\".")
+end
+
+"""
+    write_light_inputs(outdir, cfg; scene_rel, config_name="config.yml")::String
+
+Write the ordered YAML inputs back to disk, preserving parameter order from import.
+`scene_rel` should point to the scene file to reference from the written config.
+"""
+function write_light_inputs(
+    outdir::AbstractString,
+    cfg::LightConfig;
+    scene_rel::AbstractString,
+    config_name::AbstractString="config.yml",
+)
+    outroot = String(outdir)
+    mkpath(outroot)
+
+    raw = copy(cfg.raw)
+    delete!(raw, "__base_dir")
+
+    model_rels = String[]
+    model_specs = get(raw, "models", nothing)
+    if model_specs isa AbstractVector
+        for i in eachindex(cfg.model_raw)
+            rel = i <= length(model_specs) ? _safe_output_relpath(string(model_specs[i])) : joinpath("models", "model$(i).yml")
+            path = joinpath(outroot, rel)
+            mkpath(dirname(path))
+            YAML.write_file(path, cfg.model_raw[i])
+            push!(model_rels, rel)
+        end
+        raw["models"] = model_rels
+    end
+
+    meteo_rel = basename(cfg.meteo)
+    if isfile(cfg.meteo)
+        cp(cfg.meteo, joinpath(outroot, meteo_rel); force=true)
+    end
+    raw["scene"] = _safe_output_relpath(scene_rel)
+    raw["meteo"] = meteo_rel
+
+    cfg_path = joinpath(outroot, config_name)
+    YAML.write_file(cfg_path, raw)
+    return cfg_path
 end
 
 function _triangle_area3d(p1, p2, p3)

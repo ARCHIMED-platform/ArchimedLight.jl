@@ -93,48 +93,25 @@ function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{In
 end
 
 function _group_optical_coeffs(cfg::LightConfig)
-    models = get(cfg.raw, "models", nothing)
-    models isa AbstractVector || return Dict{Tuple{String,String},Dict{String,Float64}}()
-
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
     coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
-    for m in models
-        mp = String(m)
-        path = isabspath(mp) ? mp : normpath(joinpath(base, mp))
-        isfile(path) || continue
-
-        d = try
-            YAML.load_file(path)
-        catch
-            nothing
-        end
-        d isa AbstractDict || continue
-        d = _to_string_dict(d)
-
-        group = haskey(d, "Group") ? string(d["Group"]) : ""
+    for model in cfg.model_raw
+        group = haskey(model, "Group") ? string(model["Group"]) : ""
         isempty(group) && continue
 
-        types = get(d, "Type", nothing)
+        types = get(model, "Type", nothing)
         types isa AbstractDict || continue
         isempty(types) && continue
 
         for (tkey, tval) in types
-            tconf = _to_string_dict(tval)
+            tconf = tval
             tconf isa AbstractDict || continue
 
             inter = get(tconf, "Interception", nothing)
             inter isa AbstractDict || continue
-            inter = _to_string_dict(inter)
             iuse = get(inter, "use", nothing)
-            iconf =
-                if iuse !== nothing && haskey(inter, string(iuse))
-                    inter[string(iuse)]
-                else
-                    inter
-                end
+            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
             iconf isa AbstractDict || continue
-            iconf = _to_string_dict(iconf)
 
             model = lowercase(strip(string(get(iconf, "model", ""))))
             c =
@@ -143,7 +120,6 @@ function _group_optical_coeffs(cfg::LightConfig)
                 else
                     op = get(iconf, "optical_properties", nothing)
                     op isa AbstractDict || continue
-                    op = _to_string_dict(op)
                     ctmp = Dict{String,Float64}()
                     for (k, v) in op
                         try

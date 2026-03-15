@@ -1,3 +1,5 @@
+import OrderedCollections: OrderedDict
+
 abstract type InterceptionBackend end
 
 struct RasterCPUBackend <: InterceptionBackend end
@@ -8,7 +10,7 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 
 struct LinksScatteringBackend <: ScatteringBackend end
 
-struct LightConfig
+mutable struct LightConfig
     scene::String
     meteo::String
     all_in_turtle::Bool
@@ -21,7 +23,10 @@ struct LightConfig
     scattering_coeff_par::Float64
     scattering_coeff_nir::Float64
     cache_radiation::Bool
-    raw::Dict{String,Any}
+    raw::OrderedDict{String,Any}
+    source_path::String
+    model_paths::Vector{String}
+    model_raw::Vector{OrderedDict{String,Any}}
 end
 
 struct MeteoTable
