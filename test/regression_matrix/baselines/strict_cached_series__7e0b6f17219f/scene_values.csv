@@ -1,0 +1,4 @@
+step_number;date;hour_start;hour_end;RI_PAR_f;RI_NIR_f;RI_SW_f;plot_area;sun_elevation;sun_azimut
+0;2020-06-21;12:00:00;12:10:00;NA;NA;200.0;1.0;NA;NA
+1;2020-06-21;13:00:00;13:30:00;NA;NA;200.0;1.0;NA;NA
+2;2020-06-22;12:00:00;12:10:00;NA;NA;200.0;1.0;NA;NA

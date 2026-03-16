@@ -104,6 +104,30 @@ Run one named fast fixture case only:
 ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=test test/runtests.jl
 ```
 
+Run the opt-in regression matrix against frozen Julia baselines:
+
+```bash
+julia --project=test test/regression_matrix/runtests.jl
+```
+
+Useful regression-matrix controls:
+
+```bash
+# refresh in-repo baselines intentionally
+ARCHIMEDLIGHT_REGRESSION_UPDATE=true julia --project=test test/regression_matrix/runtests.jl
+
+# write reports somewhere else
+ARCHIMEDLIGHT_REGRESSION_REPORT_DIR=/tmp/archimedlight-regression \
+julia --project=test test/regression_matrix/runtests.jl
+```
+
+`ARCHIMEDLIGHT_REGRESSION_FILTER` accepts a comma-separated list of exact case ids from
+`regression_report.csv`.
+
+The regression harness writes a machine-readable CSV report at
+`test/regression_matrix/reports/latest/regression_report.csv` by default and stores frozen
+fast-profile baselines under `test/regression_matrix/baselines/`.
+
 The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit
 `inputs` and `expected` blocks. Current case names include:
 `single_plate_direct`, `stacked_scattering`, `partial_overlap_direct`,
@@ -168,4 +192,36 @@ ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
 ARCHIMEDLIGHT_FIXTURE_FILTER=test-compare-simpleplant \
 julia --project=test test/runtests.jl
+```
+
+The regression matrix also has an optional release profile that reuses the same dataset root:
+
+```bash
+ARCHIMEDLIGHT_REGRESSION_PROFILE=release \
+ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
+julia --project=test test/regression_matrix/runtests.jl
+```
+
+## Benchmarks
+
+The repository includes a separate benchmark project for `AirspeedVelocity.jl` under
+`benchmark/`.
+
+Validate that the benchmark suite loads:
+
+```bash
+julia --project=benchmark benchmark/benchmarks.jl
+```
+
+Run the suite with `benchpkg`:
+
+```bash
+benchpkg --path . --script benchmark/benchmarks.jl
+```
+
+Typical filtered and revision-vs-dirty workflows:
+
+```bash
+benchpkg --path . --script benchmark/benchmarks.jl --match "Run light"
+benchpkg --path . --script benchmark/benchmarks.jl --rev HEAD~1 --rev dirty
 ```
