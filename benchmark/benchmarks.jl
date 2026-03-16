@@ -11,6 +11,15 @@ const PKG_ROOT = dirname(dirname(pathof(ArchimedLight)))
 const FAST_FIXTURE_ROOT = joinpath(PKG_ROOT, "test", "fast_fixtures")
 const SUITE = BenchmarkGroup()
 
+# Manual legacy Java reference, kept only as a rough comparison point:
+# - Measured once on 2026-03-16 with Temurin OpenJDK 1.8.0_442.
+# - Workload: archived Java CLI fixture `java_implementation/archimed-lib-2018/tests/test-hitcount/config.yml`.
+# - Timing method: `/usr/bin/time -l java -jar example_1/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar ...`
+# - Result: 3.52 s wall clock, 161.5 MB max RSS.
+# - Java self-reported: 2.767 s simulation time, 72.33 MB maximum memory usage.
+# This measures end-to-end CLI startup + file output, so it is not directly comparable to
+# the ASV benchmark leaves below. But a julia run for the same thing takes 2.27 seconds with the current implementation, so it is in the same ballpark already.
+
 function _fixture_paths(name::String)
     root = joinpath(FAST_FIXTURE_ROOT, name, "input")
     return (
