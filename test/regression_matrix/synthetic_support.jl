@@ -1,0 +1,239 @@
+using Dates
+using GeometryBasics
+using LinearAlgebra: cross, norm
+using StaticArrays: SVector
+
+function _synthetic_cfg(
+    cfg::ArchimedLight.LightConfig;
+    sectors::Int=1,
+    all_in_turtle::Bool=false,
+    scattering::Bool=false,
+    pixel_size_m::Float64=0.01,
+    toricity::Bool=false,
+    area_ratio::Bool=true,
+    cache_radiation::Bool=false,
+    cache_pixel_table::Bool=false,
+    radiation_timestep::Int=15,
+    nir_interception::Bool=true,
+    nir_scattering::Bool=true,
+    java_logged_turtle_dirs::Bool=false,
+)
+    out = deepcopy(cfg)
+    out.raw["all_in_turtle"] = all_in_turtle
+    out.raw["sky_sectors"] = sectors
+    out.raw["scattering"] = scattering
+    out.raw["pixel_size"] = pixel_size_m * 100.0
+    out.raw["toricity"] = toricity
+    out.raw["area_ratio"] = area_ratio
+    out.raw["cache_radiation"] = cache_radiation
+    out.raw["cache_pixel_table"] = cache_pixel_table
+    out.raw["radiation_timestep"] = radiation_timestep
+    out.raw["nir_interception"] = nir_interception
+    out.raw["nir_scattering"] = nir_scattering
+    out.raw["java_logged_turtle_dirs"] = java_logged_turtle_dirs
+    ArchimedLight.refresh_light_config!(out; reload_models=true)
+    return out
+end
+
+function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
+    quad_specs = map(specs) do spec
+        (
+            p1=(spec.x0, spec.y0, spec.z),
+            p2=(spec.x1, spec.y0, spec.z),
+            p3=(spec.x1, spec.y1, spec.z),
+            p4=(spec.x0, spec.y1, spec.z),
+            item_id=get(spec, :item_id, 1),
+            component_id=get(spec, :component_id, 1),
+            group=get(spec, :group, "plate"),
+            type=get(spec, :type, "plate"),
+        )
+    end
+    _synthetic_quad_scene(quad_specs)
+end
+
+function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
+    points = GeometryBasics.Point{3,Float32}[]
+    faces = PlantGeom.Face3[]
+    face2node = Int[]
+    total_area_per_node = Dict{Int,Float64}()
+    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    node_group = Dict{Int,String}()
+    node_type = Dict{Int,String}()
+    java_item_id_per_node = Dict{Int,Int}()
+    java_component_id_per_node = Dict{Int,Int}()
+
+    xs = Float64[]
+    ys = Float64[]
+    for (i, spec) in enumerate(specs)
+        p1 = ntuple(j -> Float64(spec.p1[j]), 3)
+        p2 = ntuple(j -> Float64(spec.p2[j]), 3)
+        p3 = ntuple(j -> Float64(spec.p3[j]), 3)
+        p4 = ntuple(j -> Float64(spec.p4[j]), 3)
+        append!(xs, (p1[1], p2[1], p3[1], p4[1]))
+        append!(ys, (p1[2], p2[2], p3[2], p4[2]))
+
+        base = length(points)
+        append!(
+            points,
+            GeometryBasics.Point{3,Float32}[
+                GeometryBasics.Point{3,Float32}(Float32(p1[1]), Float32(p1[2]), Float32(p1[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p2[1]), Float32(p2[2]), Float32(p2[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p3[1]), Float32(p3[2]), Float32(p3[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p4[1]), Float32(p4[2]), Float32(p4[3])),
+            ],
+        )
+        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(face2node, [i, i])
+
+        area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
+        area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
+        total_area_per_node[i] = area1 + area2
+        barycenter_per_node[i] = (
+            (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
+            (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
+            (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
+        )
+        node_group[i] = String(get(spec, :group, "plate"))
+        node_type[i] = String(get(spec, :type, "plate"))
+        java_item_id_per_node[i] = Int(get(spec, :item_id, i))
+        java_component_id_per_node[i] = Int(get(spec, :component_id, 1))
+    end
+
+    ArchimedLight.SceneGeometry(
+        nothing,
+        GeometryBasics.Mesh(points, faces),
+        face2node,
+        total_area_per_node,
+        barycenter_per_node,
+        node_group,
+        node_type,
+        java_item_id_per_node,
+        java_component_id_per_node,
+        "synthetic_scene_cases",
+        (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
+    )
+end
+
+function _synthetic_meteo_row(;
+    date::Dates.Date=Dates.Date(2020, 6, 21),
+    start_time::Dates.Time=Dates.Time(12),
+    duration_seconds::Float64=1.0,
+    latitude::Float64=0.0,
+    relative_humidity::Float64=60.0,
+    ri_par_f::Float64=100.0,
+    ri_nir_f::Float64=0.0,
+    direct_fraction::Float64=1.0,
+    sun_azimut::Float64=180.0,
+    sun_elevation::Float64=90.0,
+    use::String="relativeHumidity RI_PAR_f",
+)
+    start_dt = Dates.DateTime(date, start_time)
+    end_dt = start_dt + Dates.Millisecond(round(Int, duration_seconds * 1000))
+    (
+        date=date,
+        hour_start=Dates.format(Dates.Time(start_dt), Dates.DateFormat("HH:MM:SS")),
+        hour_end=Dates.format(Dates.Time(end_dt), Dates.DateFormat("HH:MM:SS")),
+        step_duration=duration_seconds,
+        latitude=latitude,
+        relativeHumidity=relative_humidity,
+        RI_PAR_f=ri_par_f,
+        RI_NIR_f=ri_nir_f,
+        direct_fraction=direct_fraction,
+        sun_azimut=sun_azimut,
+        sun_elevation=sun_elevation,
+        use=use,
+    )
+end
+
+function _max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
+    maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
+end
+
+function _component_row_by_item(rows)
+    Dict(Int(r.item_id) => r for r in rows)
+end
+
+function _synthetic_step_rows(scene, step, cfg, meteo_row)
+    ArchimedLight.component_values_table(
+        scene,
+        step,
+        cfg;
+        meteo_row=meteo_row,
+        step_number=0,
+        columns=[
+            "step_number",
+            "item_id",
+            "component_id",
+            "area",
+            "Ri_PAR_0_q",
+            "Ri_NIR_0_q",
+            "Ra_PAR_0_q",
+            "Ra_NIR_0_q",
+            "Ri_PAR_q",
+            "Ri_NIR_q",
+            "Ra_PAR_q",
+            "Ra_NIR_q",
+        ],
+        strict=false,
+    ).rows
+end
+
+function _synthetic_exact_check(source_id::String, result)::NamedTuple
+    if source_id == "single_plate_direct"
+        step = result.step
+        pa = get(step.first_order.projected_area_per_node, 1, 0.0)
+        q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
+        f = get(step.budget.ri_par_0_f_per_node, 1, 0.0)
+        ok = isapprox(pa, 1.0; atol=1e-12, rtol=1e-12) &&
+            isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
+            isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
+        detail = ok ? "" : "single_plate_direct projected=$(pa) q=$(q) f=$(f)"
+        return (ok=ok, detail=detail)
+    elseif source_id == "partial_overlap_direct"
+        step = result.step
+        upper_pa = get(step.first_order.projected_area_per_node, 1, 0.0)
+        lower_pa = get(step.first_order.projected_area_per_node, 2, 0.0)
+        upper_q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
+        lower_q = get(step.budget.ri_par_0_q_per_node, 2, 0.0)
+        ok = isapprox(upper_pa, 0.5; atol=1e-10, rtol=1e-10) &&
+            isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
+            isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
+            isapprox(lower_q, 50.0; atol=1e-9, rtol=1e-9)
+        detail = ok ? "" : "partial_overlap_direct upper_pa=$(upper_pa) lower_pa=$(lower_pa) upper_q=$(upper_q) lower_q=$(lower_q)"
+        return (ok=ok, detail=detail)
+    elseif source_id == "toricity_wraparound"
+        step = result.step
+        pa = get(step.first_order.projected_area_per_node, 1, 0.0)
+        q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
+        toric = Bool(get(result.meta, "toricity", false))
+        target_pa = toric ? 0.4 : 0.19512196866477877
+        target_q = toric ? 40.0 : 19.512196866477876
+        ok = isapprox(pa, target_pa; atol=1e-5, rtol=1e-9) &&
+            isapprox(q, target_q; atol=1e-5, rtol=1e-9)
+        detail = ok ? "" : "toricity_wraparound toric=$(toric) projected=$(pa) q=$(q)"
+        return (ok=ok, detail=detail)
+    elseif source_id == "stacked_scattering"
+        step = result.step
+        lower_0 = get(step.budget.ri_par_0_q_per_node, 2, 0.0)
+        lower_q = get(step.budget.ri_par_q_per_node, 2, 0.0)
+        scat_q = isnothing(step.scattering) ? 0.0 : get(step.scattering.added_par_power_per_node, 2, 0.0)
+        scattering = Bool(get(result.meta, "scattering", false))
+        ok =
+            if scattering
+                scat_q > 0.0 &&
+                    isapprox(lower_0, 0.0; atol=1e-12, rtol=1e-12) &&
+                    lower_q > 0.0
+            else
+                isapprox(lower_0, 0.0; atol=1e-12, rtol=1e-12) &&
+                    isapprox(lower_q, 0.0; atol=1e-12, rtol=1e-12)
+            end
+        detail = ok ? "" : "stacked_scattering scattering=$(scattering) lower_0=$(lower_0) lower_q=$(lower_q) scat_q=$(scat_q)"
+        return (ok=ok, detail=detail)
+    elseif source_id == "cached_series_parity"
+        diffs = result.diffs
+        ok = all(v == 0.0 for v in values(diffs))
+        detail = ok ? "" : "cached parity diffs=$(diffs)"
+        return (ok=ok, detail=detail)
+    end
+    return (ok=true, detail="")
+end
