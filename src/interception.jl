@@ -405,10 +405,10 @@ function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::Lig
     )
 end
 
-function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
+function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
-    mode = (upper_hit ? "u1" : "u0") * (strict_java_float ? "_sf1" : "_sf0")
+    mode = upper_hit ? "u1" : "u0"
     joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * "_" * mode * ".jls")
 end
 
@@ -560,41 +560,6 @@ function _compute_normal(points)
     StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
 end
 
-function _compute_normal_f32(points)
-    length(points) < 2 && return StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
-    @inbounds for n in 1:(length(points)-2)
-        p0 = points[n]
-        p1 = points[n+1]
-        p2 = points[n+2]
-
-        v1x = Float32(p1[1] - p0[1])
-        v1y = Float32(p1[2] - p0[2])
-        v1z = Float32(p1[3] - p0[3])
-        n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
-        n1 <= 0.0f0 && continue
-        v1x /= n1
-        v1y /= n1
-        v1z /= n1
-
-        v2x = Float32(p2[1] - p1[1])
-        v2y = Float32(p2[2] - p1[2])
-        v2z = Float32(p2[3] - p1[3])
-        n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
-        n2 <= 0.0f0 && continue
-        v2x /= n2
-        v2y /= n2
-        v2z /= n2
-
-        nx = (v1y * v2z) - (v1z * v2y)
-        ny = (v1z * v2x) - (v1x * v2z)
-        nz = (v1x * v2y) - (v1y * v2x)
-        nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
-        nnorm <= 0.0f0 && continue
-        return StaticArrays.SVector{3,Float32}(nx / nnorm, ny / nnorm, nz / nnorm)
-    end
-    StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
-end
-
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
     p_min, p_max = p1[1] < p2[1] ? (p1, p2) : (p2, p1)
     dx = Float32(p_max[1] - p_min[1])
@@ -646,58 +611,11 @@ function _project_triangle!(
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-    strict_java_float::Bool,
-)
-    _project_triangle!(
-        pixel_hits,
-        node_hits,
-        projected_mesh_area,
-        projected_pixels_area,
-        node_id,
-        p1,
-        p2,
-        p3,
-        direction,
-        origin_x,
-        origin_y,
-        x_pix,
-        y_pix,
-        pixel_area,
-        nx,
-        ny,
-        toricity,
-        upper_hit,
-        strict_java_float,
-        1.0f0,
-    )
-end
-
-function _project_triangle!(
-    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
-    node_hits::Dict{Int,Int},
-    projected_mesh_area::Dict{Int,Float64},
-    projected_pixels_area::Dict{Int,Float64},
-    node_id::Int,
-    p1,
-    p2,
-    p3,
-    direction,
-    origin_x::Float64,
-    origin_y::Float64,
-    x_pix::Float64,
-    y_pix::Float64,
-    pixel_area::Float64,
-    nx::Int,
-    ny::Int,
-    toricity::Bool,
-    upper_hit::Bool,
-    strict_java_float::Bool,
-    unit_scale::Float32,
 )
     v = (p1, p2, p3)
     projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
     pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
-    u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
+    u = 1.0f0
     ox = Float32(origin_x) * u
     oy = Float32(origin_y) * u
     pxs = Float32(x_pix) * u
@@ -747,7 +665,7 @@ function _project_triangle!(
         _get_border_pixels(a, b, iMin, minY, maxY)
     end
 
-    normal = strict_java_float ? _compute_normal_f32(pix_points) : _compute_normal(pix_points)
+    normal = _compute_normal(pix_points)
     slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
@@ -825,9 +743,8 @@ function _rasterize_direction_java(
     virtual_nodes=Set{Int}(),
     upper_hit::Bool=false,
 )
-    strict_java_float = _strict_java_float(cfg)
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
+        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit)
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
@@ -871,8 +788,6 @@ end
 function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
-    strict_java_float = _strict_java_float(cfg)
-    unit_scale = Float32(_projection_unit_scale(cfg))
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
@@ -901,8 +816,6 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
             plotbox.ny,
             toricity,
             use_upper_hit,
-            strict_java_float,
-            unit_scale,
         )
     end
 
@@ -911,12 +824,12 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
+function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false)
     if cache_ctx === nothing
         return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     end
 
-    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
@@ -927,23 +840,6 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
         _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
     return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
-end
-
-function _strict_java_float(cfg::LightConfig)
-    raw = cfg.raw
-    v = get(raw, "strict_java_float", nothing)
-    return _as_bool(v, false)
-end
-
-function _projection_unit_scale(cfg::LightConfig)
-    raw = cfg.raw
-    v = get(raw, "projection_unit_scale", nothing)
-    s = try
-        v === nothing ? 1.0 : Float64(v)
-    catch
-        1.0
-    end
-    return (isfinite(s) && s > 0.0) ? s : 1.0
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)

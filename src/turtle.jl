@@ -17,27 +17,6 @@ function _normalize3_java(v)
     StaticArrays.SVector{3,Float64}(Float64(x / n), Float64(y / n), Float64(z / n))
 end
 
-function _as_bool_local_turtle(x, default::Bool)
-    x === nothing && return default
-    x isa Bool && return x
-    if x isa Number
-        return x != 0
-    end
-    s = lowercase(strip(string(x)))
-    s in ("", "nothing", "missing", "null") && return default
-    s in ("true", "t", "yes", "y", "on", "1") && return true
-    s in ("false", "f", "no", "n", "off", "0") && return false
-    return default
-end
-
-function _use_java_logged_turtle_dirs(cfg::LightConfig)
-    v = get(cfg.raw, "java_logged_turtle_dirs", nothing)
-    if v === nothing
-        v = get(ENV, "ARCHIMEDLIGHT_JAVA_LOGGED_TURTLE_DIRS", nothing)
-    end
-    _as_bool_local_turtle(v, false)
-end
-
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
@@ -82,10 +61,6 @@ function _java_seed_points_up()
         push!(pts, -p)
     end
     pts
-end
-
-function _java_seed_points_up_f32()
-    _java_seed_points_up()
 end
 
 function _hull_faces_12(points)
@@ -161,19 +136,6 @@ function _java_turtle_upward_points(order::Int)
     [p for p in points if p[3] >= 0.0]
 end
 
-function _java_turtle_upward_points_f32(order::Int)
-    order == 0 && return [StaticArrays.SVector{3,Float64}(0.0, 0.0, 1.0)]
-
-    points = _java_seed_points_up_f32()
-    faces = _hull_faces_12(points)
-
-    for _ in 2:order
-        points, faces = _refine_turtle_mesh(points, faces)
-    end
-
-    [p for p in points if p[3] >= 0.0]
-end
-
 function _hemisphere_fibonacci_incoming(n::Int)
     dirs = Vector{StaticArrays.SVector{3,Float64}}(undef, n)
     if n == 1
@@ -193,14 +155,7 @@ function _hemisphere_fibonacci_incoming(n::Int)
 end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
-const _TURTLE_DIR_COMPAT_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
 const _JAVA_N16_DIR_ORDER = (1, 2, 3, 4, 5, 6, 14, 10, 7, 9, 12, 11, 8, 13, 16, 15)
-
-function _java_turtle_incoming_reordered(order::Int, dir_order::NTuple{N,Int}) where {N}
-    up = _java_turtle_upward_points_f32(order)
-    length(up) >= N || error("Invalid Java turtle reorder table for order=$(order): expected at least $(N) points, got $(length(up)).")
-    [_normalize3_java(up[i]) for i in dir_order]
-end
 
 function _java_turtle_incoming_n6_logged()
     # Java n=6 turtle directions (upward hemisphere), logged from
@@ -255,19 +210,6 @@ function _java_turtle_incoming(n::Int)
         order = _java_turtle_order(n)
         order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
         up = _java_turtle_upward_points(order)
-        [_normalize3_java(u) for u in up]
-    end
-end
-
-function _java_turtle_incoming_logged(n::Int)
-    n == 6 && return _java_turtle_incoming_n6_logged()
-    n == 16 && return _java_turtle_incoming_n16_logged()
-    # For larger sector counts, compatibility mode uses a Float32 turtle build
-    # (seed/trigonometry) which is closer to Java internals than Float64 defaults.
-    return get!(_TURTLE_DIR_COMPAT_CACHE, n) do
-        order = _java_turtle_order(n)
-        order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
-        up = _java_turtle_upward_points_f32(order)
         [_normalize3_java(u) for u in up]
     end
 end
@@ -379,17 +321,12 @@ end
 
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
 sector when `cfg.all_in_turtle == false`.
-
-Set `java_logged_turtle_dirs: true` in the
-light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
-Float32 Java-style construction for larger sector counts).
 """
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(cfg.turtle_sectors, 1)
-    use_logged_dirs = _use_java_logged_turtle_dirs(cfg)
     dirs =
         if _java_turtle_order(n) >= 0
-            use_logged_dirs ? _java_turtle_incoming_logged(n) : _java_turtle_incoming(n)
+            _java_turtle_incoming(n)
         else
             _hemisphere_fibonacci_incoming(n)
         end
