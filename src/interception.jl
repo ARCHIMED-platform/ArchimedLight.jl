@@ -472,33 +472,28 @@ end
 
 function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
     pixel_size > 0.0 || error("pixel_size must be > 0 m")
-    # Java fixtures enforce a strict upper bound at 50 cm.
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
 
-    # Match Java PlotBox numeric path:
-    # - scene corners are Point2f (Float32)
-    # - table size uses double division from float-backed plot dimensions
-    # - pixel dimensions are stored as float
     x0_raw, y0_raw, x1_raw, y1_raw = _extract_scene_xy_bounds(scene, vertices)
-    x0 = Float32(min(x0_raw, x1_raw))
-    y0 = Float32(min(y0_raw, y1_raw))
-    x1 = Float32(max(x0_raw, x1_raw))
-    y1 = Float32(max(y0_raw, y1_raw))
+    x0 = min(x0_raw, x1_raw)
+    y0 = min(y0_raw, y1_raw)
+    x1 = max(x0_raw, x1_raw)
+    y1 = max(y0_raw, y1_raw)
 
-    xdim = max(Float64(x1 - x0), pixel_size)
-    ydim = max(Float64(y1 - y0), pixel_size)
+    xdim = max(x1 - x0, pixel_size)
+    ydim = max(y1 - y0, pixel_size)
 
     nx = max(1, floor(Int, xdim / pixel_size))
     ny = max(1, floor(Int, ydim / pixel_size))
 
-    pix_x = Float64(Float32(xdim / nx))
-    pix_y = Float64(Float32(ydim / ny))
-    plot_area = Float64(Float32(Float32(xdim) * Float32(ydim)))
+    pix_x = xdim / nx
+    pix_y = ydim / ny
+    plot_area = xdim * ydim
     pixel_area = plot_area / (nx * ny)
 
     (
-        origin_x=Float64(x0),
-        origin_y=Float64(y0),
+        origin_x=x0,
+        origin_y=y0,
         xdim=xdim,
         ydim=ydim,
         nx=nx,
@@ -510,14 +505,13 @@ function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
 end
 
 function _project_point_ground(point, direction)
-    dzden = Float32(direction[3])
-    dzden == 0.0f0 && return nothing
-    pz = Float32(point[3])
+    dzden = direction[3]
+    dzden == 0.0 && return nothing
+    pz = point[3]
     dz = -pz / dzden
-    x = Float32(point[1]) + Float32(direction[1]) * dz
-    y = Float32(point[2]) + Float32(direction[2]) * dz
-    # Keep source altitude for stack sorting as in Java.
-    StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(pz))
+    x = point[1] + direction[1] * dz
+    y = point[2] + direction[2] * dz
+    StaticArrays.SVector{3,Float64}(x, y, pz)
 end
 
 function _triangle_area_xy(p1, p2, p3)
@@ -532,20 +526,20 @@ function _compute_normal(points)
         p1 = points[k+1]
         p2 = points[k+2]
 
-        v1x = Float32(p1[1] - p0[1])
-        v1y = Float32(p1[2] - p0[2])
-        v1z = Float32(p1[3] - p0[3])
+        v1x = p1[1] - p0[1]
+        v1y = p1[2] - p0[2]
+        v1z = p1[3] - p0[3]
         n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
-        n1 <= 0.0f0 && continue
+        n1 <= 0.0 && continue
         v1x /= n1
         v1y /= n1
         v1z /= n1
 
-        v2x = Float32(p2[1] - p1[1])
-        v2y = Float32(p2[2] - p1[2])
-        v2z = Float32(p2[3] - p1[3])
+        v2x = p2[1] - p1[1]
+        v2y = p2[2] - p1[2]
+        v2z = p2[3] - p1[3]
         n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
-        n2 <= 0.0f0 && continue
+        n2 <= 0.0 && continue
         v2x /= n2
         v2y /= n2
         v2z /= n2
@@ -554,25 +548,25 @@ function _compute_normal(points)
         ny = (v1z * v2x) - (v1x * v2z)
         nz = (v1x * v2y) - (v1y * v2x)
         nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
-        nnorm <= 0.0f0 && continue
-        return StaticArrays.SVector{3,Float64}(Float64(nx / nnorm), Float64(ny / nnorm), Float64(nz / nnorm))
+        nnorm <= 0.0 && continue
+        return StaticArrays.SVector{3,Float64}(nx / nnorm, ny / nnorm, nz / nnorm)
     end
     StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
 end
 
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
     p_min, p_max = p1[1] < p2[1] ? (p1, p2) : (p2, p1)
-    dx = Float32(p_max[1] - p_min[1])
+    dx = p_max[1] - p_min[1]
     dx < 1e-6 && return
 
-    slope = Float32((Float32(p_max[2]) - Float32(p_min[2])) / dx)
-    i_min = ceil(Int, Float32(p_min[1]))
-    i_max = floor(Int, Float32(p_max[1]))
+    slope = (p_max[2] - p_min[2]) / dx
+    i_min = ceil(Int, p_min[1])
+    i_max = floor(Int, p_max[1])
 
     @inbounds for i in i_min:i_max
         i0 = i - i_origin
-        yi = slope * Float32(i - Float32(p_min[1])) + Float32(p_min[2])
-        j = trunc(Int, floor(Float64(yi)) + 0.5)
+        yi = slope * (i - p_min[1]) + p_min[2]
+        j = round(Int, yi, RoundNearestTiesUp)
         if 0 <= i0 < length(minY)
             idx = i0 + 1
             minY[idx] = min(minY[idx], j)
@@ -615,26 +609,24 @@ function _project_triangle!(
     v = (p1, p2, p3)
     projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
     pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
-    u = 1.0f0
-    ox = Float32(origin_x) * u
-    oy = Float32(origin_y) * u
-    pxs = Float32(x_pix) * u
-    pys = Float32(y_pix) * u
-    dirx = Float32(direction[1])
-    diry = Float32(direction[2])
-    dirz = Float32(direction[3])
+    ox = origin_x
+    oy = origin_y
+    pxs = x_pix
+    pys = y_pix
+    dirx = direction[1]
+    diry = direction[2]
+    dirz = direction[3]
 
     @inbounds for k in 1:3
-        dirz == 0.0f0 && return
-        pz = Float32(v[k][3]) * u
+        dirz == 0.0 && return
+        pz = v[k][3]
         dz = -pz / dirz
-        xw = Float32(v[k][1]) * u + dirx * dz
-        yw = Float32(v[k][2]) * u + diry * dz
-        projected[k] = StaticArrays.SVector{3,Float64}(Float64(xw / u), Float64(yw / u), 0.0)
-        x = Float32((xw - ox) / pxs)
-        y = Float32((yw - oy) / pys)
-        z = pz
-        pix_points[k] = StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
+        xw = v[k][1] + dirx * dz
+        yw = v[k][2] + diry * dz
+        projected[k] = StaticArrays.SVector{3,Float64}(xw, yw, 0.0)
+        x = (xw - ox) / pxs
+        y = (yw - oy) / pys
+        pix_points[k] = StaticArrays.SVector{3,Float64}(x, y, pz)
     end
 
     iMin = floor(Int, pix_points[1][1])
@@ -666,32 +658,30 @@ function _project_triangle!(
     end
 
     normal = _compute_normal(pix_points)
-    slopeX_f32, slopeY_f32 =
+    slope_x, slope_y =
         if abs(normal[3]) > 1e-5
-            (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
+            (normal[1] / normal[3], normal[2] / normal[3])
         else
-            # Java fallback uses signed direction.z when normal.z is almost zero.
-            dz = Float32(direction[3])
-            (dz * Float32(normal[1]), dz * Float32(normal[2]))
+            (direction[3] * normal[1], direction[3] * normal[2])
         end
 
-    z0 = Float32(pix_points[1][3])
-    z0 += slopeX_f32 * (Float32(pix_points[1][1]) - Float32(iMin))
-    z0 += slopeY_f32 * (Float32(pix_points[1][2]) - Float32(jMin))
+    z0 = pix_points[1][3]
+    z0 += slope_x * (pix_points[1][1] - iMin)
+    z0 += slope_y * (pix_points[1][2] - jMin)
 
     tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
     buffered_hits = Tuple{Int,Float64}[]
     nb_hits = 0
     @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
-        zi = z0 - slopeX_f32 * Float32(ni)
+        zi = z0 - slope_x * ni
         ymin_i = minY[ni+1]
         ymax_i = maxY[ni+1]
 
         for j in ymin_i:(ymax_i-1)
             nj = j - jMin
-            zpix = zi - slopeY_f32 * Float32(nj)
-            zpix = clamp(zpix, Float32(kMin), Float32(kMax))
+            zpix = zi - slope_y * nj
+            zpix = clamp(zpix, kMin, kMax)
             nb_hits += 1
 
             ii, jj =
@@ -703,24 +693,23 @@ function _project_triangle!(
 
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
-                zpix_f32 = Float64(zpix / u)
-                push!(buffered_hits, (idx, zpix_f32))
+                push!(buffered_hits, (idx, zpix))
             end
         end
     end
 
-    for (idx, zpix_f32) in buffered_hits
+    for (idx, zpix) in buffered_hits
         h = get!(pixel_hits, idx) do
             Vector{Tuple{Float64,Int}}()
         end
         if upper_hit
             if isempty(h)
-                push!(h, (zpix_f32, node_id))
-            elseif zpix_f32 > h[1][1]
-                h[1] = (zpix_f32, node_id)
+                push!(h, (zpix, node_id))
+            elseif zpix > h[1][1]
+                h[1] = (zpix, node_id)
             end
         else
-            push!(h, (zpix_f32, node_id))
+            push!(h, (zpix, node_id))
         end
         node_hits[node_id] = get(node_hits, node_id, 0) + 1
     end
