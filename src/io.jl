@@ -23,14 +23,14 @@ function _as_int(x, default::Int)
     x === nothing && return default
     x isa Integer && return Int(x)
     x isa Number && return round(Int, x)
-    x isa String && return parse(Int, x)
+    x isa String && return something(tryparse(Int, x), default)
     return default
 end
 
-function _as_float(x, default::Float64)
+function _as_float(x, default::Real)
     x === nothing && return default
     x isa Number && return Float64(x)
-    x isa String && return parse(Float64, x)
+    x isa String && return something(tryparse(Float64, x), default)
     return default
 end
 

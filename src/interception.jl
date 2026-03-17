@@ -755,9 +755,10 @@ function _rasterize_direction_java(
     return visible_area, node_hits
 end
 
-function _direction_projection(vertices::T, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing) where {T}
+function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
+    T = isempty(vertices) ? typeof(plotbox.pixel_area) : typeof(first(vertices)[1])
     pixel_hits = Dict{Int,Vector{Tuple{T,Int}}}()
     node_hits = Dict{Int,Int}()
     projected_mesh_area = Dict{Int,T}()

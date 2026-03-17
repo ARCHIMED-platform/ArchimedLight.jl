@@ -5,17 +5,19 @@ const _CENTER_OF_SOLAR_DISK_RAD = deg2rad(-0.83)
 const _SOLAR_TO_PAR = 0.48
 const _SOLAR_TO_NIR = 0.52
 
-function _row_value(row, candidates::Vector{Symbol}, default::Float64)
+function _parse_float_or_default(value, default::Real)
+    value === missing && return default
+    value isa Number && return Float64(value)
+    parsed = tryparse(Float64, strip(string(value)))
+    return something(parsed, default)
+end
+
+function _row_value(row, candidates::AbstractVector{Symbol}, default::Real)
     names = propertynames(row)
     for c in candidates
         if c in names
             v = getproperty(row, c)
-            v isa Number && return Float64(v)
-            v === missing && continue
-            try
-                return parse(Float64, string(v))
-            catch
-            end
+            v === missing || return _parse_float_or_default(v, default)
         end
     end
     return default
@@ -133,7 +135,7 @@ function _orbital_correction(doy::Int)
     1.000110 + 0.034221 * cos(a) + 0.001280 * sin(a) + 0.000719 * cos(2a) + 0.000077 * sin(2a)
 end
 
-function _sunset_hour_angle(latitude_rad::Float64, declination_rad::Float64)
+function _sunset_hour_angle(latitude_rad::Real, declination_rad::Real)
     # Keep the current sunrise/sunset convention stable:
     #   (a / cos(lat)) * cos(decl)
     x =
@@ -142,9 +144,9 @@ function _sunset_hour_angle(latitude_rad::Float64, declination_rad::Float64)
     acos(clamp(x, -1.0, 1.0))
 end
 
-_hour_angle(decimal_hour::Float64) = (pi / 12.0) * (decimal_hour - 12.0)
+_hour_angle(decimal_hour::Real) = (pi / 12.0) * (decimal_hour - 12.0)
 
-function _extra_terrestrial_hourly_mj(latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+function _extra_terrestrial_hourly_mj(latitude_rad::Real, doy::Int, start_hour::Real, end_hour::Real)
     sc = _equation_of_time_hours(doy)
     h1 = _hour_angle(start_hour + sc)
     h2 = _hour_angle(end_hour + sc)
@@ -165,19 +167,19 @@ function _extra_terrestrial_hourly_mj(latitude_rad::Float64, doy::Int, start_hou
     )
 end
 
-_watt_to_mj(watts::Float64, duration_hours::Float64) = watts * duration_hours * 0.0036
+_watt_to_mj(watts::Real, duration_hours::Real) = watts * duration_hours * 0.0036
 
-function _mega_joules_to_watts(mj::Float64, duration_hours::Float64)
+function _mega_joules_to_watts(mj::Real, duration_hours::Real)
     duration_hours <= 0.0 && return 0.0
     mj * 1_000_000 / (duration_hours * 3600.0)
 end
 
-function _global_wm2_from_clearness(clearness::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+function _global_wm2_from_clearness(clearness::Real, latitude_rad::Real, doy::Int, start_hour::Real, end_hour::Real)
     et_mj = _extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
     _mega_joules_to_watts(clearness * et_mj, end_hour - start_hour)
 end
 
-function _clearness_from_global_wm2(global_wm2::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+function _clearness_from_global_wm2(global_wm2::Real, latitude_rad::Real, doy::Int, start_hour::Real, end_hour::Real)
     et_mj = _extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
     if et_mj > 0.0
         global_mj = _watt_to_mj(global_wm2, end_hour - start_hour)
@@ -186,7 +188,7 @@ function _clearness_from_global_wm2(global_wm2::Float64, latitude_rad::Float64, 
     return 0.5
 end
 
-function _sun_position_deg(doy::Int, latitude_rad::Float64, decimal_hour::Float64)
+function _sun_position_deg(doy::Int, latitude_rad::Real, decimal_hour::Real)
     hour_angle = deg2rad((decimal_hour + _equation_of_time_hours(doy) - 12) * 15)
     cos_ha = cos(hour_angle)
     cos_lat = cos(latitude_rad)
@@ -205,7 +207,7 @@ function _sun_position_deg(doy::Int, latitude_rad::Float64, decimal_hour::Float6
     return mod(rad2deg(azimuth), 360.0), rad2deg(elevation)
 end
 
-function _dejong_kd_hourly(clearness::Float64, sun_elevation_rad::Float64)
+function _dejong_kd_hourly(clearness::Real, sun_elevation_rad::Real)
     if clearness <= 0.22
         return 1.0
     elseif clearness <= 0.35
@@ -219,7 +221,7 @@ function _dejong_kd_hourly(clearness::Float64, sun_elevation_rad::Float64)
     end
 end
 
-function _partition_global_hourly(global_wm2::Float64, clearness::Float64, sun_elevation_rad::Float64)
+function _partition_global_hourly(global_wm2::Real, clearness::Real, sun_elevation_rad::Real)
     if global_wm2 <= 0.0
         return 0.0, 0.0
     elseif sun_elevation_rad <= 0.0
@@ -232,7 +234,7 @@ function _partition_global_hourly(global_wm2::Float64, clearness::Float64, sun_e
     return diffuse, direct
 end
 
-function _as_degrees_if_radians(x::Float64)
+function _as_degrees_if_radians(x::Real)
     isnan(x) && return x
     abs(x) <= 2pi + 1e-9 ? rad2deg(x) : x
 end
@@ -349,14 +351,7 @@ end
 function _dict_float_or_nan(d, key::String)
     d isa AbstractDict || return NaN
     haskey(d, key) || return NaN
-    v = d[key]
-    v isa Number && return Float64(v)
-    v === missing && return NaN
-    try
-        return parse(Float64, string(v))
-    catch
-        return NaN
-    end
+    _parse_float_or_default(d[key], NaN)
 end
 
 function _cfg_radiation_timestep_hours(cfg::LightConfig)
@@ -366,7 +361,7 @@ function _cfg_radiation_timestep_hours(cfg::LightConfig)
     mins / 60.0
 end
 
-function _sunrise_sunset_hours(latitude_rad::Float64, doy::Int)
+function _sunrise_sunset_hours(latitude_rad::Real, doy::Int)
     decl = _solar_declination(doy)
     hour_angle = _sunset_hour_angle(latitude_rad, decl)
     ut = hour_angle / deg2rad(15.0)
@@ -376,7 +371,7 @@ function _sunrise_sunset_hours(latitude_rad::Float64, doy::Int)
     return rise, set
 end
 
-function _sun_direction_from_az_el_deg(azimuth_deg::Float64, elevation_deg::Float64)
+function _sun_direction_from_az_el_deg(azimuth_deg::Real, elevation_deg::Real)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
     x = cos(el) * sin(az)
@@ -385,7 +380,7 @@ function _sun_direction_from_az_el_deg(azimuth_deg::Float64, elevation_deg::Floa
     return x, y, z
 end
 
-function _az_el_from_direction_deg(x::Float64, y::Float64, z::Float64)
+function _az_el_from_direction_deg(x::Real, y::Real, z::Real)
     n = sqrt(x * x + y * y + z * z)
     n <= 0.0 && return (0.0, -90.0)
     xn, yn, zn = x / n, y / n, z / n
@@ -394,13 +389,13 @@ function _az_el_from_direction_deg(x::Float64, y::Float64, z::Float64)
     return rad2deg(az), rad2deg(asin(clamp(zn, -1.0, 1.0)))
 end
 
-function _solar_substeps(date::Dates.Date, start_h::Float64, end_h::Float64, timestep_h::Float64, latitude_rad::Float64)
+function _solar_substeps(date::Dates.Date, start_h::Real, end_h::Real, timestep_h::Real, latitude_rad::Real)
     timestep_h = max(timestep_h, 1e-6)
     end_h < start_h && (end_h += 24.0)
 
     substeps = NamedTuple[]
     start_day = floor(Int, start_h / 24.0)
-    end_day = floor(Int, (end_h - eps(Float64)) / 24.0)
+    end_day = floor(Int, (end_h - eps(end_h)) / 24.0)
     for day_off in start_day:end_day
         day_abs0 = 24.0 * day_off
         seg_abs_start = max(start_h, day_abs0)
@@ -430,7 +425,7 @@ function _solar_substeps(date::Dates.Date, start_h::Float64, end_h::Float64, tim
     return substeps
 end
 
-function _midpoint_sun_position_deg(date::Dates.Date, start_h::Float64, end_h::Float64, latitude_rad::Float64)
+function _midpoint_sun_position_deg(date::Dates.Date, start_h::Real, end_h::Real, latitude_rad::Real)
     end_h < start_h && (end_h += 24.0)
     mid = (start_h + end_h) / 2.0
     day_off = floor(Int, mid / 24.0)
@@ -441,12 +436,12 @@ end
 
 function _radiation_substeps(
     date::Dates.Date,
-    start_h::Float64,
-    end_h::Float64,
-    latitude_rad::Float64,
-    timestep_h::Float64,
-    ri_sw::Float64,
-    clearness::Float64,
+    start_h::Real,
+    end_h::Real,
+    latitude_rad::Real,
+    timestep_h::Real,
+    ri_sw::Real,
+    clearness::Real,
     global_from_input::Bool,
     clearness_provided::Bool,
 )
@@ -494,12 +489,12 @@ end
 
 function _auto_sun_and_direct_fraction(
     date::Dates.Date,
-    start_h::Float64,
-    end_h::Float64,
-    latitude_rad::Float64,
-    timestep_h::Float64,
-    ri_sw::Float64,
-    clearness::Float64,
+    start_h::Real,
+    end_h::Real,
+    latitude_rad::Real,
+    timestep_h::Real,
+    ri_sw::Real,
+    clearness::Real,
     global_from_input::Bool,
     clearness_provided::Bool,
 )
