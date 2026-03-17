@@ -7,16 +7,6 @@ function _normalize3(v)
     n == 0.0 ? v : v / n
 end
 
-function _normalize3_java(v)
-    x = Float32(v[1])
-    y = Float32(v[2])
-    z = Float32(v[3])
-    n2 = (x * x) + (y * y) + (z * z)
-    n2 <= 0.0f0 && return StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
-    n = sqrt(n2)
-    StaticArrays.SVector{3,Float64}(Float64(x / n), Float64(y / n), Float64(z / n))
-end
-
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
@@ -45,13 +35,13 @@ function _java_turtle_order(n::Int)
 end
 
 function _java_seed_points_up()
-    elevation6 = Float32[90.0f0, 26.57f0, 26.57f0, 26.57f0, 26.57f0, 26.57f0]
-    azimuth6 = Float32[0.0f0, 180.0f0, 252.0f0, 324.0f0, 36.0f0, 108.0f0]
+    elevation6 = [90.0, 26.57, 26.57, 26.57, 26.57, 26.57]
+    azimuth6 = [0.0, 180.0, 252.0, 324.0, 36.0, 108.0]
 
     pts = StaticArrays.SVector{3,Float64}[]
     for i in eachindex(elevation6)
         elevation = deg2rad(elevation6[i])
-        azimuth = deg2rad(azimuth6[i] + 180.0f0)
+        azimuth = deg2rad(azimuth6[i] + 180.0)
         c = cos(elevation)
         x = c * sin(azimuth)
         y = c * cos(azimuth)
@@ -155,62 +145,13 @@ function _hemisphere_fibonacci_incoming(n::Int)
 end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
-const _JAVA_N16_DIR_ORDER = (1, 2, 3, 4, 5, 6, 14, 10, 7, 9, 12, 11, 8, 13, 16, 15)
-
-function _java_turtle_incoming_n6_logged()
-    # Java n=6 turtle directions (upward hemisphere), logged from
-    # `log-directions.csv` in test-hitcount3.
-    up = (
-        (3.821371e-15, 4.371139e-8, 1.0),
-        (1.5637987e-7, 0.89438856, 0.44729084),
-        (0.85061413, 0.27638108, 0.44729084),
-        (0.5257086, -0.7235755, 0.4472909),
-        (-0.5257085, -0.7235755, 0.44729084),
-        (-0.85061413, 0.2763814, 0.4472909),
-    )
-    [
-        _normalize3_java(StaticArrays.SVector{3,Float64}(x, y, z))
-        for (x, y, z) in up
-    ]
-end
-
-function _java_turtle_incoming_n16_logged()
-    # Java n=16 turtle directions (upward hemisphere), logged from
-    # `log-directions.csv`.
-    up = (
-        (3.821371e-15, 4.371139e-8, 1.0),
-        (1.5637987e-7, 0.89438856, 0.44729084),
-        (0.85061413, 0.27638108, 0.44729084),
-        (0.5257086, -0.7235755, 0.4472909),
-        (-0.5257085, -0.7235755, 0.44729084),
-        (-0.85061413, 0.2763814, 0.4472909),
-        (-4.0595705e-8, -0.9822395, 0.18763158),
-        (2.5001444e-8, -0.6070141, 0.7946911),
-        (0.35679406, 0.4910847, 0.794691),
-        (0.57730484, -0.18757768, 0.7946909),
-        (0.577346, 0.79464835, 0.18763156),
-        (-0.5773048, -0.18757758, 0.79469097),
-        (-0.35679388, 0.49108484, 0.794691),
-        (-0.57734585, 0.7946484, 0.18763156),
-        (-0.9341653, -0.30352855, 0.18763156),
-        (0.93416524, -0.30352876, 0.18763155),
-    )
-    [
-        _normalize3_java(StaticArrays.SVector{3,Float64}(x, y, z))
-        for (x, y, z) in up
-    ]
-end
 
 function _java_turtle_incoming(n::Int)
     get!(_TURTLE_DIR_CACHE, n) do
-        n == 6 && return _java_turtle_incoming_n6_logged()
-        # Keep n=16 on the exact Java-logged vectors: one near-axis direction has
-        # a sign-sensitive Float32 x component that affects toric border pixels.
-        n == 16 && return _java_turtle_incoming_n16_logged()
         order = _java_turtle_order(n)
         order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
         up = _java_turtle_upward_points(order)
-        [_normalize3_java(u) for u in up]
+        [_normalize3(u) for u in up]
     end
 end
 
