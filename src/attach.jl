@@ -51,17 +51,12 @@ function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
     error("No default MTG attribute name for `$field`. Pass it explicitly in `names=Dict($field => :YourAttr)`.")
 end
 
-function _attach_dict_value_type(d, default::Type{<:Real}=Float64)
-    isempty(d) ? default : typeof(first(values(d)))
-end
-
-function _series_value_type(steps::AbstractVector{<:LightStepResult}, field::Symbol, fill_value)
-    T = typeof(fill_value)
+function _series_value_type(steps::AbstractVector{<:LightStepResult}, field::Symbol, fill_value::T) where {T}
     for step in steps
         vals = _budget_node_field(step, field)
-        isempty(vals) || return float(promote_type(T, _attach_dict_value_type(vals, T)))
+        isempty(vals) || return valtype(vals)
     end
-    float(T)
+    return T
 end
 
 function _resolved_step_fields(step::LightStepResult, fields, names)
@@ -83,7 +78,7 @@ function _resolved_series_fields(steps::AbstractVector{<:LightStepResult}, field
         for step in steps
             vals = _budget_node_field(step, field)
             for nid in all_node_ids
-                push!(by_node[nid], convert(T, get(vals, nid, fill_value)))
+                push!(by_node[nid], get(vals, nid, fill_value))
             end
         end
         out[attr] = by_node
@@ -95,8 +90,8 @@ function _paving_tile_mesh(points, faces_for_tile)
     used = sort!(unique(vcat([[Int(f[1]), Int(f[2]), Int(f[3])] for f in faces_for_tile]...)))
     remap = Dict{Int,Int}(old => new for (new, old) in enumerate(used))
     tile_points = GeometryBasics.Point3f[GeometryBasics.Point3f(points[idx]...) for idx in used]
-    tile_faces = PlantGeom.Face3[
-        PlantGeom.Face3(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
+    tile_faces = GeometryBasics.TriangleFace{Int}[
+        GeometryBasics.TriangleFace{Int}(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
     ]
     return GeometryBasics.Mesh(tile_points, tile_faces), tile_points
 end
@@ -106,22 +101,22 @@ function _paving_nodes_data(scene::SceneGeometry, cfg::LightConfig; xy_bounds=no
     plot_paving > 0 || return NamedTuple[]
 
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
-    vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
+    vertices = [StaticArrays.SVector(v[1], v[2], v[3]) for v in raw_vertices]
     plotbox = _plotbox(scene, vertices, get(cfg.general, "pixel_size", 0.0025))
     first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
     paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
 
-    faces_by_node = Dict{Int,Vector{PlantGeom.Face3}}()
+    faces_by_node = Dict{Int,Vector{GeometryBasics.TriangleFace{Int}}}()
     for (face, nid) in zip(paving_faces, paving_face2node)
-        push!(get!(faces_by_node, nid, PlantGeom.Face3[]), face)
+        push!(get!(faces_by_node, nid, GeometryBasics.TriangleFace{Int}[]), face)
     end
 
     out = NamedTuple[]
     for nid in sort!(collect(keys(faces_by_node)))
         tile_mesh, tile_points = _paving_tile_mesh(paving_vertices, faces_by_node[nid])
-        xs = Float64[p[1] for p in tile_points]
-        ys = Float64[p[2] for p in tile_points]
-        zs = Float64[p[3] for p in tile_points]
+        xs = [p[1] for p in tile_points]
+        ys = [p[2] for p in tile_points]
+        zs = [p[3] for p in tile_points]
         bary = ((minimum(xs) + maximum(xs)) / 2, (minimum(ys) + maximum(ys)) / 2, sum(zs) / length(zs))
         if xy_bounds !== nothing
             xmin, ymin, xmax, ymax = xy_bounds
@@ -320,7 +315,7 @@ function attach_light_series!(
         for step in steps
             values = _budget_node_field(step, field)
             for nid in node_ids
-                push!(by_node[nid], convert(T, get(values, nid, fill_value)))
+                push!(by_node[nid], get(values, nid, fill_value))
             end
         end
         attach_node_values!(

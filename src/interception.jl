@@ -431,20 +431,20 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
         dims = getproperty(attrs, :scene_dimensions)
         p0 = dims[1]
         p1 = dims[2]
-        x0 = Float64(p0[1])
-        y0 = Float64(p0[2])
-        x1 = Float64(p1[1])
-        y1 = Float64(p1[2])
+        x0 = p0[1]
+        y0 = p0[2]
+        x1 = p1[1]
+        y1 = p1[2]
         return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     end
 
-    xs = Float64[p[1] for p in vertices]
-    ys = Float64[p[2] for p in vertices]
+    xs = [p[1] for p in vertices]
+    ys = [p[2] for p in vertices]
     (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
 end
 
-function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
-    pixel_size > 0.0 || error("pixel_size must be > 0 m")
+function _plotbox(scene::SceneGeometry, vertices, pixel_size::Real)
+    pixel_size > zero(pixel_size) || error("pixel_size must be > 0 m")
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
 
     x0_raw, y0_raw, x1_raw, y1_raw = _extract_scene_xy_bounds(scene, vertices)
@@ -479,12 +479,12 @@ end
 
 function _project_point_ground(point, direction)
     dzden = direction[3]
-    dzden == 0.0 && return nothing
+    iszero(dzden) && return nothing
     pz = point[3]
     dz = -pz / dzden
     x = point[1] + direction[1] * dz
     y = point[2] + direction[2] * dz
-    StaticArrays.SVector{3,Float64}(x, y, pz)
+    StaticArrays.SVector(x, y, pz)
 end
 
 function _triangle_area_xy(p1, p2, p3)
@@ -493,7 +493,13 @@ end
 
 function _compute_normal(points)
     n = length(points)
-    n < 3 && return StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
+    if n < 3
+        if n == 0
+            return StaticArrays.SVector(0.0, 0.0, 0.0)
+        end
+        z = zero(typeof(points[1][1]))
+        return StaticArrays.SVector(z, z, z)
+    end
     for k in 1:(n-2)
         p0 = points[k]
         p1 = points[k+1]
@@ -522,9 +528,10 @@ function _compute_normal(points)
         nz = (v1x * v2y) - (v1y * v2x)
         nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
         nnorm <= 0.0 && continue
-        return StaticArrays.SVector{3,Float64}(nx / nnorm, ny / nnorm, nz / nnorm)
+        return StaticArrays.SVector(nx / nnorm, ny / nnorm, nz / nnorm)
     end
-    StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
+    z = zero(eltype(first(points)))
+    StaticArrays.SVector(z, z, z)
 end
 
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
@@ -560,28 +567,28 @@ function _wrap_index(i::Int, n::Int)
 end
 
 function _project_triangle!(
-    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
+    pixel_hits,
     node_hits::Dict{Int,Int},
-    projected_mesh_area::Dict{Int,Float64},
-    projected_pixels_area::Dict{Int,Float64},
+    projected_mesh_area,
+    projected_pixels_area,
     node_id::Int,
     p1,
     p2,
     p3,
     direction,
-    origin_x::Float64,
-    origin_y::Float64,
-    x_pix::Float64,
-    y_pix::Float64,
-    pixel_area::Float64,
+    origin_x::T,
+    origin_y::T,
+    x_pix,
+    y_pix,
+    pixel_area,
     nx::Int,
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-)
+) where {T}
     v = (p1, p2, p3)
-    projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
-    pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
+    projected = Vector{typeof(StaticArrays.SVector(origin_x, origin_y, zero(T)))}(undef, 3)
+    pix_points = similar(projected)
     ox = origin_x
     oy = origin_y
     pxs = x_pix
@@ -591,15 +598,15 @@ function _project_triangle!(
     dirz = direction[3]
 
     @inbounds for k in 1:3
-        dirz == 0.0 && return
+        iszero(dirz) && return
         pz = v[k][3]
         dz = -pz / dirz
         xw = v[k][1] + dirx * dz
         yw = v[k][2] + diry * dz
-        projected[k] = StaticArrays.SVector{3,Float64}(xw, yw, 0.0)
+        projected[k] = StaticArrays.SVector(xw, yw, zero(T))
         x = (xw - ox) / pxs
         y = (yw - oy) / pys
-        pix_points[k] = StaticArrays.SVector{3,Float64}(x, y, pz)
+        pix_points[k] = StaticArrays.SVector(x, y, pz)
     end
 
     iMin = floor(Int, pix_points[1][1])
@@ -643,7 +650,7 @@ function _project_triangle!(
     z0 += slope_y * (pix_points[1][2] - jMin)
 
     tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
-    buffered_hits = Tuple{Int,Float64}[]
+    buffered_hits = Tuple{Int,T}[]
     nb_hits = 0
     @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
@@ -673,7 +680,7 @@ function _project_triangle!(
 
     for (idx, zpix) in buffered_hits
         h = get!(pixel_hits, idx) do
-            Vector{Tuple{Float64,Int}}()
+            Tuple{T,Int}[]
         end
         if upper_hit
             if isempty(h)
@@ -687,8 +694,8 @@ function _project_triangle!(
         node_hits[node_id] = get(node_hits, node_id, 0) + 1
     end
 
-    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + tri_proj_area
-    projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
+    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, zero(T)) + tri_proj_area
+    projected_pixels_area[node_id] = get(projected_pixels_area, node_id, zero(T)) + nb_hits * pixel_area
 end
 
 @inline _hit_height(hit) = hit[1]
@@ -708,17 +715,18 @@ function _rasterize_direction_java(
     pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
         _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit)
 
-    ratios = Dict{Int,Float64}()
+    T = isempty(projected_mesh_area) ? typeof(plotbox.pixel_area) : valtype(projected_mesh_area)
+    ratios = Dict{Int,T}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
         if !get(cfg.general, "area_ratio", true)
-            ratios[nid] = 1.0
+            ratios[nid] = one(T)
         else
-            ppa = get(projected_pixels_area, nid, 0.0)
-            ratios[nid] = ppa > 0.0 ? get(projected_mesh_area, nid, 0.0) / ppa : 1.0
+            ppa = get(projected_pixels_area, nid, zero(T))
+            ratios[nid] = ppa > zero(T) ? get(projected_mesh_area, nid, zero(T)) / ppa : one(T)
         end
     end
 
-    visible_area = Dict{Int,Float64}()
+    visible_area = Dict{Int,T}()
     for stack in values(pixel_hits)
         isempty(stack) && continue
         # Preserve insertion order on height ties.
@@ -731,7 +739,7 @@ function _rasterize_direction_java(
             nid = _hit_node(hit)
             if nid in virtual_nodes
                 if !non_virtual_seen
-                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)
+                    visible_area[nid] = get(visible_area, nid, zero(T)) + plotbox.pixel_area * get(ratios, nid, one(T))
                 end
             else
                 first_non_virtual = nid
@@ -740,21 +748,20 @@ function _rasterize_direction_java(
             end
         end
         if first_non_virtual != 0
-            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * get(ratios, first_non_virtual, 1.0)
+            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, zero(T)) + plotbox.pixel_area * get(ratios, first_non_virtual, one(T))
         end
     end
 
     return visible_area, node_hits
 end
 
-function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
+function _direction_projection(vertices::T, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing) where {T}
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
-
-    pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
+    pixel_hits = Dict{Int,Vector{Tuple{T,Int}}}()
     node_hits = Dict{Int,Int}()
-    projected_mesh_area = Dict{Int,Float64}()
-    projected_pixels_area = Dict{Int,Float64}()
+    projected_mesh_area = Dict{Int,T}()
+    projected_pixels_area = Dict{Int,T}()
 
     @inbounds for fi in eachindex(faces)
         f = faces[fi]
@@ -805,6 +812,7 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
+    T = typeof(plotbox.origin_x)
     x_min = plotbox.origin_x
     y_min = plotbox.origin_y
     x_max = plotbox.origin_x + plotbox.xdim
@@ -821,13 +829,13 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     cobble_x = plot_x / nx
     cobble_y = plot_y / ny
 
-    min_size = 1e-6
-    z = 0.005
+    min_size = oftype(x_min, 1e-6)
+    z = oftype(x_min, 0.005)
 
-    vertices = StaticArrays.SVector{3,Float64}[]
-    faces = PlantGeom.Face3[]
+    vertices = Vector{typeof(StaticArrays.SVector(x_min, y_min, z))}()
+    faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
-    node_area = Dict{Int,Float64}()
+    node_area = Dict{Int,T}()
 
     node_id = first_node_id
     x = x_min
@@ -838,14 +846,14 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
             while y < y_max
                 y_size = min(cobble_y, y_max - y)
                 if y_size > min_size
-                    p1 = StaticArrays.SVector{3,Float64}(x, y, z)
-                    p2 = StaticArrays.SVector{3,Float64}(x + x_size, y, z)
-                    p3 = StaticArrays.SVector{3,Float64}(x + x_size, y + y_size, z)
-                    p4 = StaticArrays.SVector{3,Float64}(x, y + y_size, z)
+                    p1 = StaticArrays.SVector(x, y, z)
+                    p2 = StaticArrays.SVector(x + x_size, y, z)
+                    p3 = StaticArrays.SVector(x + x_size, y + y_size, z)
+                    p4 = StaticArrays.SVector(x, y + y_size, z)
                     base = length(vertices)
                     push!(vertices, p1, p2, p3, p4)
-                    push!(faces, PlantGeom.Face3(base + 1, base + 2, base + 3))
-                    push!(faces, PlantGeom.Face3(base + 1, base + 3, base + 4))
+                    push!(faces, GeometryBasics.TriangleFace{Int}(base + 1, base + 2, base + 3))
+                    push!(faces, GeometryBasics.TriangleFace{Int}(base + 1, base + 3, base + 4))
                     push!(face2node, node_id, node_id)
                     node_area[node_id] = x_size * y_size
                     node_id += 1
@@ -860,13 +868,13 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
 end
 
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
-    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
-    vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
+    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point{3,Float64}, scene.merged_mesh)
+    vertices = [StaticArrays.SVector(v[1], v[2], v[3]) for v in raw_vertices]
+    all_faces = collect(GeometryBasics.decompose(GeometryBasics.TriangleFace{Int}, scene.merged_mesh))
     all_face2node = collect(scene.face2node)
 
     ignored = _ignored_group_types(cfg)
-    faces = PlantGeom.Face3[]
+    faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
     for i in eachindex(all_faces)
         node_id = all_face2node[i]
@@ -887,7 +895,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
         v_offset = length(vertices)
         append!(vertices, paving_vertices)
         for f in paving_faces
-            push!(faces, PlantGeom.Face3(f[1] + v_offset, f[2] + v_offset, f[3] + v_offset))
+            push!(faces, GeometryBasics.TriangleFace{Int}(f[1] + v_offset, f[2] + v_offset, f[3] + v_offset))
         end
         append!(face2node, paving_face2node)
         append!(node_ids, unique(paving_face2node))

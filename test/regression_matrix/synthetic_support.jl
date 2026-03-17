@@ -51,7 +51,7 @@ end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
-    faces = PlantGeom.Face3[]
+    faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
     total_area_per_node = Dict{Int,Float64}()
     barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
@@ -80,7 +80,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
                 GeometryBasics.Point{3,Float32}(Float32(p4[1]), Float32(p4[2]), Float32(p4[3])),
             ],
         )
-        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(faces, GeometryBasics.TriangleFace{Int}[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
         append!(face2node, [i, i])
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
@@ -182,8 +182,8 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
         q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
         f = get(step.budget.ri_par_0_f_per_node, 1, 0.0)
         ok = isapprox(pa, 1.0; atol=1e-12, rtol=1e-12) &&
-            isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
-            isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
+             isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
+             isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
         detail = ok ? "" : "single_plate_direct projected=$(pa) q=$(q) f=$(f)"
         return (ok=ok, detail=detail)
     elseif source_id == "partial_overlap_direct"
@@ -193,9 +193,9 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
         upper_q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
         lower_q = get(step.budget.ri_par_0_q_per_node, 2, 0.0)
         ok = isapprox(upper_pa, 0.5; atol=1e-10, rtol=1e-10) &&
-            isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
-            isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
-            isapprox(lower_q, 50.0; atol=1e-9, rtol=1e-9)
+             isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
+             isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
+             isapprox(lower_q, 50.0; atol=1e-9, rtol=1e-9)
         detail = ok ? "" : "partial_overlap_direct upper_pa=$(upper_pa) lower_pa=$(lower_pa) upper_q=$(upper_q) lower_q=$(lower_q)"
         return (ok=ok, detail=detail)
     elseif source_id == "toricity_wraparound"
@@ -206,7 +206,7 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
         target_pa = toric ? 0.4 : 0.19512196866477877
         target_q = toric ? 40.0 : 19.512196866477876
         ok = isapprox(pa, target_pa; atol=1e-5, rtol=1e-9) &&
-            isapprox(q, target_q; atol=1e-5, rtol=1e-9)
+             isapprox(q, target_q; atol=1e-5, rtol=1e-9)
         detail = ok ? "" : "toricity_wraparound toric=$(toric) projected=$(pa) q=$(q)"
         return (ok=ok, detail=detail)
     elseif source_id == "stacked_scattering"

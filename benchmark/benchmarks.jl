@@ -54,7 +54,7 @@ end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float64}[]
-    faces = PlantGeom.Face3[]
+    faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
     total_area_per_node = Dict{Int,Float64}()
     barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
@@ -83,7 +83,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
                 GeometryBasics.Point{3,Float64}(p4[1], p4[2], p4[3]),
             ],
         )
-        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(faces, GeometryBasics.TriangleFace{Int}[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
         append!(face2node, [i, i])
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))

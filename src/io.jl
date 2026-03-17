@@ -471,7 +471,7 @@ function _build_scene_geometry(
     )
 
     verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
-    faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
+    faces = GeometryBasics.decompose(GeometryBasics.TriangleFace{Int}, merged_mesh)
     T = isempty(verts) ? Float64 : typeof(first(verts)[1])
     zero_t = zero(T)
     node_area = Dict{Int,T}()
