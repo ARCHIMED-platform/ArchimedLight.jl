@@ -51,25 +51,39 @@ function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
     error("No default MTG attribute name for `$field`. Pass it explicitly in `names=Dict($field => :YourAttr)`.")
 end
 
+function _attach_dict_value_type(d, default::Type{<:Real}=Float64)
+    isempty(d) ? default : typeof(first(values(d)))
+end
+
+function _series_value_type(steps::AbstractVector{<:LightStepResult}, field::Symbol, fill_value)
+    T = typeof(fill_value)
+    for step in steps
+        vals = _budget_node_field(step, field)
+        isempty(vals) || return float(promote_type(T, _attach_dict_value_type(vals, T)))
+    end
+    float(T)
+end
+
 function _resolved_step_fields(step::LightStepResult, fields, names)
-    Dict{Symbol,AbstractDict{Int,Float64}}(
+    Dict{Symbol,AbstractDict}(
         _budget_attr_name(field, names) => _budget_node_field(step, field) for field in fields
     )
 end
 
-function _resolved_series_fields(steps::AbstractVector{<:LightStepResult}, fields, names, fill_value::Float64)
-    out = Dict{Symbol,Dict{Int,Vector{Float64}}}()
+function _resolved_series_fields(steps::AbstractVector{<:LightStepResult}, fields, names, fill_value)
+    out = Dict{Symbol,AbstractDict}()
     for field in fields
         attr = _budget_attr_name(field, names)
         all_node_ids = Set{Int}()
         for step in steps
             union!(all_node_ids, keys(_budget_node_field(step, field)))
         end
-        by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in all_node_ids)
+        T = _series_value_type(steps, field, fill_value)
+        by_node = Dict{Int,Vector{T}}(nid => T[] for nid in all_node_ids)
         for step in steps
             vals = _budget_node_field(step, field)
             for nid in all_node_ids
-                push!(by_node[nid], Float64(get(vals, nid, fill_value)))
+                push!(by_node[nid], convert(T, get(vals, nid, fill_value)))
             end
         end
         out[attr] = by_node
@@ -239,7 +253,7 @@ function visual_scene_mtg(
 )
     mtg = deepcopy(scene.mtg)
     keep_scene_surface || _drop_scene_surface!(mtg)
-    include_paving && _append_paving_nodes!(mtg, scene, cfg, Dict{Symbol,Dict{Int,Float64}}(); xy_bounds=xy_bounds)
+    include_paving && _append_paving_nodes!(mtg, scene, cfg, Dict{Symbol,AbstractDict}(); xy_bounds=xy_bounds)
     return mtg
 end
 
@@ -273,7 +287,7 @@ function visual_scene_mtg(
     include_paving::Bool=true,
     keep_scene_surface::Bool=false,
     xy_bounds=nothing,
-    fill_value::Float64=NaN,
+    fill_value=NaN,
 )
     mtg = deepcopy(scene.mtg)
     field_values = _resolved_series_fields(steps, fields, names, fill_value)
@@ -297,15 +311,16 @@ function attach_light_series!(
     steps::AbstractVector{<:LightStepResult};
     fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
-    fill_value::Float64=NaN,
+    fill_value=NaN,
 )
     node_ids = sort!(collect(keys(scene.total_area_per_node)))
     for field in fields
-        by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
+        T = _series_value_type(steps, field, fill_value)
+        by_node = Dict{Int,Vector{T}}(nid => T[] for nid in node_ids)
         for step in steps
             values = _budget_node_field(step, field)
             for nid in node_ids
-                push!(by_node[nid], Float64(get(values, nid, fill_value)))
+                push!(by_node[nid], convert(T, get(values, nid, fill_value)))
             end
         end
         attach_node_values!(

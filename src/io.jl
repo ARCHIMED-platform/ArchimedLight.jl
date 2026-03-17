@@ -389,9 +389,9 @@ function write_light_inputs(
 end
 
 function _triangle_area3d(p1, p2, p3)
-    v1 = StaticArrays.SVector{3,Float64}(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
-    v2 = StaticArrays.SVector{3,Float64}(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
-    0.5 * norm(cross(v1, v2))
+    v1 = StaticArrays.SVector(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
+    v2 = StaticArrays.SVector(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
+    norm(cross(v1, v2)) / 2
 end
 
 @inline _node_attr(node, key::Symbol) = haskey(node, key) ? node[key] : nothing
@@ -456,7 +456,7 @@ end
 function _build_scene_geometry(
     mtg,
     source_path::AbstractString,
-    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}},
+    scene_xy_bounds::Union{Nothing,NTuple{4,<:Real}},
     source_topology_id_per_node::Dict{Int,Int},
     object_id_per_node::Dict{Int,Int},
 )
@@ -472,28 +472,30 @@ function _build_scene_geometry(
 
     verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
     faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
-    node_area = Dict{Int,Float64}()
-    bary_acc = Dict{Int,NTuple{3,Float64}}()
+    T = isempty(verts) ? Float64 : typeof(first(verts)[1])
+    zero_t = zero(T)
+    node_area = Dict{Int,T}()
+    bary_acc = Dict{Int,NTuple{3,T}}()
     for (i, f) in enumerate(faces)
         n = face2node[i]
         p1 = verts[f[1]]
         p2 = verts[f[2]]
         p3 = verts[f[3]]
         area = _triangle_area3d(p1, p2, p3)
-        node_area[n] = get(node_area, n, 0.0) + area
-        cx = (p1[1] + p2[1] + p3[1]) / 3.0
-        cy = (p1[2] + p2[2] + p3[2]) / 3.0
-        cz = (p1[3] + p2[3] + p3[3]) / 3.0
-        sx, sy, sz = get(bary_acc, n, (0.0, 0.0, 0.0))
+        node_area[n] = get(node_area, n, zero_t) + area
+        cx = (p1[1] + p2[1] + p3[1]) / 3
+        cy = (p1[2] + p2[2] + p3[2]) / 3
+        cz = (p1[3] + p2[3] + p3[3]) / 3
+        sx, sy, sz = get(bary_acc, n, (zero_t, zero_t, zero_t))
         bary_acc[n] = (sx + area * cx, sy + area * cy, sz + area * cz)
     end
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    barycenter_per_node = Dict{Int,NTuple{3,T}}()
     for (nid, area) in node_area
         if area > 0
-            sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
+            sx, sy, sz = get(bary_acc, nid, (zero_t, zero_t, zero_t))
             barycenter_per_node[nid] = (sx / area, sy / area, sz / area)
         else
-            barycenter_per_node[nid] = (NaN, NaN, NaN)
+            barycenter_per_node[nid] = (T(NaN), T(NaN), T(NaN))
         end
     end
     SceneGeometry(
@@ -511,7 +513,7 @@ function _build_scene_geometry(
     )
 end
 
-function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
+function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,<:Real}})
     _build_scene_geometry(mtg, source_path, scene_xy_bounds, Dict{Int,Int}(), Dict{Int,Int}())
 end
 

@@ -48,37 +48,50 @@ struct MeteoTable
     metadata::NamedTuple
 end
 
-struct SceneGeometry
-    mtg
-    merged_mesh
+struct SceneGeometry{MTG,MeshT,T<:Real}
+    mtg::MTG
+    merged_mesh::MeshT
     face2node::Vector{Int}
-    total_area_per_node::Dict{Int,Float64}
-    barycenter_per_node::Dict{Int,NTuple{3,Float64}}
+    total_area_per_node::Dict{Int,T}
+    barycenter_per_node::Dict{Int,NTuple{3,T}}
     source_topology_id_per_node::Dict{Int,Int}
     object_id_per_node::Dict{Int,Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     source_path::String
-    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}}
+    scene_xy_bounds::Union{Nothing,NTuple{4,T}}
 end
 
-struct SkyState
-    sun_azimuth_deg::Float64
-    sun_elevation_deg::Float64
-    ri_sw_f::Float64
-    ri_par_f::Float64
-    ri_nir_f::Float64
-    direct_fraction::Float64
-    diffuse_fraction::Float64
+struct SkyState{T<:Real}
+    sun_azimuth_deg::T
+    sun_elevation_deg::T
+    ri_sw_f::T
+    ri_par_f::T
+    ri_nir_f::T
+    direct_fraction::T
+    diffuse_fraction::T
 end
 
 SkyState(
-    sun_azimuth_deg::Float64,
-    sun_elevation_deg::Float64,
-    ri_par_f::Float64,
-    ri_nir_f::Float64,
-    direct_fraction::Float64,
-    diffuse_fraction::Float64,
+    sun_azimuth_deg::Real,
+    sun_elevation_deg::Real,
+    ri_sw_f::Real,
+    ri_par_f::Real,
+    ri_nir_f::Real,
+    direct_fraction::Real,
+    diffuse_fraction::Real,
+) = begin
+    values = promote(sun_azimuth_deg, sun_elevation_deg, ri_sw_f, ri_par_f, ri_nir_f, direct_fraction, diffuse_fraction)
+    SkyState(values...)
+end
+
+SkyState(
+    sun_azimuth_deg::Real,
+    sun_elevation_deg::Real,
+    ri_par_f::Real,
+    ri_nir_f::Real,
+    direct_fraction::Real,
+    diffuse_fraction::Real,
 ) = SkyState(
     sun_azimuth_deg,
     sun_elevation_deg,
@@ -89,73 +102,73 @@ SkyState(
     diffuse_fraction,
 )
 
-struct TurtleSector
+struct TurtleSector{DirectionT,WeightT<:Real}
     id::Int
-    direction
-    weight::Float64
+    direction::DirectionT
+    weight::WeightT
     source::Symbol
 end
 
-struct TurtleGrid
-    sectors::Vector{TurtleSector}
+struct TurtleGrid{SectorT<:TurtleSector}
+    sectors::Vector{SectorT}
 end
 
-struct DirectionalFluxes
+struct DirectionalFluxes{T<:Real}
     sector_ids::Vector{Int}
-    par::Vector{Float64}
-    nir::Vector{Float64}
+    par::Vector{T}
+    nir::Vector{T}
 end
 
-struct FirstOrderResult
-    projected_area_per_node::Dict{Int,Float64}
-    incident_par_power_per_node::Dict{Int,Float64}
-    incident_nir_power_per_node::Dict{Int,Float64}
+struct FirstOrderResult{T<:Real}
+    projected_area_per_node::Dict{Int,T}
+    incident_par_power_per_node::Dict{Int,T}
+    incident_nir_power_per_node::Dict{Int,T}
     hits_per_node::Dict{Int,Int}
 end
 
-struct ScatteringResult
-    added_par_power_per_node::Dict{Int,Float64}
-    added_nir_power_per_node::Dict{Int,Float64}
+struct ScatteringResult{T<:Real}
+    added_par_power_per_node::Dict{Int,T}
+    added_nir_power_per_node::Dict{Int,T}
     iterations::Int
     converged::Bool
 end
 
-struct ScatteringTransferGraph
+struct ScatteringTransferGraph{T<:Real}
     pair_counts::Dict{Tuple{Int,Int},Int}
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
-    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,T}}
 end
 
-struct LightBudget
-    ri_par_0_f_per_node::Dict{Int,Float64}
-    ri_nir_0_f_per_node::Dict{Int,Float64}
-    ri_par_f_per_node::Dict{Int,Float64}
-    ri_nir_f_per_node::Dict{Int,Float64}
-    ri_par_0_q_per_node::Dict{Int,Float64}
-    ri_nir_0_q_per_node::Dict{Int,Float64}
-    ri_par_q_per_node::Dict{Int,Float64}
-    ri_nir_q_per_node::Dict{Int,Float64}
-    ra_par_0_f_per_node::Dict{Int,Float64}
-    ra_nir_0_f_per_node::Dict{Int,Float64}
-    ra_par_f_per_node::Dict{Int,Float64}
-    ra_nir_f_per_node::Dict{Int,Float64}
-    ra_par_0_q_per_node::Dict{Int,Float64}
-    ra_nir_0_q_per_node::Dict{Int,Float64}
-    ra_par_q_per_node::Dict{Int,Float64}
-    ra_nir_q_per_node::Dict{Int,Float64}
-    extra_0_q_per_band::Dict{String,Dict{Int,Float64}}
-    extra_q_per_band::Dict{String,Dict{Int,Float64}}
+struct LightBudget{T<:Real}
+    ri_par_0_f_per_node::Dict{Int,T}
+    ri_nir_0_f_per_node::Dict{Int,T}
+    ri_par_f_per_node::Dict{Int,T}
+    ri_nir_f_per_node::Dict{Int,T}
+    ri_par_0_q_per_node::Dict{Int,T}
+    ri_nir_0_q_per_node::Dict{Int,T}
+    ri_par_q_per_node::Dict{Int,T}
+    ri_nir_q_per_node::Dict{Int,T}
+    ra_par_0_f_per_node::Dict{Int,T}
+    ra_nir_0_f_per_node::Dict{Int,T}
+    ra_par_f_per_node::Dict{Int,T}
+    ra_nir_f_per_node::Dict{Int,T}
+    ra_par_0_q_per_node::Dict{Int,T}
+    ra_nir_0_q_per_node::Dict{Int,T}
+    ra_par_q_per_node::Dict{Int,T}
+    ra_nir_q_per_node::Dict{Int,T}
+    extra_0_q_per_band::Dict{String,Dict{Int,T}}
+    extra_q_per_band::Dict{String,Dict{Int,T}}
 end
 
-struct LightStepResult
-    sky::SkyState
-    turtle::TurtleGrid
-    fluxes::DirectionalFluxes
-    first_order::FirstOrderResult
-    scattering::Union{Nothing,ScatteringResult}
-    budget::LightBudget
-    extra_band_irradiance::Dict{String,Float64}
+struct LightStepResult{SkyT<:SkyState,TurtleT<:TurtleGrid,FluxT<:DirectionalFluxes,FirstT<:FirstOrderResult,ScatteringT,BudgetT<:LightBudget,ExtraT<:AbstractDict}
+    sky::SkyT
+    turtle::TurtleT
+    fluxes::FluxT
+    first_order::FirstT
+    scattering::ScatteringT
+    budget::BudgetT
+    extra_band_irradiance::ExtraT
 end
