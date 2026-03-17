@@ -133,13 +133,18 @@ struct ScatteringResult{T<:Real}
     converged::Bool
 end
 
+struct OpticalCoefficients{T<:Real}
+    par::T
+    nir::T
+end
+
 struct ScatteringTransferGraph{T<:Real}
     pair_counts::Dict{Tuple{Int,Int},Int}
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
-    group_type_coeffs::Dict{Tuple{String,String},Dict{String,T}}
+    group_type_coeffs::Dict{Tuple{String,String},OpticalCoefficients{T}}
 end
 
 struct LightBudget{T<:Real}
@@ -159,8 +164,8 @@ struct LightBudget{T<:Real}
     ra_nir_0_q_per_node::Dict{Int,T}
     ra_par_q_per_node::Dict{Int,T}
     ra_nir_q_per_node::Dict{Int,T}
-    extra_0_q_per_band::Dict{String,Dict{Int,T}}
-    extra_q_per_band::Dict{String,Dict{Int,T}}
+    extra_0_q_per_band::Dict{Symbol,Dict{Int,T}}
+    extra_q_per_band::Dict{Symbol,Dict{Int,T}}
 end
 
 struct LightStepResult{SkyT<:SkyState,TurtleT<:TurtleGrid,FluxT<:DirectionalFluxes,FirstT<:FirstOrderResult,ScatteringT,BudgetT<:LightBudget,ExtraT<:AbstractDict}

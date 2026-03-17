@@ -12,41 +12,40 @@ function _parse_float_or_default(value, default::Real)
     return something(parsed, default)
 end
 
-function _row_value(row, candidates::AbstractVector{Symbol}, default::Real)
-    names = propertynames(row)
-    for c in candidates
-        if c in names
-            v = getproperty(row, c)
-            v === missing || return _parse_float_or_default(v, default)
-        end
+function _first_present_value(row, candidates::AbstractVector{Symbol})
+    for candidate in candidates
+        hasproperty(row, candidate) || continue
+        value = getproperty(row, candidate)
+        value === missing || return value
     end
-    return default
+    return nothing
+end
+
+function _row_value(row, candidates::AbstractVector{Symbol}, default::Real)
+    value = _first_present_value(row, candidates)
+    isnothing(value) ? default : _parse_float_or_default(value, default)
 end
 
 function _row_time_value(row, candidates::Vector{Symbol}, default::Dates.Time)
-    names = propertynames(row)
-    for c in candidates
-        if c in names
-            v = getproperty(row, c)
-            v === missing && continue
-            if v isa Dates.Time
-                return v
-            elseif v isa Dates.DateTime
-                return Dates.Time(v)
-            end
-            s = strip(string(v))
-            isempty(s) && continue
-            try
-                return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
-            catch
-                try
-                    return Dates.Time(s, Dates.DateFormat("HH:MM"))
-                catch
-                end
-            end
+    value = _first_present_value(row, candidates)
+    isnothing(value) && return default
+    if value isa Dates.Time
+        return value
+    elseif value isa Dates.DateTime
+        return Dates.Time(value)
+    end
+
+    s = strip(string(value))
+    isempty(s) && return default
+    try
+        return Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
+    catch
+        try
+            return Dates.Time(s, Dates.DateFormat("HH:MM"))
+        catch
+            return default
         end
     end
-    return default
 end
 
 function _parse_date_value(v, default::Dates.Date)
@@ -73,11 +72,10 @@ end
 _to_decimal_hour(t::Dates.Time) = Dates.hour(t) + Dates.minute(t) / 60 + Dates.second(t) / 3600
 
 function _row_date(meteo_row)
-    names = propertynames(meteo_row)
-    if :date in names
+    if hasproperty(meteo_row, :date)
         return _parse_date_value(getproperty(meteo_row, :date), Dates.Date(2000, 1, 1))
     end
-    if :dayofyear in names
+    if hasproperty(meteo_row, :dayofyear)
         doy = Int(round(_row_value(meteo_row, [:dayofyear], 1.0)))
         year = Int(round(_row_value(meteo_row, [:year], 2000.0)))
         doy = clamp(doy, 1, 366)
@@ -95,8 +93,7 @@ function _row_step_hours(meteo_row)
     end_h < start_h && (end_h += 24.0)
 
     if end_h == start_h
-        names = propertynames(meteo_row)
-        if :step_duration in names
+        if hasproperty(meteo_row, :step_duration)
             duration_seconds = _positive_duration_seconds(getproperty(meteo_row, :step_duration); field_name="step_duration")
             end_h += duration_seconds / 3600.0
             return start_h, end_h
@@ -240,28 +237,17 @@ function _as_degrees_if_radians(x::Real)
 end
 
 function _use_tokens(row)
-    if :use in propertynames(row)
-        v = getproperty(row, :use)
-        if v isa AbstractString
-            t = strip(String(v))
-            return isempty(t) ? String[] : split(t)
-        elseif v isa AbstractVector
-            return [strip(string(x)) for x in v if !isempty(strip(string(x)))]
-        elseif v !== missing
-            t = strip(string(v))
-            return isempty(t) ? String[] : split(t)
-        end
+    hasproperty(row, :use) || return String[]
+    value = getproperty(row, :use)
+    value === missing && return String[]
+    if value isa AbstractVector
+        return [token for token in strip.(string.(value)) if !isempty(token)]
     end
-    return String[]
+    tokens = split(strip(string(value)))
+    return isempty(tokens) ? String[] : tokens
 end
 
-function _has_any_column(row, candidates::Vector{Symbol})
-    names = propertynames(row)
-    for c in candidates
-        c in names && return true
-    end
-    return false
-end
+_has_any_column(row, candidates::AbstractVector{Symbol}) = any(candidate -> hasproperty(row, candidate), candidates)
 
 function _normalize_humidity_use_token(token::AbstractString)
     s = lowercase(strip(String(token)))

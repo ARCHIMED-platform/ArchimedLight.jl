@@ -2,6 +2,12 @@ function _dict_zero(node_ids, ::Type{T}=Float64) where {T<:Real}
     Dict{Int,T}(nid => zero(T) for nid in node_ids)
 end
 
+_band_symbol(band) = Symbol(uppercase(string(band)))
+
+_band_coeff(coeffs::OpticalCoefficients, band::Symbol) = band === :NIR ? coeffs.nir : coeffs.par
+
+_optical_coefficients(par::T, nir::T) where {T<:Real} = OpticalCoefficients(par, nir)
+
 function _sum_dict_values(d::AbstractDict{Int,T}) where {T<:Real}
     s = zero(T)
     for v in values(d)
@@ -93,7 +99,7 @@ function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{In
 end
 
 function _group_optical_coeffs(cfg::LightConfig)
-    coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
+    coeffs = Dict{Tuple{String,String},OpticalCoefficients{Float64}}()
 
     for spec in model_type_configs(cfg)
         group = string(spec.group)
@@ -107,18 +113,21 @@ function _group_optical_coeffs(cfg::LightConfig)
         model = lowercase(strip(string(get(iconf, "model", ""))))
         c =
             if model == "virtualsensor"
-                Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                _optical_coefficients(0.0, 0.0)
             else
                 op = get(iconf, "optical_properties", nothing)
                 op isa AbstractDict || continue
-                ctmp = Dict{String,Float64}()
+                par = 0.0
+                nir = 0.0
                 for (k, v) in op
                     try
-                        ctmp[uppercase(string(k))] = float(v)
+                        band = _band_symbol(k)
+                        band === :PAR && (par = float(v))
+                        band === :NIR && (nir = float(v))
                     catch
                     end
                 end
-                ctmp
+                _optical_coefficients(par, nir)
             end
 
         tname = string(spec.type)
@@ -219,28 +228,28 @@ function build_scattering_transfer_graph(
     return build_scattering_transfer_graph(scene, turtle, first, cfg, RaycastScatteringBackend())
 end
 
-function _default_band_coeff(cfg::LightConfig, band_key::String)
-    bk = uppercase(band_key)
-    bk == "NIR" && return get(cfg.general, "scattering_coeff_nir", 0.30)
+function _default_band_coeff(cfg::LightConfig, band)
+    _band_symbol(band) === :NIR && return get(cfg.general, "scattering_coeff_nir", 0.30)
     return get(cfg.general, "scattering_coeff_par", 0.15)
 end
 
 function _coeff_by_node(
     graph::ScatteringTransferGraph{T},
-    band_key::String,
+    band,
     default_coeff::T,
 ) where {T<:Real}
     coeff_by_node = Dict{Int,T}()
-    band = uppercase(band_key)
+    band_key = _band_symbol(band)
+    default_coeffs = OpticalCoefficients(default_coeff, default_coeff)
     for nid in graph.node_ids
         g = get(graph.node_group, nid, "")
         t = get(graph.node_type, nid, "")
-        c = get(
+        coeffs = get(
             graph.group_type_coeffs,
             (g, t),
-            get(graph.group_type_coeffs, (g, "*"), Dict{String,T}()),
+            get(graph.group_type_coeffs, (g, "*"), default_coeffs),
         )
-        coeff_by_node[nid] = get(c, band, default_coeff)
+        coeff_by_node[nid] = _band_coeff(coeffs, band_key)
     end
     coeff_by_node
 end
@@ -298,10 +307,10 @@ function _scattering_one_band(
     initial_power_per_node::AbstractDict{Int,<:Real},
     graph::ScatteringTransferGraph,
     cfg::LightConfig,
-    band_key::String,
+    band,
     default_coeff::Real,
 )
-    coeffs = _coeff_by_node(graph, band_key, default_coeff)
+    coeffs = _coeff_by_node(graph, band, default_coeff)
     return _propagate_scattering_one_band(initial_power_per_node, graph, coeffs, cfg, default_coeff)
 end
 
@@ -316,7 +325,7 @@ function compute_scattering_band(
     cfg::LightConfig;
     mode=:raycast,
     backend=nothing,
-    band::AbstractString="PAR",
+    band="PAR",
     initial_power_per_node=nothing,
     default_coeff=nothing,
 )
@@ -337,7 +346,7 @@ function compute_scattering_band(
     first::FirstOrderResult,
     cfg::LightConfig,
     ::RaycastScatteringBackend;
-    band::AbstractString="PAR",
+    band="PAR",
     initial_power_per_node=nothing,
     default_coeff=nothing,
 )
@@ -349,12 +358,12 @@ function compute_scattering_band(
         else
             Dict{Int,T}(nid => get(initial_power_per_node, nid, zero_t) for nid in graph.node_ids)
         end
-    dflt = isnothing(default_coeff) ? T(_default_band_coeff(cfg, String(band))) : T(default_coeff)
+    dflt = isnothing(default_coeff) ? T(_default_band_coeff(cfg, band)) : T(default_coeff)
     added, iterations, converged = _scattering_one_band(
         initial,
         graph,
         cfg,
-        String(band),
+        band,
         dflt,
     )
     return (added_power_per_node=added, iterations=iterations, converged=converged)
@@ -365,7 +374,7 @@ function compute_scattering_band(
     first::FirstOrderResult,
     cfg::LightConfig,
     ::LinksScatteringBackend;
-    band::AbstractString="PAR",
+    band="PAR",
     initial_power_per_node=nothing,
     default_coeff=nothing,
 )
@@ -388,7 +397,7 @@ function compute_scattering_band(
     cfg::LightConfig;
     mode=:raycast,
     backend=nothing,
-    band::AbstractString="PAR",
+    band="PAR",
     initial_power_per_node=nothing,
     default_coeff=nothing,
 )
@@ -439,14 +448,14 @@ function compute_scattering(
         initial_par,
         graph,
         cfg,
-        "PAR",
+        :PAR,
         T(get(cfg.general, "scattering_coeff_par", 0.15)),
     )
     added_nir, it_nir, conv_nir = _scattering_one_band(
         initial_nir,
         graph,
         cfg,
-        "NIR",
+        :NIR,
         T(get(cfg.general, "scattering_coeff_nir", 0.30)),
     )
 

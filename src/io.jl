@@ -11,6 +11,8 @@ import OrderedCollections: OrderedDict
 
 const _NEXT_SCENE_NODE_ID = Ref(1)
 
+_parse_or_default(::Type{T}, x, default) where {T} = something(tryparse(T, strip(string(x))), default)
+
 function _as_bool(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -23,14 +25,14 @@ function _as_int(x, default::Int)
     x === nothing && return default
     x isa Integer && return Int(x)
     x isa Number && return round(Int, x)
-    x isa String && return something(tryparse(Int, x), default)
+    x isa String && return _parse_or_default(Int, x, default)
     return default
 end
 
 function _as_float(x, default::Real)
     x === nothing && return default
     x isa Number && return float(x)
-    x isa String && return something(tryparse(Float64, x), default)
+    x isa String && return _parse_or_default(Float64, x, default)
     return default
 end
 
@@ -136,12 +138,10 @@ end
 
 function _bool_flags_dict(x)
     x isa AbstractDict || return OrderedDict{String,Bool}()
-    out = OrderedDict{String,Bool}()
-    for (k, v) in x
-        out[string(k)] = _as_bool(v, false)
-    end
-    return out
+    OrderedDict(string(k) => _as_bool(v, false) for (k, v) in x)
 end
+
+_normalize_model_types(types) = _normalize_ordered_dict(get(types, "Type", OrderedDict{String,Any}()))
 
 function _parse_outputs(raw::AbstractDict{String,Any})
     vars = LightOutputVariables(
@@ -208,14 +208,7 @@ function _source_files_from_yaml(path::AbstractString, raw::AbstractDict{String,
 end
 
 function _load_models_from_paths(model_paths::OrderedDict{String,String})
-    out = OrderedDict{String,OrderedDict{String,Any}}()
-    for (group, path) in model_paths
-        raw = _load_yaml_ordered(path)
-        types = get(raw, "Type", nothing)
-        types isa AbstractDict || (types = OrderedDict{String,Any}())
-        out[group] = _normalize_ordered_dict(types)
-    end
-    return out
+    OrderedDict(group => _normalize_model_types(_load_yaml_ordered(path)) for (group, path) in model_paths)
 end
 
 function _load_constants(const_path::Union{Nothing,String})
@@ -225,11 +218,11 @@ function _load_constants(const_path::Union{Nothing,String})
 end
 
 function _config_base_dir(cfg::LightConfig)
-    return cfg.source_files.base_dir
+    cfg.source_files.base_dir
 end
 
 function config_value(cfg::LightConfig, key::String, default=nothing)
-    return get(cfg.general, key, default)
+    get(cfg.general, key, default)
 end
 
 function output_variable_flags(cfg::LightConfig, kind::Symbol)
@@ -260,27 +253,16 @@ function refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
     src.scene = _join_if_relative(src.base_dir, string(src.scene))
     src.meteo = _join_if_relative(src.base_dir, string(src.meteo))
 
-    norm_models = OrderedDict{String,String}()
-    for (group, path) in src.models
-        norm_models[string(group)] = _join_if_relative(src.base_dir, string(path))
-    end
-    src.models = norm_models
-
-    normalized_general = OrderedDict{String,Any}()
-    for (k, v) in cfg.general
-        normalized_general[string(k)] = _normalize_general_value(string(k), v; from_yaml=false)
-    end
-    cfg.general = normalized_general
+    src.models = OrderedDict(string(group) => _join_if_relative(src.base_dir, string(path)) for (group, path) in src.models)
+    cfg.general = OrderedDict(
+        string(k) => _normalize_general_value(string(k), v; from_yaml=false) for (k, v) in cfg.general
+    )
     _normalize_outputs!(cfg)
 
     if reload_models
         cfg.models = _load_models_from_paths(src.models)
     else
-        normalized_models = OrderedDict{String,OrderedDict{String,Any}}()
-        for (group, types) in cfg.models
-            normalized_models[string(group)] = _normalize_ordered_dict(types)
-        end
-        cfg.models = normalized_models
+        cfg.models = OrderedDict(string(group) => _normalize_ordered_dict(types) for (group, types) in cfg.models)
     end
 
     cfg.constants = _normalize_ordered_dict(cfg.constants)
@@ -555,10 +537,7 @@ function _node_object_id(node)
         object_node = parent
     end
     object_id = _node_source_topology_id(object_node)
-    if MultiScaleTreeGraph.scale(object_node) <= 0
-        return -abs(object_id)
-    end
-    return object_id
+    MultiScaleTreeGraph.scale(object_node) <= 0 ? -abs(object_id) : object_id
 end
 
 function _scene_identity_maps!(root)

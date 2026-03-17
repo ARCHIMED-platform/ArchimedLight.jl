@@ -9,8 +9,8 @@ function integrate_light(
     first::FirstOrderResult{T},
     scat::Union{Nothing,ScatteringResult},
     cfg::LightConfig;
-    extra_0_q_per_band=Dict{String,Dict{Int,Float64}}(),
-    extra_q_per_band=Dict{String,Dict{Int,Float64}}(),
+    extra_0_q_per_band=Dict{Symbol,Dict{Int,T}}(),
+    extra_q_per_band=Dict{Symbol,Dict{Int,T}}(),
     step_duration_seconds=1.0,
     component_area_per_node=nothing,
     absorption_par_per_node=nothing,
@@ -89,12 +89,12 @@ function integrate_light(
         ra_nir_q_per_node[nid] = (n0 + ns) * abs_nir * step_duration
     end
 
-    scaled_extra_0_q = Dict{String,Dict{Int,T}}()
+    scaled_extra_0_q = Dict{Symbol,Dict{Int,T}}()
     for (band, vals) in extra_0_q_per_band
         scaled_extra_0_q[band] = Dict{Int,T}(nid => v * step_duration for (nid, v) in vals)
     end
 
-    scaled_extra_q = Dict{String,Dict{Int,T}}()
+    scaled_extra_q = Dict{Symbol,Dict{Int,T}}()
     for (band, vals) in extra_q_per_band
         scaled_extra_q[band] = Dict{Int,T}(nid => v * step_duration for (nid, v) in vals)
     end
@@ -222,73 +222,20 @@ function _combine_sector_responses(
     FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
 end
 
-function _row_number_local(row, name::Symbol, default::Float64=0.0)
-    if name in propertynames(row)
-        v = getproperty(row, name)
-        if v isa Number
-            return Float64(v)
-        elseif v !== missing
-            try
-                return parse(Float64, string(v))
-            catch
-            end
-        end
-    end
-    return default
-end
-
-function _parse_time_or_default_local(v)
-    s = strip(string(v))
-    if isempty(s)
-        return Dates.Time(0)
-    end
-    try
-        Dates.Time(s, Dates.DateFormat("HH:MM:SS"))
-    catch
-        try
-            Dates.Time(s, Dates.DateFormat("HH:MM"))
-        catch
-            Dates.Time(0)
-        end
-    end
-end
+_row_number_local(row, name::Symbol, default::Real=0.0) =
+    hasproperty(row, name) ? _parse_float_or_default(getproperty(row, name), default) : default
 
 function _step_duration_seconds_local(row)
-    names = propertynames(row)
-    if (:step_duration in names)
+    if hasproperty(row, :step_duration)
         return PlantMeteo.positive_duration_seconds(getproperty(row, :step_duration); field_name="step_duration")
     end
-    if (:hour_start in names) && (:hour_end in names)
-        t0 = _parse_time_or_default_local(getproperty(row, :hour_start))
-        t1 = _parse_time_or_default_local(getproperty(row, :hour_end))
-        dt0 = Dates.DateTime(Dates.Date(2000, 1, 1), t0)
-        dt1 = Dates.DateTime(Dates.Date(2000, 1, 1), t1)
-        dt1 < dt0 && (dt1 += Dates.Day(1))
-        dt_seconds = Dates.value(dt1 - dt0) / 1000.0
+    if any(name -> hasproperty(row, name), (:hour_start, :hour, :hour_end, :duration))
+        start_h, end_h = _row_step_hours(row)
+        dt_seconds = (end_h - start_h) * 3600.0
         dt_seconds > 0.0 || error("Invalid meteo timestep: non-positive duration from hour_start/hour_end.")
         return dt_seconds
     end
     return 1.0
-end
-
-function _row_datetime_interval_local(row; index::Int=0)
-    try
-        return PlantMeteo.row_datetime_interval(
-            row;
-            index=index,
-            date_cols=(:date,),
-            start_cols=(:hour_start, :hour),
-            end_cols=(:hour_end,),
-            duration_cols=(:step_duration,),
-            default_date=Dates.Date(2000, 1, 1),
-            default_duration_seconds=1.0,
-            allow_end_rollover=false,
-        )
-    catch err
-        msg = sprint(showerror, err)
-        occursin("end is before start", msg) && error("end is before start at meteo row $(index)")
-        rethrow(err)
-    end
 end
 
 function _cfg_meteo_range_spec_local(cfg::LightConfig)
@@ -414,8 +361,7 @@ end
 
 function _apply_meteo_active_filter_local(rows::Vector{<:NamedTuple})
     isempty(rows) && return rows
-    names = propertynames(first(rows))
-    :active in names || return rows
+    hasproperty(first(rows), :active) || return rows
 
     out = NamedTuple[]
     for row in rows
@@ -515,11 +461,11 @@ function _interception_area_per_node_local(scene::SceneGeometry, cfg::LightConfi
     return area
 end
 
-function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band::String)
+function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band)
     coeffs_by_group_type = _group_optical_coeffs(cfg)
     virtual_groups = _virtual_sensor_groups(cfg)
-    b = uppercase(band)
-    sf_default = _default_scattering_factor_local(cfg, b)
+    b = _band_symbol(band)
+    sf_default = _default_scattering_factor_local(cfg, String(b))
     out = Dict{Int,typeof(sf_default)}()
     _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
     for nid in node_ids
@@ -533,16 +479,16 @@ function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band
         coeffs = get(
             coeffs_by_group_type,
             (group, typ),
-            get(coeffs_by_group_type, (group, "*"), Dict{String,typeof(sf_default)}()),
+            get(coeffs_by_group_type, (group, "*"), OpticalCoefficients(sf_default, sf_default)),
         )
-        sf = get(coeffs, b, sf_default)
+        sf = _band_coeff(coeffs, b)
         out[nid] = clamp(1.0 - sf, 0.0, 1.0)
     end
     out
 end
 
 function _extra_band_irradiance(meteo_row)
-    extras = Dict{String,Float64}()
+    extras = Dict{Symbol,Float64}()
     for p in propertynames(meteo_row)
         s = String(p)
         su = uppercase(s)
@@ -553,7 +499,7 @@ function _extra_band_irradiance(meteo_row)
         isempty(band) && continue
         v = _row_number_local(meteo_row, p, NaN)
         isfinite(v) || continue
-        extras[band] = max(v, 0.0)
+        extras[Symbol(band)] = max(v, 0.0)
     end
     extras
 end
@@ -581,8 +527,8 @@ function _compute_extra_band_light(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     extras_irr = _extra_band_irradiance(meteo_row)
-    extra_0_q = Dict{String,AbstractDict}()
-    extra_q = Dict{String,AbstractDict}()
+    extra_0_q = Dict{Symbol,AbstractDict}()
+    extra_q = Dict{Symbol,AbstractDict}()
 
     isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
 

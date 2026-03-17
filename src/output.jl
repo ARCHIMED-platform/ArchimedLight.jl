@@ -125,60 +125,38 @@ const _OUT_OF_SCOPE_COMPONENT_VARIABLES = union(
     _ENERGY_BALANCE_REQUIRED_COMPONENT_VARIABLES,
 )
 
-function _canonical_component_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_COMPONENT_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+function _canonical_order(names::AbstractVector{String}, reference_order::AbstractVector{String})
+    order_index = Dict(name => index for (index, name) in enumerate(reference_order))
+    sort(unique(names); by=name -> (get(order_index, name, typemax(Int)), name))
 end
 
-function _canonical_scene_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCENE_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+_canonical_component_variable_order(names::AbstractVector{String}) = _canonical_order(names, _COMPONENT_VARIABLE_ORDER)
+_canonical_scene_variable_order(names::AbstractVector{String}) = _canonical_order(names, _SCENE_VARIABLE_ORDER)
+_canonical_sun_position_log_order(names::AbstractVector{String}) = _canonical_order(names, _SUN_POSITION_LOG_ORDER)
+_canonical_scattering_iteration_log_order(names::AbstractVector{String}) = _canonical_order(names, _SCATTERING_ITERATION_LOG_ORDER)
+_canonical_summary_variable_order(names::AbstractVector{String}) = _canonical_order(names, _SUMMARY_VARIABLE_ORDER)
+_canonical_node_links_stats_order(names::AbstractVector{String}) = _canonical_order(names, _NODE_LINKS_STATS_ALLDIRS_ORDER)
+_canonical_node_links_dir_order(names::AbstractVector{String}) = _canonical_order(names, _NODE_LINKS_DIR_ORDER)
+
+_selected_flag_names(flags) = [string(name) for (name, enabled) in flags if _as_bool(enabled, false)]
+
+function _row_namedtuple(columns, values)
+    names = Tuple(Symbol.(collect(columns)))
+    NamedTuple{names}(Tuple(values))
 end
 
-function _canonical_sun_position_log_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUN_POSITION_LOG_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+_table_row(columns::AbstractVector{String}, value_fn) = _row_namedtuple(columns, (value_fn(column) for column in columns))
+_table_row(value_fn, columns::AbstractVector{String}) = _table_row(columns, value_fn)
+
+function _row_get(row::NamedTuple, column::AbstractString, default="NA")
+    name = Symbol(column)
+    hasproperty(row, name) ? getproperty(row, name) : default
 end
 
-function _canonical_scattering_iteration_log_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCATTERING_ITERATION_LOG_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
+Base.getindex(row::NamedTuple, column::AbstractString) = getproperty(row, Symbol(column))
 
-function _canonical_summary_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUMMARY_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_node_links_stats_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_STATS_ALLDIRS_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_node_links_dir_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_DIR_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+function _row_get(row::AbstractDict, column::AbstractString, default="NA")
+    get(row, column, default)
 end
 
 function _default_light_component_variables(cfg::LightConfig)
@@ -218,11 +196,7 @@ function component_variable_names(cfg::LightConfig)
     d = output_variable_flags(cfg, :component)
     isempty(d) && return _default_light_component_variables(cfg)
 
-    vars = String[]
-    for (k, v) in d
-        _as_bool(v, false) || continue
-        push!(vars, string(k))
-    end
+    vars = _selected_flag_names(d)
     cols = isempty(vars) ? _default_light_component_variables(cfg) : _canonical_component_variable_order(vars)
     _require_supported_output_configuration(cfg, cols)
     cols
@@ -238,20 +212,13 @@ function scene_variable_names(cfg::LightConfig)
     d = output_variable_flags(cfg, :scene)
     isempty(d) && return copy(_SCENE_VARIABLE_ORDER)
 
-    vars = String[]
-    for (k, v) in d
-        _as_bool(v, false) || continue
-        push!(vars, string(k))
-    end
+    vars = _selected_flag_names(d)
     isempty(vars) ? copy(_SCENE_VARIABLE_ORDER) : _canonical_scene_variable_order(vars)
 end
 
 function _config_wants_component_outputs(cfg::LightConfig)
     d = output_variable_flags(cfg, :component)
-    for (_, v) in d
-        _as_bool(v, false) && return true
-    end
-    return false
+    any(_as_bool(v, false) for v in values(d))
 end
 
 function _config_debug_enabled(cfg::LightConfig)
@@ -349,7 +316,7 @@ function _write_export_ops_outputs(
             unavailable="NA",
         )
         value_maps = Dict{Symbol,Dict{Int,Any}}(
-            Symbol(var) => Dict{Int,Any}(nid => table.rows[i][var] for (i, nid) in enumerate(meta.node_ids)) for var in vars
+            Symbol(var) => Dict{Int,Any}(nid => _row_get(table.rows[i], var, "NA") for (i, nid) in enumerate(meta.node_ids)) for var in vars
         )
 
         scene_copy = deepcopy(scene.mtg)
@@ -580,8 +547,11 @@ function _ri_value(
         return quantity ? get(step.budget.ri_nir_q_per_node, nid, 0.0) : get(step.budget.ri_nir_f_per_node, nid, 0.0)
     end
 
-    qdict = interception_only ? get(step.budget.extra_0_q_per_band, b, Dict{Int,Float64}()) : get(step.budget.extra_q_per_band, b, Dict{Int,Float64}())
-    q = get(qdict, nid, 0.0)
+    qdict =
+        interception_only ?
+        get(step.budget.extra_0_q_per_band, Symbol(b), nothing) :
+        get(step.budget.extra_q_per_band, Symbol(b), nothing)
+    q = isnothing(qdict) ? 0.0 : get(qdict, nid, 0.0)
     if quantity
         return q
     end
@@ -723,7 +693,7 @@ end
     component_values_table(scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
 Build a component values table represented as `(columns, rows)`.
-`rows` is a vector of dictionaries keyed by column name.
+`rows` is a vector of named tuples keyed by column name.
 """
 function component_values_table(
     scene::SceneGeometry,
@@ -747,16 +717,15 @@ function component_values_table(
     object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
-    rows = Vector{Dict{String,Any}}(undef, length(node_ids))
+    rows = Vector{NamedTuple}(undef, length(node_ids))
     absorptance_cache = Dict{String,Dict{Int,Float64}}()
     group_type_hints = _group_type_hints(cfg)
     sky_fraction_per_node =
         ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg, area_per_node, node_ids) : nothing
 
     for (i, nid) in enumerate(node_ids)
-        row = Dict{String,Any}()
-        for var in cols
-            row[var] = _component_variable_value(
+        rows[i] = _table_row(cols) do var
+            _component_variable_value(
                 scene,
                 step,
                 cfg,
@@ -777,7 +746,6 @@ function component_values_table(
                 strict=strict,
             )
         end
-        rows[i] = row
     end
 
     return (columns=cols, rows=rows)
@@ -789,21 +757,29 @@ function _csv_cell_local(v)
     elseif v isa AbstractString
         return replace(v, ';' => ",")
     end
-    return string(v)
+    return v
 end
 
-function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::Vector{<:AbstractDict}; append::Bool=false)
+function _csv_row_for_write(row::NamedTuple)
+    _row_namedtuple(String.(keys(row)), (_csv_cell_local(value) for value in values(row)))
+end
+
+function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::AbstractVector; append::Bool=false)
     mkpath(dirname(path))
-    mode = append && isfile(path) && filesize(path) > 0 ? "a" : "w"
-    open(path, mode) do io
-        if mode == "w"
-            println(io, join(columns, ';'))
+    write_header = !(append && isfile(path) && filesize(path) > 0)
+    if isempty(rows)
+        open(path, write_header ? "w" : "a") do io
+            write_header && println(io, join(columns, ';'))
         end
-        for row in rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in columns]
-            println(io, join(vals, ';'))
-        end
+        return path
     end
+    CSV.write(
+        path,
+        _csv_row_for_write.(rows);
+        delim=';',
+        append=!write_header,
+        writeheader=write_header,
+    )
     return path
 end
 
@@ -875,7 +851,7 @@ end
 
 function _row_field_string_local(row, sym::Symbol, default::String="NA")
     row === nothing && return default
-    sym in propertynames(row) || return default
+    hasproperty(row, sym) || return default
     v = getproperty(row, sym)
     v === missing && return default
     s = strip(string(v))
@@ -965,7 +941,7 @@ end
     scene_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
 Build a scene values table represented as `(columns, rows)`.
-`rows` is a vector of dictionaries keyed by column name.
+`rows` is a vector of named tuples keyed by column name.
 """
 function scene_values_table(
     scene::SceneGeometry,
@@ -981,7 +957,7 @@ function scene_values_table(
     rows_in = meteo_rows === nothing ? fill(nothing, n) : collect(meteo_rows)
     length(rows_in) == n || error("scene_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? scene_variable_names(cfg) : String.(columns)
-    rows = Vector{Dict{String,Any}}(undef, n)
+    rows = Vector{NamedTuple}(undef, n)
     plot_area = _scene_plot_area(scene, cfg)
 
     for i in 1:n
@@ -989,9 +965,8 @@ function scene_values_table(
         row = rows_in[i]
         step_no = start_step_number + i - 1
         dt = _step_duration_output_local(row, nothing)
-        out = Dict{String,Any}()
-        for var in cols
-            out[var] = _scene_variable_value(
+        rows[i] = _table_row(cols) do var
+            _scene_variable_value(
                 scene,
                 step,
                 cfg,
@@ -1004,7 +979,6 @@ function scene_values_table(
                 strict=strict,
             )
         end
-        rows[i] = out
     end
     return (columns=cols, rows=rows)
 end
@@ -1035,15 +1009,7 @@ function write_scene_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, unavailable)) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
@@ -1061,30 +1027,28 @@ function sun_position_log_table(
     rows_in = collect(meteo_rows)
     length(rows_in) == length(steps) || error("sun_position_log_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUN_POSITION_LOG_ORDER) : _canonical_sun_position_log_order(String.(columns))
-    rows = Vector{Dict{String,Any}}(undef, length(steps))
+    rows = Vector{NamedTuple}(undef, length(steps))
     for i in eachindex(steps)
         vals = _sun_position_log_values(rows_in[i], steps[i].sky)
-        row = Dict{String,Any}()
-        for c in cols
+        rows[i] = _table_row(cols) do c
             if c == "stepNumber"
-                row[c] = start_step_number + i - 1
+                start_step_number + i - 1
             elseif c == "stepStart"
-                row[c] = vals.stepStart
+                vals.stepStart
             elseif c == "stepEnd"
-                row[c] = vals.stepEnd
+                vals.stepEnd
             elseif c == "azimuthHalf"
-                row[c] = vals.azimuthHalf
+                vals.azimuthHalf
             elseif c == "elevationHalf"
-                row[c] = vals.elevationHalf
+                vals.elevationHalf
             elseif c == "azimuthWeighted"
-                row[c] = vals.azimuthWeighted
+                vals.azimuthWeighted
             elseif c == "elevationWeighted"
-                row[c] = vals.elevationWeighted
+                vals.elevationWeighted
             else
-                row[c] = "NA"
+                "NA"
             end
         end
-        rows[i] = row
     end
     return (columns=cols, rows=rows)
 end
@@ -1102,28 +1066,20 @@ function write_sun_position_log_csv(
     columns::Union{Nothing,AbstractVector}=nothing,
 )
     table = sun_position_log_table(steps, meteo_rows; start_step_number=start_step_number, columns=columns)
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 function _scattering_iteration_history_one_band(
     graph::ScatteringTransferGraph,
     initial_power_per_node::Dict{Int,Float64},
     cfg::LightConfig,
-    band_key::String,
+    band,
     default_coeff::Float64,
 )
     node_ids = graph.node_ids
     pair_counts = graph.pair_counts
     all_hits = graph.all_hits
-    coeff_by_node = _coeff_by_node(graph, band_key, default_coeff)
+    coeff_by_node = _coeff_by_node(graph, band, default_coeff)
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     ref = _sum_dict_values(current)
     thr = get(cfg.general, "scattering_stop_ratio", 0.01) * max(ref, eps(Float64))
@@ -1174,10 +1130,10 @@ function scattering_iteration_log_table(
     columns::Union{Nothing,AbstractVector}=nothing,
 )
     cols = columns === nothing ? copy(_SCATTERING_ITERATION_LOG_ORDER) : _canonical_scattering_iteration_log_order(String.(columns))
-    b = uppercase(String(band))
+    b = _band_symbol(band)
     graph = build_scattering_transfer_graph(scene, step.turtle, step.first_order, cfg; mode=mode, backend=backend)
     initial =
-        if b == "NIR"
+        if b === :NIR
             Dict{Int,Float64}(nid => get(step.first_order.incident_nir_power_per_node, nid, 0.0) for nid in graph.node_ids)
         else
             Dict{Int,Float64}(nid => get(step.first_order.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
@@ -1188,25 +1144,23 @@ function scattering_iteration_log_table(
     w_to_mj = dt / 1e6
     id_meta = _output_identity_metadata(scene, cfg)
     node_ids = id_meta.node_ids
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for (it, vals) in enumerate(per_iter)
         iter_idx = it - 1
         for nid in node_ids
-            row = Dict{String,Any}()
-            for c in cols
+            push!(rows, _table_row(cols) do c
                 if c == "step"
-                    row[c] = step_number
+                    step_number
                 elseif c == "node_id"
-                    row[c] = nid
+                    nid
                 elseif c == "iter"
-                    row[c] = iter_idx
+                    iter_idx
                 elseif c == "scat"
-                    row[c] = get(vals, nid, 0.0) * w_to_mj
+                    get(vals, nid, 0.0) * w_to_mj
                 else
-                    row[c] = "NA"
+                    "NA"
                 end
-            end
-            push!(rows, row)
+            end)
         end
     end
     return (columns=cols, rows=rows)
@@ -1240,15 +1194,7 @@ function write_scattering_iteration_log_csv(
         backend=backend,
         columns=columns,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
@@ -1287,21 +1233,19 @@ function node_links_stats_alldirs_table(
     end
 
     node_ids = sort(collect(keys(neighbours_by_node)))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for nid in node_ids
-        row = Dict{String,Any}()
-        for c in cols
+        push!(rows, _table_row(cols) do c
             if c == "node_id"
-                row[c] = nid
+                nid
             elseif c == "links"
-                row[c] = length(get(neighbours_by_node, nid, Set{Int}()))
+                length(get(neighbours_by_node, nid, Set{Int}()))
             elseif c == "hits"
-                row[c] = get(hits_by_node, nid, 0)
+                get(hits_by_node, nid, 0)
             else
-                row[c] = "NA"
+                "NA"
             end
-        end
-        push!(rows, row)
+        end)
     end
     return (columns=cols, rows=rows)
 end
@@ -1354,23 +1298,21 @@ function node_links_dir_table(
     end
 
     keys_sorted = sort(collect(keys(counts)))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for (n1, n2) in keys_sorted
-        row = Dict{String,Any}()
-        for c in cols
+        push!(rows, _table_row(cols) do c
             if c == "dir"
-                row[c] = direction_index
+                direction_index
             elseif c == "node_id1"
-                row[c] = n1
+                n1
             elseif c == "node_id2"
-                row[c] = n2
+                n2
             elseif c == "n"
-                row[c] = get(counts, (n1, n2), 0)
+                get(counts, (n1, n2), 0)
             else
-                row[c] = "NA"
+                "NA"
             end
-        end
-        push!(rows, row)
+        end)
     end
     return (columns=cols, rows=rows)
 end
@@ -1410,7 +1352,7 @@ function summary_values_table(
     rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
     length(rows_in) == length(steps) || error("summary_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUMMARY_VARIABLE_ORDER) : _canonical_summary_variable_order(String.(columns))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     meta = _output_node_metadata(scene, cfg)
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
@@ -1437,27 +1379,25 @@ function summary_values_table(
         keys_sorted = sort(collect(keys(acc)); by=k -> (k[1], k[2], k[3]))
         for k in keys_sorted
             area, ri_q = acc[k]
-            row = Dict{String,Any}()
-            for c in cols
+            push!(rows, _table_row(cols) do c
                 if c == "step_number"
-                    row[c] = step_no
+                    step_no
                 elseif c == "step_duration"
-                    row[c] = dt
+                    dt
                 elseif c == "object_id"
-                    row[c] = k[1]
+                    k[1]
                 elseif c == "group"
-                    row[c] = k[2]
+                    k[2]
                 elseif c == "type"
-                    row[c] = k[3]
+                    k[3]
                 elseif c == "area"
-                    row[c] = area
+                    area
                 elseif c == "Ri_q"
-                    row[c] = ri_q
+                    ri_q
                 else
-                    row[c] = unavailable
+                    unavailable
                 end
-            end
-            push!(rows, row)
+            end)
         end
     end
     return (columns=cols, rows=rows)
@@ -1655,13 +1595,5 @@ function write_component_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, unavailable)) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    _write_csv_rows(path, table.columns, table.rows; append=false)
 end
