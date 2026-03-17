@@ -95,7 +95,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
         source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, get(spec, :item_id, source_topology_id_per_node[i])))
+        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
         node_group[i] = String(get(spec, :group, "plate"))
         node_type[i] = String(get(spec, :type, "plate"))
     end
@@ -158,7 +158,7 @@ end
         if _synthetic_case_enabled("single_plate_direct")
             @testset "Scenario: single 1 m² plate under zenith direct PAR" begin
                 inputs = (
-                    scene=[(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1)],
+                    scene=[(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
                     cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
                 )
@@ -185,8 +185,8 @@ end
             @testset "Scenario: two aligned plates, lower receives only scattered PAR" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", item_id=1),
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
                     cfg_no_scat=(; sectors=6, all_in_turtle=false, scattering=false, pixel_size=0.01),
@@ -222,8 +222,8 @@ end
             @testset "Scenario: upper half-plate shadows half of lower plate" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", item_id=1),
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", item_id=2),
+                        (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", object_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
                     cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
@@ -262,7 +262,7 @@ end
                         p4=(0.0, c, s),
                         group="tilted",
                         type="plate",
-                        item_id=1,
+                        object_id=1,
                     )],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
                     cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
@@ -286,8 +286,8 @@ end
             @testset "Scenario: oblique sun shadow with lateral offset plates" begin
                 inputs = (
                     scene=[
-                        (x0=1.0, x1=2.0, y0=0.0, y1=1.0, z=1.0, group="upper_offset", type="plate", item_id=1),
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+                        (x0=1.0, x1=2.0, y0=0.0, y1=1.0, z=1.0, group="upper_offset", type="plate", object_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
                     ],
                     sky_shadow=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
                     sky_clear=ArchimedLight.SkyState(0.0, 45.0, 100.0, 0.0, 1.0, 0.0),
@@ -315,7 +315,7 @@ end
             @testset "Scenario: toricity wraps edge-crossing plate across plot border" begin
                 inputs = (
                     scene=[
-                        (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", item_id=1),
+                        (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
                     ],
                     sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
                     cfg_notoric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false),
@@ -354,8 +354,8 @@ end
             @testset "Scenario: toricity lets a border-adjacent upper plate shadow across the plot edge" begin
                 inputs = (
                     scene=[
-                        (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", item_id=1),
-                        (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+                        (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
+                        (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
                     cfg_notoric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false),
@@ -410,8 +410,8 @@ end
             @testset "Scenario: toricity changes diffuse sky interception across the plot edge" begin
                 inputs = (
                     scene=[
-                        (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", item_id=1),
-                        (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+                        (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
+                        (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 0.0, 1.0),
                     cfg_notoric=(; sectors=16, all_in_turtle=true, scattering=false, pixel_size=0.01, toricity=false),
@@ -451,8 +451,8 @@ end
             @testset "Scenario: toricity creates a wrapped scattering source across the plot edge" begin
                 inputs = (
                     scene=[
-                        (x0=0.8, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", item_id=1),
-                        (x0=0.0, x1=0.8, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", item_id=2),
+                        (x0=0.8, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
+                        (x0=0.0, x1=0.8, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
                     cfg_notoric=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false),
@@ -511,8 +511,8 @@ end
             @testset "Scenario: virtual sensor receives light without blocking lower plate" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensors", type="pave", item_id=1),
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensors", type="pave", object_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
                     ],
                     sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
                     cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
@@ -554,7 +554,7 @@ end
             @testset "Scenario: single 1 m² plate with explicit absorptance" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="absorber", type="plate", item_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="absorber", type="plate", object_id=1),
                     ],
                     meteo=_synthetic_meteo_row(; duration_seconds=2.0, ri_par_f=100.0, ri_nir_f=80.0, direct_fraction=1.0),
                     model_yaml="""
@@ -601,8 +601,8 @@ end
             @testset "Scenario: two 1 m² plates, upper blocks direct light" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", item_id=1),
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
                     ],
                     meteo=_synthetic_meteo_row(; duration_seconds=2.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
                     model_yaml="""
@@ -674,7 +674,7 @@ end
             @testset "Scenario: repeated simple meteo rows with and without radiation cache" begin
                 inputs = (
                     scene=[
-                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1),
+                        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
                     ],
                     meteo_rows=[
                         _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),

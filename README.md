@@ -66,7 +66,7 @@ sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 - Run with:
 
 ```bash
-julia --project=test example/full_featured_example.jl
+julia --project=. example_1/full_featured_example.jl
 ```
 
 ## Stage flexibility

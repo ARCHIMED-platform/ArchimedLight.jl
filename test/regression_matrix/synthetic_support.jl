@@ -92,7 +92,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
         source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, get(spec, :item_id, source_topology_id_per_node[i])))
+        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
         node_group[i] = String(get(spec, :group, "plate"))
         node_type[i] = String(get(spec, :type, "plate"))
     end
