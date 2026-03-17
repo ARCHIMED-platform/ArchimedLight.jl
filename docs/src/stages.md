@@ -31,22 +31,22 @@ series = run_light_series(scene, meteo, cfg)
 # Optional backend kwargs:
 step = run_light_step(scene, row, cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
 
-# Optional Java-style component output export:
+# Optional component output export:
 write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=row, step_number=0)
 
-# Optional Java-style scene output export (for a series):
+# Optional scene output export (for a series):
 write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
 
-# Optional Java-style logs:
+# Optional logs:
 write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
 write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=row, band="PAR")
 write_node_links_stats_alldirs_csv("output/log-nodelinks-stats-alldirs.csv", scene, turtle, cfg)
 write_node_links_dir_csv("output/log-nodelinks-dir00.csv", scene, turtle, cfg; direction_index=0)
 
-# High-level Java-style output writer (config-driven defaults, overridable):
+# High-level output writer (config-driven defaults, overridable):
 write_light_outputs(scene, series, cfg; meteo_rows=meteo.rows, outdir="output")
 
-# Java-style simulation directory resolution:
+# Simulation directory resolution:
 sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 ```
 
