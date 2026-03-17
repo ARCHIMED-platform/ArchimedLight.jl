@@ -24,8 +24,9 @@ write_summary: true      # If true export the simulation summary in a csv file
 component_variables: &outvars
   step_number: true    # Index of the step
   step_duration: true  # Step duration in seconds
-  item_id: true        # Item id (as given as plant_id in the OPS)
-  component_id: true   # Component unique ID in the item (as read in the OPF)
+  node_id: true
+  source_topology_id: true # Original topology id imported from the source scene
+  object_id: true      # Higher-level object/entity id used for grouping components
   group: true          # Functional group (as given by the Group field in the plant.yml file)
   type: true           # Component type (as given by the Type names in the plant.yml files)
   area: true

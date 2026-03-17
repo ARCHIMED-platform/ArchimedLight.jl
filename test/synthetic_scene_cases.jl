@@ -45,8 +45,6 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
             p2=(spec.x1, spec.y0, spec.z),
             p3=(spec.x1, spec.y1, spec.z),
             p4=(spec.x0, spec.y1, spec.z),
-            item_id=get(spec, :item_id, 1),
-            component_id=get(spec, :component_id, 1),
             group=get(spec, :group, "plate"),
             type=get(spec, :type, "plate"),
         )
@@ -60,10 +58,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     face2node = Int[]
     total_area_per_node = Dict{Int,Float64}()
     barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
     node_group = Dict{Int,String}()
     node_type = Dict{Int,String}()
-    java_item_id_per_node = Dict{Int,Int}()
-    java_component_id_per_node = Dict{Int,Int}()
 
     xs = Float64[]
     ys = Float64[]
@@ -96,10 +94,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
+        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
+        object_id_per_node[i] = Int(get(spec, :object_id, get(spec, :item_id, source_topology_id_per_node[i])))
         node_group[i] = String(get(spec, :group, "plate"))
         node_type[i] = String(get(spec, :type, "plate"))
-        java_item_id_per_node[i] = Int(get(spec, :item_id, i))
-        java_component_id_per_node[i] = Int(get(spec, :component_id, 1))
     end
 
     ArchimedLight.SceneGeometry(
@@ -108,10 +106,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         face2node,
         total_area_per_node,
         barycenter_per_node,
+        source_topology_id_per_node,
+        object_id_per_node,
         node_group,
         node_type,
-        java_item_id_per_node,
-        java_component_id_per_node,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -656,18 +654,18 @@ end
                         meteo_row=inputs.meteo,
                         step_number=1,
                         step_duration_seconds=2.0,
-                        columns=["item_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
+                        columns=["node_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
                     ).rows
-                    row_by_item = Dict(Int(r["item_id"]) => r for r in rows)
+                    row_by_node = Dict(Int(r["node_id"]) => r for r in rows)
 
-                    @test isapprox(Float64(row_by_item[1]["Ri_PAR_0_q"]), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-                    @test isapprox(Float64(row_by_item[1]["Ri_NIR_0_q"]), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                    @test isapprox(Float64(row_by_item[1]["Ra_PAR_0_q"]), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
-                    @test isapprox(Float64(row_by_item[1]["Ra_NIR_0_q"]), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                    @test isapprox(Float64(row_by_item[2]["Ri_PAR_0_q"]), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
-                    @test isapprox(Float64(row_by_item[2]["Ri_NIR_0_q"]), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
-                    @test isapprox(Float64(row_by_item[2]["Ra_PAR_0_q"]), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
-                    @test isapprox(Float64(row_by_item[2]["Ra_NIR_0_q"]), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
+                    @test isapprox(Float64(row_by_node[1]["Ri_PAR_0_q"]), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+                    @test isapprox(Float64(row_by_node[1]["Ri_NIR_0_q"]), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
+                    @test isapprox(Float64(row_by_node[1]["Ra_PAR_0_q"]), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
+                    @test isapprox(Float64(row_by_node[1]["Ra_NIR_0_q"]), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
+                    @test isapprox(Float64(row_by_node[2]["Ri_PAR_0_q"]), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
+                    @test isapprox(Float64(row_by_node[2]["Ri_NIR_0_q"]), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
+                    @test isapprox(Float64(row_by_node[2]["Ra_PAR_0_q"]), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
+                    @test isapprox(Float64(row_by_node[2]["Ra_NIR_0_q"]), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
                 end
             end
         end

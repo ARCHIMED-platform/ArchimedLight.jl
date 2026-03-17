@@ -42,8 +42,6 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
             p2=(spec.x1, spec.y0, spec.z),
             p3=(spec.x1, spec.y1, spec.z),
             p4=(spec.x0, spec.y1, spec.z),
-            item_id=get(spec, :item_id, 1),
-            component_id=get(spec, :component_id, 1),
             group=get(spec, :group, "plate"),
             type=get(spec, :type, "plate"),
         )
@@ -57,10 +55,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     face2node = Int[]
     total_area_per_node = Dict{Int,Float64}()
     barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
     node_group = Dict{Int,String}()
     node_type = Dict{Int,String}()
-    java_item_id_per_node = Dict{Int,Int}()
-    java_component_id_per_node = Dict{Int,Int}()
 
     xs = Float64[]
     ys = Float64[]
@@ -93,10 +91,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
+        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
+        object_id_per_node[i] = Int(get(spec, :object_id, get(spec, :item_id, source_topology_id_per_node[i])))
         node_group[i] = String(get(spec, :group, "plate"))
         node_type[i] = String(get(spec, :type, "plate"))
-        java_item_id_per_node[i] = Int(get(spec, :item_id, i))
-        java_component_id_per_node[i] = Int(get(spec, :component_id, 1))
     end
 
     ArchimedLight.SceneGeometry(
@@ -105,10 +103,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         face2node,
         total_area_per_node,
         barycenter_per_node,
+        source_topology_id_per_node,
+        object_id_per_node,
         node_group,
         node_type,
-        java_item_id_per_node,
-        java_component_id_per_node,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -149,8 +147,8 @@ function _max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
     maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
 end
 
-function _component_row_by_item(rows)
-    Dict(Int(r.item_id) => r for r in rows)
+function _component_row_by_node(rows)
+    Dict(Int(r.node_id) => r for r in rows)
 end
 
 function _synthetic_step_rows(scene, step, cfg, meteo_row)
@@ -162,8 +160,7 @@ function _synthetic_step_rows(scene, step, cfg, meteo_row)
         step_number=0,
         columns=[
             "step_number",
-            "item_id",
-            "component_id",
+            "node_id",
             "area",
             "Ri_PAR_0_q",
             "Ri_NIR_0_q",

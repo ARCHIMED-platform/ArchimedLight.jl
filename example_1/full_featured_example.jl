@@ -42,10 +42,11 @@ end
 
 function read_java_component_values(path::String)
     rows = collect(CSV.File(path; delim=';'))
-    d = Dict{Tuple{Int,Int},NamedTuple}()
+    d = Dict{Int,NamedTuple}()
     for r in rows
-        key = (to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id)))
         names = propertynames(r)
+        :node_id in names || error("Java comparison expects a node_id column.")
+        key = to_int(getproperty(r, :node_id))
         d[key] = (
             area=(:area in names ? to_float(getproperty(r, :area)) : NaN),
             Ri_PAR_0_q=(:Ri_PAR_0_q in names ? to_float(getproperty(r, :Ri_PAR_0_q)) : NaN),
@@ -58,13 +59,12 @@ function read_java_component_values(path::String)
 end
 
 function build_julia_component_values(scene, cfg, step)
-    key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
     area_by_node = node_area_from_interception_geometry(scene, cfg)
     custom0 = get(step.budget.extra_0_q_per_band, "CUSTOM", Dict{Int,Float64}())
     customn = get(step.budget.extra_q_per_band, "CUSTOM", Dict{Int,Float64}())
-    d = Dict{Tuple{Int,Int},NamedTuple}()
-    for (nid, key) in key_by_node
-        d[key] = (
+    d = Dict{Int,NamedTuple}()
+    for nid in keys(area_by_node)
+        d[nid] = (
             area=get(area_by_node, nid, NaN),
             Ri_PAR_0_q=get(step.budget.ri_par_0_q_per_node, nid, NaN),
             Ri_PAR_q=get(step.budget.ri_par_q_per_node, nid, NaN),
@@ -85,7 +85,7 @@ function write_component_comparison(out_csv::String, java_vals, julia_vals)
 
     mkpath(dirname(out_csv))
     open(out_csv, "w") do io
-        println(io, "item_id;component_id;java_area;julia_area;java_Ri_PAR_0_q;julia_Ri_PAR_0_q;java_Ri_PAR_q;julia_Ri_PAR_q;java_Ri_custom_0_q;julia_Ri_custom_0_q;java_Ri_custom_q;julia_Ri_custom_q;absdiff_Ri_PAR_q;reldiff_Ri_PAR_q")
+        println(io, "node_id;java_area;julia_area;java_Ri_PAR_0_q;julia_Ri_PAR_0_q;java_Ri_PAR_q;julia_Ri_PAR_q;java_Ri_custom_0_q;julia_Ri_custom_0_q;java_Ri_custom_q;julia_Ri_custom_q;absdiff_Ri_PAR_q;reldiff_Ri_PAR_q")
         for key in keys_common
             jv = java_vals[key]
             lv = julia_vals[key]
@@ -94,7 +94,7 @@ function write_component_comparison(out_csv::String, java_vals, julia_vals)
             println(
                 io,
                 string(
-                    key[1], ";", key[2], ";",
+                    key, ";",
                     jv.area, ";", lv.area, ";",
                     jv.Ri_PAR_0_q, ";", lv.Ri_PAR_0_q, ";",
                     jv.Ri_PAR_q, ";", lv.Ri_PAR_q, ";",
@@ -145,8 +145,8 @@ function main()
     base = @__DIR__
 
     cfg = read_light_config(joinpath(base, "config.yml"))
-    scene = read_scene(cfg.scene)
-    meteo = read_meteo(cfg.meteo)
+    scene = read_scene(cfg.source_files.scene)
+    meteo = read_meteo(cfg.source_files.meteo)
     row = first(meteo.rows)
 
     # Stage-by-stage execution with explicit backend objects.
@@ -206,15 +206,13 @@ function main()
     println("- series steps: ", length(series))
 
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
-    par_q_by_component = Dict{Int,Float64}()
+    par_q_by_node = Dict{Int,Float64}()
     for (nid, q) in step.budget.ri_par_q_per_node
-        comp_id = get(scene.java_component_id_per_node, nid, nothing)
-        comp_id === nothing && continue
-        par_q_by_component[Int(comp_id)] = Float64(q)
+        par_q_by_node[nid] = Float64(q)
     end
     traverse!(scene.mtg) do node
-        comp_id = Int(node_id(node)) + 1
-        node[:Ri_PAR_q] = get(par_q_by_component, comp_id, nothing)
+        nid = Int(node_id(node))
+        node[:Ri_PAR_q] = get(par_q_by_node, nid, nothing)
     end
 
     # 3D visualization using PlantGeom + CairoMakie, colored by intercepted PAR.
@@ -245,14 +243,13 @@ function main()
         end
 
         # Map Java Ri_PAR_q on MTG nodes and render a second comparison figure.
-        java_par_by_component = Dict{Int,Float64}()
-        for ((item_id, component_id), vals) in java_vals
-            item_id == 1 || continue
-            java_par_by_component[component_id] = vals.Ri_PAR_q
+        java_par_by_node = Dict{Int,Float64}()
+        for (nid, vals) in java_vals
+            java_par_by_node[nid] = vals.Ri_PAR_q
         end
         traverse!(scene.mtg) do node
-            comp_id = Int(node_id(node)) + 1
-            node[:Ri_PAR_q_java] = get(java_par_by_component, comp_id, nothing)
+            nid = Int(node_id(node))
+            node[:Ri_PAR_q_java] = get(java_par_by_node, nid, nothing)
         end
         fig_java, _, p_java = plantviz(scene.mtg, color=:Ri_PAR_q_java)
         PlantGeom.colorbar(fig_java[1, 2], p_java)

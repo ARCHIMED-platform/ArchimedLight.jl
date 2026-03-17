@@ -111,9 +111,9 @@ function _row_step_hours(meteo_row)
     return start_h, end_h
 end
 
-_java_doy_angle(doy::Int) = 2pi * doy / 365.0
+_day_angle(doy::Int) = 2pi * doy / 365.0
 
-function _java_declination(doy::Int)
+function _solar_declination(doy::Int)
     asin(
         sin(deg2rad(-23.44)) *
         cos(
@@ -123,42 +123,41 @@ function _java_declination(doy::Int)
     )
 end
 
-function _java_equation_of_time(doy::Int)
+function _equation_of_time_hours(doy::Int)
     b = 2pi * (doy - 81) / 365.0
     (0.1645 * sin(2b)) - (0.1255 * cos(b)) - (0.025 * sin(b))
 end
 
-function _java_corr_factor(doy::Int)
-    a = _java_doy_angle(doy)
+function _orbital_correction(doy::Int)
+    a = _day_angle(doy)
     1.000110 + 0.034221 * cos(a) + 0.001280 * sin(a) + 0.000719 * cos(2a) + 0.000077 * sin(2a)
 end
 
-function _java_sunset_hour_angle(latitude_rad::Float64, declination_rad::Float64)
-    # NOTE: Keep Java 2018 precedence exactly for parity:
+function _sunset_hour_angle(latitude_rad::Float64, declination_rad::Float64)
+    # Keep the current sunrise/sunset convention stable:
     #   (a / cos(lat)) * cos(decl)
-    # even though the physically common form is a / (cos(lat)*cos(decl)).
     x =
         ((sin(_CENTER_OF_SOLAR_DISK_RAD) - sin(latitude_rad) * sin(declination_rad)) /
          cos(latitude_rad)) * cos(declination_rad)
     acos(clamp(x, -1.0, 1.0))
 end
 
-_java_hour_angle(decimal_hour::Float64) = (pi / 12.0) * (decimal_hour - 12.0)
+_hour_angle(decimal_hour::Float64) = (pi / 12.0) * (decimal_hour - 12.0)
 
-function _java_extra_terrestrial_hourly_mj(latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
-    sc = _java_equation_of_time(doy)
-    h1 = _java_hour_angle(start_hour + sc)
-    h2 = _java_hour_angle(end_hour + sc)
+function _extra_terrestrial_hourly_mj(latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
+    sc = _equation_of_time_hours(doy)
+    h1 = _hour_angle(start_hour + sc)
+    h2 = _hour_angle(end_hour + sc)
 
-    decl = _java_declination(doy)
-    sunset = _java_sunset_hour_angle(latitude_rad, decl)
+    decl = _solar_declination(doy)
+    sunset = _sunset_hour_angle(latitude_rad, decl)
 
     rise = max(h1, -sunset)
     set = min(h2, sunset)
     solar_time_angle = set - rise
     solar_time_angle <= 0.0 && return 0.0
 
-    corr = _java_corr_factor(doy)
+    corr = _orbital_correction(doy)
     ((12 * 60) / pi) * _SOLAR_CONSTANT_MJ_M2_MIN * corr *
     (
         cos(latitude_rad) * cos(decl) * (sin(set) - sin(rise)) +
@@ -174,12 +173,12 @@ function _mega_joules_to_watts(mj::Float64, duration_hours::Float64)
 end
 
 function _global_wm2_from_clearness(clearness::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
-    et_mj = _java_extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
+    et_mj = _extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
     _mega_joules_to_watts(clearness * et_mj, end_hour - start_hour)
 end
 
 function _clearness_from_global_wm2(global_wm2::Float64, latitude_rad::Float64, doy::Int, start_hour::Float64, end_hour::Float64)
-    et_mj = _java_extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
+    et_mj = _extra_terrestrial_hourly_mj(latitude_rad, doy, start_hour, end_hour)
     if et_mj > 0.0
         global_mj = _watt_to_mj(global_wm2, end_hour - start_hour)
         return global_mj / et_mj
@@ -187,12 +186,12 @@ function _clearness_from_global_wm2(global_wm2::Float64, latitude_rad::Float64, 
     return 0.5
 end
 
-function _java_sun_position_deg(doy::Int, latitude_rad::Float64, decimal_hour::Float64)
-    hour_angle = deg2rad((decimal_hour + _java_equation_of_time(doy) - 12) * 15)
+function _sun_position_deg(doy::Int, latitude_rad::Float64, decimal_hour::Float64)
+    hour_angle = deg2rad((decimal_hour + _equation_of_time_hours(doy) - 12) * 15)
     cos_ha = cos(hour_angle)
     cos_lat = cos(latitude_rad)
     sin_lat = sin(latitude_rad)
-    decl = _java_declination(doy)
+    decl = _solar_declination(doy)
     cos_decl = cos(decl)
     sin_decl = sin(decl)
 
@@ -307,14 +306,14 @@ function _validate_meteo_radiation_inputs(use_tokens::AbstractVector{<:AbstractS
     all_keys = (key_cl, keys_set2...)
     uses_rel = [u for u in use_tokens if u in all_keys]
 
-    # Java check for RI_SW_f/RI_PAR_f/RI_NIR_f triplet consistency.
+    # Validate consistency of the RI_SW_f/RI_PAR_f/RI_NIR_f triplet.
     if has_sw && has_par && has_nir
         k = count(u -> u in keys_set2, uses_rel)
         k == 0 && error("meteo consistency error: missing 'use' line with RI_SW_f/RI_PAR_f/RI_NIR_f columns")
         k == 1 || error("meteo consistency error: extra use(s) with RI_SW_f/RI_PAR_f/RI_NIR_f columns")
     end
 
-    # Java checkConsistency(set1=clearness, set2=[RI_SW_f, RI_PAR_f, RI_NIR_f], allowDoubleUse=true)
+    # Allow clearness and irradiance inputs to coexist.
     has_any = has_cl || has_sw || has_par || has_nir
     has_any || error("meteo consistency error: missing column clearness/RI_SW_f/RI_PAR_f/RI_NIR_f")
 
@@ -367,11 +366,11 @@ function _cfg_radiation_timestep_hours(cfg::LightConfig)
     mins / 60.0
 end
 
-function _java_sunrise_sunset_hours(latitude_rad::Float64, doy::Int)
-    decl = _java_declination(doy)
-    hour_angle = _java_sunset_hour_angle(latitude_rad, decl)
+function _sunrise_sunset_hours(latitude_rad::Float64, doy::Int)
+    decl = _solar_declination(doy)
+    hour_angle = _sunset_hour_angle(latitude_rad, decl)
     ut = hour_angle / deg2rad(15.0)
-    tst = _java_equation_of_time(doy)
+    tst = _equation_of_time_hours(doy)
     rise = 12.0 - tst - ut
     set = 12.0 - tst + ut
     return rise, set
@@ -395,7 +394,7 @@ function _az_el_from_direction_deg(x::Float64, y::Float64, z::Float64)
     return rad2deg(az), rad2deg(asin(clamp(zn, -1.0, 1.0)))
 end
 
-function _java_substeps_v2(date::Dates.Date, start_h::Float64, end_h::Float64, timestep_h::Float64, latitude_rad::Float64)
+function _solar_substeps(date::Dates.Date, start_h::Float64, end_h::Float64, timestep_h::Float64, latitude_rad::Float64)
     timestep_h = max(timestep_h, 1e-6)
     end_h < start_h && (end_h += 24.0)
 
@@ -410,7 +409,7 @@ function _java_substeps_v2(date::Dates.Date, start_h::Float64, end_h::Float64, t
 
         d = date + Dates.Day(day_off)
         doy = Dates.dayofyear(d)
-        rise, set = _java_sunrise_sunset_hours(latitude_rad, doy)
+        rise, set = _sunrise_sunset_hours(latitude_rad, doy)
 
         local_start = seg_abs_start - day_abs0
         local_end = seg_abs_end - day_abs0
@@ -437,7 +436,7 @@ function _midpoint_sun_position_deg(date::Dates.Date, start_h::Float64, end_h::F
     day_off = floor(Int, mid / 24.0)
     doy = Dates.dayofyear(date + Dates.Day(day_off))
     local_mid = mid - 24.0 * day_off
-    _java_sun_position_deg(doy, latitude_rad, local_mid)
+    _sun_position_deg(doy, latitude_rad, local_mid)
 end
 
 function _radiation_substeps(
@@ -451,7 +450,7 @@ function _radiation_substeps(
     global_from_input::Bool,
     clearness_provided::Bool,
 )
-    substeps = _java_substeps_v2(date, start_h, end_h, timestep_h, latitude_rad)
+    substeps = _solar_substeps(date, start_h, end_h, timestep_h, latitude_rad)
     rows = NamedTuple[]
 
     for ss in substeps
@@ -471,7 +470,7 @@ function _radiation_substeps(
                 _clearness_from_global_wm2(global_w, latitude_rad, ss.doy, ss.start, ss.stop)
             end
 
-        sun_az_sub, sun_el_sub = _java_sun_position_deg(ss.doy, latitude_rad, ss.sun_pos)
+        sun_az_sub, sun_el_sub = _sun_position_deg(ss.doy, latitude_rad, ss.sun_pos)
         diffuse_w, direct_w = _partition_global_hourly(global_w, clearness_sub, deg2rad(sun_el_sub))
 
         push!(
@@ -560,7 +559,7 @@ end
     compute_sky(meteo_row, cfg)::SkyState
 
 Compute sun position, PAR/NIR/SW irradiance, and direct/diffuse partition for one meteo row,
-following Java-compatible precedence rules for available meteorological inputs.
+following the package precedence rules for available meteorological inputs.
 """
 function compute_sky(meteo_row, cfg::LightConfig)
     ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
@@ -639,14 +638,14 @@ function compute_sky(meteo_row, cfg::LightConfig)
         ri_nir = _SOLAR_TO_NIR * ri_sw
     elseif isnan(ri_par)
         if ri_sw_known
-            # Java ClearnessGlobalRelation computes PAR from global before trying NIR.
+            # Derive PAR from global flux before falling back to NIR.
             ri_par = _SOLAR_TO_PAR * ri_sw
         else
             ri_par = (ri_nir / _SOLAR_TO_NIR) * _SOLAR_TO_PAR
         end
     elseif isnan(ri_nir)
         if ri_sw_known
-            # Java ClearnessGlobalRelation computes NIR from global before trying PAR.
+            # Derive NIR from global flux before falling back to PAR.
             ri_nir = _SOLAR_TO_NIR * ri_sw
         else
             ri_nir = (ri_par / _SOLAR_TO_PAR) * _SOLAR_TO_NIR

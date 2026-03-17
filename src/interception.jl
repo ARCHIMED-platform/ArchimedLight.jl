@@ -201,7 +201,7 @@ function _group_light_emitters(cfg::LightConfig)
 end
 
 function _use_upper_hit_pixel_table(cfg::LightConfig)
-    # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
+    # Default to upper-hit pixel tables unless scattering, virtual sensors,
     # or explicit light emitters require complete interception stacks.
     if get(cfg.general, "scattering", true)
         return false
@@ -267,7 +267,7 @@ function _emitter_transfer_weights(
 
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
-            # Java uses a stable sort for hit heights; preserve insertion order on ties.
+            # Preserve insertion order on height ties.
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
             for i in eachindex(stack)
@@ -721,7 +721,7 @@ function _rasterize_direction_java(
     visible_area = Dict{Int,Float64}()
     for stack in values(pixel_hits)
         isempty(stack) && continue
-        # Java uses a stable sort for hit heights; preserve insertion order on ties.
+        # Preserve insertion order on height ties.
         sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 
         # VirtualSensor nodes are transparent: they receive without occluding other nodes.
@@ -897,24 +897,6 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     end
 
     return vertices, faces, face2node, unique(node_ids), plotbox, node_group
-end
-
-function _interception_java_keys(scene::SceneGeometry, cfg::LightConfig)
-    _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
-    keys_by_node = Dict{Int,Tuple{Int,Int}}()
-
-    pav_ids = sort(Int[nid for nid in node_ids if get(node_group, nid, "") == "pavement"])
-    for (i, nid) in enumerate(pav_ids)
-        keys_by_node[nid] = (-1, i + 1)
-    end
-
-    for nid in node_ids
-        haskey(keys_by_node, nid) && continue
-        item_id = get(scene.java_item_id_per_node, nid, 1)
-        comp_id = get(scene.java_component_id_per_node, nid, nid + 1)
-        keys_by_node[nid] = (item_id, comp_id)
-    end
-    keys_by_node
 end
 
 """

@@ -146,8 +146,6 @@ function _append_paving_nodes!(
             :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
             :functional_group => "pavement",
             :type => "Cobblestone",
-            :item_id => -1,
-            :source_topology_id => tile.node_id,
         )
         for (attr, values) in field_values
             attrs[attr] = get(values, tile.node_id, fill_value)
@@ -191,7 +189,7 @@ end
     attach_light_step!(scene, step; fields=[:ri_par_f_per_node], names=Dict(), fill_value=nothing)
 
 Attach one or more per-node `LightBudget` fields from a single `LightStepResult`
-onto `scene.mtg`, using Java-style attribute names by default.
+onto `scene.mtg`, using the default output attribute names.
 
 Example:
 

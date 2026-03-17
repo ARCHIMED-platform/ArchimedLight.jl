@@ -10,14 +10,14 @@ end
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     az = deg2rad(azimuth_deg)
     el = deg2rad(elevation_deg)
-    # Java SunPosition gives a ground-to-sky vector.
+    # The sun position is expressed as a ground-to-sky vector.
     sx = cos(el) * sin(az)
     sy = cos(el) * cos(az)
     sz = sin(el)
     _normalize3(StaticArrays.SVector{3,Float64}(sx, sy, sz))
 end
 
-function _java_turtle_order(n::Int)
+function _canonical_turtle_order(n::Int)
     if n == 1
         return 0
     elseif n == 6
@@ -34,7 +34,7 @@ function _java_turtle_order(n::Int)
     return -1
 end
 
-function _java_seed_points_up()
+function _canonical_turtle_seed_points()
     elevation6 = [90.0, 26.57, 26.57, 26.57, 26.57, 26.57]
     azimuth6 = [0.0, 180.0, 252.0, 324.0, 36.0, 108.0]
 
@@ -113,10 +113,10 @@ function _refine_turtle_mesh(points, faces)
     return new_points, new_faces
 end
 
-function _java_turtle_upward_points(order::Int)
+function _canonical_turtle_upward_points(order::Int)
     order == 0 && return [StaticArrays.SVector{3,Float64}(0.0, 0.0, 1.0)]
 
-    points = _java_seed_points_up()
+    points = _canonical_turtle_seed_points()
     faces = _hull_faces_12(points)
 
     for _ in 2:order
@@ -146,11 +146,11 @@ end
 
 const _TURTLE_DIR_CACHE = Dict{Int,Vector{StaticArrays.SVector{3,Float64}}}()
 
-function _java_turtle_incoming(n::Int)
+function _canonical_turtle_incoming(n::Int)
     get!(_TURTLE_DIR_CACHE, n) do
-        order = _java_turtle_order(n)
-        order < 0 && error("Unsupported Java turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
-        up = _java_turtle_upward_points(order)
+        order = _canonical_turtle_order(n)
+        order < 0 && error("Unsupported turtle sector count: $n. Allowed values: 1, 6, 16, 46, 136, 406.")
+        up = _canonical_turtle_upward_points(order)
         [_normalize3(u) for u in up]
     end
 end
@@ -227,7 +227,7 @@ function _brightness_norm_clear(dir_up, sun_up)
     brightness
 end
 
-function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::Vector{Int})
+function _diffuse_weights(sky::SkyState, turtle::TurtleGrid, sky_ids::Vector{Int})
     n = length(sky_ids)
     n == 0 && return Float64[]
 
@@ -243,7 +243,7 @@ function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::
         b_clear = _brightness_norm_clear(sec_up, sun_up)
         b = coeff_soc * b_soc + coeff_clear * b_clear
 
-        # horizontal-plane conversion as in Java (multiply by cos(zenith))
+        # Convert to horizontal-plane flux by multiplying by cos(zenith).
         coeff = max(turtle.sectors[i].direction[3], 0.0)
         raw[k] = b * coeff
         total += raw[k]
@@ -266,8 +266,8 @@ sector when `cfg.general["all_in_turtle"] == false`.
 function build_turtle(cfg::LightConfig, sky::SkyState)
     n = max(get(cfg.general, "sky_sectors", 46), 1)
     dirs =
-        if _java_turtle_order(n) >= 0
-            _java_turtle_incoming(n)
+        if _canonical_turtle_order(n) >= 0
+            _canonical_turtle_incoming(n)
         else
             _hemisphere_fibonacci_incoming(n)
         end
@@ -321,7 +321,7 @@ end
 """
     compute_directional_fluxes(meteo_row, sky, turtle, cfg)::DirectionalFluxes
 
-Java-parity directional flux integration using meteo substeps:
+Directional flux integration using meteo substeps:
 directional fluxes are computed at each substep sun position then averaged over the full meteo step.
 """
 function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
@@ -377,7 +377,7 @@ end
 """
     compute_directional_fluxes(sky, turtle, cfg)::DirectionalFluxes
 
-Project sky-level PAR/NIR irradiance to each turtle sector using Java-compatible diffuse and
+Project sky-level PAR/NIR irradiance to each turtle sector using the package diffuse and
 direct distribution rules.
 """
 function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
@@ -395,7 +395,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
 
     sky_wsum = sum(turtle.sectors[i].weight for i in sky_ids)
     if !isempty(sky_ids)
-        wdiff = _diffuse_weights_java_like(sky, turtle, sky_ids)
+        wdiff = _diffuse_weights(sky, turtle, sky_ids)
         for (k, i) in enumerate(sky_ids)
             par[i] += par_diff * wdiff[k]
             nir[i] += nir_diff * wdiff[k]
@@ -403,8 +403,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
     end
 
     if get(cfg.general, "all_in_turtle", false)
-        # Java Turtle.directInTurtle parity:
-        # distribute direct irradiance by angular overlap between a sun halo and each sector.
+        # Distribute direct irradiance by angular overlap between a sun halo and each sector.
         dir_count = length(sky_ids)
         if dir_count > 0
             sun_up = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
@@ -421,8 +420,8 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
                 w = _circle_lumen_area(angle, sector_radius, sun_halo_radius)
                 raw[k] = w
 
-                # Java TurtleFluxes converts direct-in-sector values to horizontal
-                # irradiance using cos(zenith), then normalizes to total direct flux.
+                # Convert direct-in-sector values to horizontal irradiance using cos(zenith),
+                # then normalize to total direct flux.
                 coeff = max(turtle.sectors[i].direction[3], 0.0)
                 horiz[k] = w * coeff
                 total_horiz += horiz[k]

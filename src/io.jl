@@ -306,7 +306,7 @@ end
 
 Read a YAML configuration file and normalize ARCHIMED light options into a `LightConfig`.
 
-`pixel_size` is interpreted like Java input files (centimeters) and converted to meters.
+`pixel_size` is interpreted in centimeters in config files and converted to meters.
 """
 function read_light_config(path::AbstractString)
     d = _load_yaml_ordered(path)
@@ -396,29 +396,6 @@ end
 
 @inline _node_attr(node, key::Symbol) = haskey(node, key) ? node[key] : nothing
 
-function _as_int_or(x, default::Int)
-    x === nothing && return default
-    x isa Integer && return Int(x)
-    x isa Number && return round(Int, x)
-    if x isa String
-        try
-            return parse(Int, strip(x))
-        catch
-            return default
-        end
-    end
-    return default
-end
-
-function _node_item_id(node, default::Int)
-    for key in (:plantID, :plant_id, :item_id, :itemID)
-        v = _node_attr(node, key)
-        v === nothing && continue
-        return _as_int_or(v, default)
-    end
-    return default
-end
-
 function _node_type_name(node, default::String="")
     for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
         v = _node_attr(node, key)
@@ -442,25 +419,13 @@ const _OPS_RELAXED_KWARGS = (
     !haskey(node, :scene_dimensions)
 end
 
-function _source_topology_id(node)
-    sid = _node_attr(node, :source_topology_id)
-    sid === nothing && return nothing
-    cid = _as_int_or(sid, 0)
-    cid > 0 ? cid : nothing
-end
-
 function _collect_scene_node_metadata!(
     node,
     node_group,
     node_type,
-    node_item_id,
-    node_component_id,
-    per_item_component_counter,
     current_group::String="",
-    current_item_id::Int=1,
 )
     group = current_group
-    item_id = _node_item_id(node, current_item_id)
     type_name = _node_type_name(node, "")
     fg = _node_attr(node, :functional_group)
     fg !== nothing && (group = string(fg))
@@ -469,17 +434,6 @@ function _collect_scene_node_metadata!(
         nid = Int(MultiScaleTreeGraph.node_id(node))
         node_group[nid] = group
         node_type[nid] = type_name
-        node_item_id[nid] = item_id
-
-        sid = _source_topology_id(node)
-        if sid !== nothing
-            node_component_id[nid] = Int(sid)
-        else
-            # Java .gwa-like fallback: component ids are local to each item and start at 2.
-            k = get(per_item_component_counter, item_id, 0) + 1
-            per_item_component_counter[item_id] = k
-            node_component_id[nid] = k + 1
-        end
     end
 
     children = MultiScaleTreeGraph.children(node)
@@ -489,11 +443,7 @@ function _collect_scene_node_metadata!(
                 ch,
                 node_group,
                 node_type,
-                node_item_id,
-                node_component_id,
-                per_item_component_counter,
                 group,
-                item_id,
             )
         end
     end
@@ -503,21 +453,21 @@ function _build_scene_geometry(mtg, source_path::AbstractString)
     _build_scene_geometry(mtg, source_path, nothing)
 end
 
-function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
+function _build_scene_geometry(
+    mtg,
+    source_path::AbstractString,
+    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}},
+    source_topology_id_per_node::Dict{Int,Int},
+    object_id_per_node::Dict{Int,Int},
+)
     merged_mesh, face2node = PlantGeom.build_merged_mesh_with_map(mtg; filter_fun=_is_scene_geometry_node)
 
     node_group = Dict{Int,String}()
     node_type = Dict{Int,String}()
-    node_item_id = Dict{Int,Int}()
-    node_component_id = Dict{Int,Int}()
-    per_item_component_counter = Dict{Int,Int}()
     _collect_scene_node_metadata!(
         mtg,
         node_group,
         node_type,
-        node_item_id,
-        node_component_id,
-        per_item_component_counter,
     )
 
     verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
@@ -552,13 +502,17 @@ function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds
         face2node,
         node_area,
         barycenter_per_node,
+        source_topology_id_per_node,
+        object_id_per_node,
         node_group,
         node_type,
-        node_item_id,
-        node_component_id,
         String(source_path),
         scene_xy_bounds,
     )
+end
+
+function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
+    _build_scene_geometry(mtg, source_path, scene_xy_bounds, Dict{Int,Int}(), Dict{Int,Int}())
 end
 
 function _read_ops_relaxed(path::AbstractString)
@@ -571,6 +525,54 @@ function _relabel_scene_node_ids!(root)
         _NEXT_SCENE_NODE_ID[] += 1
     end
     return root
+end
+
+function _node_source_topology_id(node)
+    raw = _node_attr(node, :source_topology_id)
+    if raw isa Integer
+        return Int(raw)
+    elseif raw isa Number
+        return round(Int, raw)
+    elseif raw !== nothing
+        parsed = tryparse(Int, strip(string(raw)))
+        parsed !== nothing && return parsed
+    end
+    return Int(MultiScaleTreeGraph.node_id(node))
+end
+
+function _node_object_id(node)
+    object_node = node
+    while true
+        parent = try
+            MultiScaleTreeGraph.parent(object_node)
+        catch
+            nothing
+        end
+        parent === nothing && break
+        MultiScaleTreeGraph.scale(parent) <= 0 && break
+        object_node = parent
+    end
+    object_id = _node_source_topology_id(object_node)
+    if MultiScaleTreeGraph.scale(object_node) <= 0
+        return -abs(object_id)
+    end
+    return object_id
+end
+
+function _scene_identity_maps!(root)
+    _relabel_scene_node_ids!(root)
+
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
+    MultiScaleTreeGraph.traverse!(root) do node
+        if _is_scene_geometry_node(node)
+            nid = Int(MultiScaleTreeGraph.node_id(node))
+            source_topology_id_per_node[nid] = _node_source_topology_id(node)
+            object_id_per_node[nid] = _node_object_id(node)
+        end
+        return true
+    end
+    return source_topology_id_per_node, object_id_per_node
 end
 
 function _scene_xy_bounds_from_mtg(mtg)
@@ -604,8 +606,8 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     else
         error("Unsupported scene extension: $ext")
     end
-    _relabel_scene_node_ids!(mtg)
-    _build_scene_geometry(mtg, path, _scene_xy_bounds_from_mtg(mtg))
+    source_topology_id_per_node, object_id_per_node = _scene_identity_maps!(mtg)
+    _build_scene_geometry(mtg, path, _scene_xy_bounds_from_mtg(mtg), source_topology_id_per_node, object_id_per_node)
 end
 
 function _rows_to_namedtuples(table)

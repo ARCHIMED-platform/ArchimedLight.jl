@@ -30,7 +30,7 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
 
         for stack in values(pixel_hits)
             length(stack) <= 1 && continue
-            # Java PixelTable uses a stable height sort (Collections.sort on comparator).
+            # Keep a stable height sort.
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
             n_hits = length(stack)

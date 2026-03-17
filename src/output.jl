@@ -3,8 +3,9 @@ import CSV
 const _COMPONENT_VARIABLE_ORDER = [
     "step_number",
     "step_duration",
-    "item_id",
-    "component_id",
+    "node_id",
+    "source_topology_id",
+    "object_id",
     "group",
     "type",
     "area",
@@ -56,8 +57,7 @@ const _SUN_POSITION_LOG_ORDER = [
 
 const _SCATTERING_ITERATION_LOG_ORDER = [
     "step",
-    "plantid",
-    "nodeid",
+    "node_id",
     "iter",
     "scat",
 ]
@@ -65,26 +65,23 @@ const _SCATTERING_ITERATION_LOG_ORDER = [
 const _SUMMARY_VARIABLE_ORDER = [
     "step_number",
     "step_duration",
+    "object_id",
     "group",
     "type",
-    "item_id",
     "area",
     "Ri_q",
 ]
 
 const _NODE_LINKS_STATS_ALLDIRS_ORDER = [
-    "plantid",
-    "nodeid",
+    "node_id",
     "links",
     "hits",
 ]
 
 const _NODE_LINKS_DIR_ORDER = [
     "dir",
-    "plantid1",
-    "id1",
-    "plantid2",
-    "id2",
+    "node_id1",
+    "node_id2",
     "n",
 ]
 
@@ -235,7 +232,7 @@ end
     scene_variable_names(cfg)::Vector{String}
 
 Resolve scene output variable names from `cfg.outputs.variables.scene` when available.
-Only variables with truthy values are kept. Defaults match Java `scene_values.csv`.
+Only variables with truthy values are kept. Defaults match the package scene output schema.
 """
 function scene_variable_names(cfg::LightConfig)
     d = output_variable_flags(cfg, :scene)
@@ -411,12 +408,12 @@ end
 """
     simulation_output_directory(cfg; base_output=nothing, counter_digits=6, create=true, clean_existing=true)::String
 
-Resolve Java-style simulation output directory:
+Resolve the simulation output directory:
 - `<output_directory>/<simulation_directory>` when `simulation_directory` is set in config;
 - otherwise `<output_directory>/<counter>` with zero-padded numeric counter (default 6 digits).
 
 When `create=true`, directories are created. If `simulation_directory` is set and the target exists,
-`clean_existing=true` removes it first (Java behavior).
+`clean_existing=true` removes it first.
 """
 function simulation_output_directory(
     cfg::LightConfig;
@@ -449,17 +446,10 @@ function _step_duration_output_local(meteo_row, step_duration_seconds)
     return _step_duration_seconds_local(meteo_row)
 end
 
-function _node_ids_for_output(scene::SceneGeometry)
-    ids = collect(keys(scene.total_area_per_node))
-    sort!(
-        ids;
-        by=nid -> (
-            get(scene.java_item_id_per_node, nid, 0),
-            get(scene.java_component_id_per_node, nid, nid),
-            nid,
-        ),
-    )
-    ids
+function _output_identity_metadata(scene::SceneGeometry, cfg::LightConfig)
+    vertices, faces, face2node, _, _, _ = _scene_geometry_for_interception(scene, cfg)
+    node_ids = sort!(unique(face2node))
+    return (node_ids=node_ids,)
 end
 
 function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
@@ -489,25 +479,12 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         end
     end
 
-    key_by_node = _interception_java_keys(scene, cfg)
-    node_ids = collect(keys(key_by_node))
-    sort!(
-        node_ids;
-        by=nid -> begin
-            item_id, component_id = key_by_node[nid]
-            (item_id, component_id, nid)
-        end,
-    )
-
-    item_per_node = Dict{Int,Int}()
-    component_per_node = Dict{Int,Int}()
+    id_meta = _output_identity_metadata(scene, cfg)
+    node_ids = id_meta.node_ids
     group_per_node = Dict{Int,String}()
     type_per_node = Dict{Int,String}()
     group_type_hints = _group_type_hints(cfg)
     for nid in node_ids
-        item_id, component_id = key_by_node[nid]
-        item_per_node[nid] = item_id
-        component_per_node[nid] = component_id
         g = haskey(node_group_geom, nid) ? node_group_geom[nid] : get(scene.node_group, nid, "")
         group_per_node[nid] = g
         t = strip(get(scene.node_type, nid, ""))
@@ -529,22 +506,11 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         node_ids=node_ids,
         area_per_node=area_per_node,
         barycenter_per_node=barycenter_per_node,
-        item_per_node=item_per_node,
-        component_per_node=component_per_node,
+        source_topology_id_per_node=scene.source_topology_id_per_node,
+        object_id_per_node=scene.object_id_per_node,
         group_per_node=group_per_node,
         type_per_node=type_per_node,
     )
-end
-
-function _java_id_maps(scene::SceneGeometry, cfg::LightConfig)
-    keys_by_node = _interception_java_keys(scene, cfg)
-    item_per_node = Dict{Int,Int}()
-    comp_per_node = Dict{Int,Int}()
-    for (nid, key) in keys_by_node
-        item_per_node[nid] = key[1]
-        comp_per_node[nid] = key[2]
-    end
-    return item_per_node, comp_per_node
 end
 
 function _group_type_hints(cfg::LightConfig)
@@ -664,8 +630,8 @@ function _component_variable_value(
     step_duration::Float64,
     area_per_node::Dict{Int,Float64},
     barycenter_per_node::Dict{Int,NTuple{3,Float64}},
-    item_per_node::Dict{Int,Int},
-    component_per_node::Dict{Int,Int},
+    source_topology_id_per_node::Dict{Int,Int},
+    object_id_per_node::Dict{Int,Int},
     group_per_node::Dict{Int,String},
     type_per_node::Dict{Int,String},
     absorptance_cache::Dict{String,Dict{Int,Float64}},
@@ -681,10 +647,12 @@ function _component_variable_value(
         return step_number
     elseif variable == "step_duration"
         return step_duration
-    elseif variable == "item_id"
-        return get(item_per_node, nid, -1)
-    elseif variable == "component_id"
-        return get(component_per_node, nid, nid)
+    elseif variable == "node_id"
+        return nid
+    elseif variable == "source_topology_id"
+        return get(source_topology_id_per_node, nid, nid)
+    elseif variable == "object_id"
+        return get(object_id_per_node, nid, nid)
     elseif variable == "group"
         return get(group_per_node, nid, "")
     elseif variable == "type"
@@ -754,7 +722,7 @@ end
 """
     component_values_table(scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
-Build a Java-like component values table represented as `(columns, rows)`.
+Build a component values table represented as `(columns, rows)`.
 `rows` is a vector of dictionaries keyed by column name.
 """
 function component_values_table(
@@ -775,8 +743,8 @@ function component_values_table(
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
     barycenter_per_node = meta.barycenter_per_node
-    item_per_node = meta.item_per_node
-    component_per_node = meta.component_per_node
+    source_topology_id_per_node = meta.source_topology_id_per_node
+    object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
     rows = Vector{Dict{String,Any}}(undef, length(node_ids))
@@ -798,8 +766,8 @@ function component_values_table(
                 step_duration,
                 area_per_node,
                 barycenter_per_node,
-                item_per_node,
-                component_per_node,
+                source_topology_id_per_node,
+                object_id_per_node,
                 group_per_node,
                 type_per_node,
                 absorptance_cache,
@@ -963,7 +931,7 @@ function _decimal_hour_to_hm_local(x::Float64)
     return h, m
 end
 
-function _java_like_step_datetime_strings(row)
+function _step_datetime_strings(row)
     date = _row_date(row)
     start_h, end_h = _row_step_hours(row)
     start_day = floor(Int, start_h / 24.0)
@@ -982,7 +950,7 @@ function _sun_position_log_values(row, sky::SkyState)
     start_h, end_h = _row_step_hours(row)
     lat_deg = _row_value(row, [:latitude, :lat], 0.0)
     az_half_deg, el_half_deg = _midpoint_sun_position_deg(date, start_h, end_h, deg2rad(lat_deg))
-    step_start, step_end = _java_like_step_datetime_strings(row)
+    step_start, step_end = _step_datetime_strings(row)
     return (
         stepStart=step_start,
         stepEnd=step_end,
@@ -996,7 +964,7 @@ end
 """
     scene_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
-Build a Java-like scene values table represented as `(columns, rows)`.
+Build a scene values table represented as `(columns, rows)`.
 `rows` is a vector of dictionaries keyed by column name.
 """
 function scene_values_table(
@@ -1044,7 +1012,7 @@ end
 """
     write_scene_values_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
-Write Java-like `scene_values.csv` output for one or many simulation steps.
+Write `scene_values.csv` output for one or many simulation steps.
 """
 function write_scene_values_csv(
     path::AbstractString,
@@ -1081,8 +1049,8 @@ end
 """
     sun_position_log_table(steps, meteo_rows; start_step_number=0, columns=nothing)
 
-Build a Java-like `log-sun-position.csv` table represented as `(columns, rows)`.
-Angles are in radians, matching Java logs.
+Build a `log-sun-position.csv` table represented as `(columns, rows)`.
+Angles are written in radians.
 """
 function sun_position_log_table(
     steps::AbstractVector{<:LightStepResult},
@@ -1124,7 +1092,7 @@ end
 """
     write_sun_position_log_csv(path, steps, meteo_rows; start_step_number=0, columns=nothing)
 
-Write Java-like `log-sun-position.csv`.
+Write `log-sun-position.csv`.
 """
 function write_sun_position_log_csv(
     path::AbstractString,
@@ -1192,7 +1160,7 @@ end
 """
     scattering_iteration_log_table(scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
 
-Build a Java-like `log-iteration-scat-<band>.csv` table represented as `(columns, rows)`.
+Build a `log-iteration-scat-<band>.csv` table represented as `(columns, rows)`.
 """
 function scattering_iteration_log_table(
     scene::SceneGeometry,
@@ -1218,28 +1186,18 @@ function scattering_iteration_log_table(
     per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
     dt = _step_duration_output_local(meteo_row, nothing)
     w_to_mj = dt / 1e6
-    key_by_node = _interception_java_keys(scene, cfg)
-    node_ids = collect(keys(key_by_node))
-    sort!(
-        node_ids;
-        by=nid -> begin
-            item_id, component_id = key_by_node[nid]
-            (item_id, component_id, nid)
-        end,
-    )
+    id_meta = _output_identity_metadata(scene, cfg)
+    node_ids = id_meta.node_ids
     rows = Dict{String,Any}[]
     for (it, vals) in enumerate(per_iter)
         iter_idx = it - 1
         for nid in node_ids
             row = Dict{String,Any}()
-            item_id, component_id = key_by_node[nid]
             for c in cols
                 if c == "step"
                     row[c] = step_number
-                elseif c == "plantid"
-                    row[c] = item_id
-                elseif c == "nodeid"
-                    row[c] = component_id
+                elseif c == "node_id"
+                    row[c] = nid
                 elseif c == "iter"
                     row[c] = iter_idx
                 elseif c == "scat"
@@ -1257,7 +1215,7 @@ end
 """
     write_scattering_iteration_log_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
 
-Write Java-like `log-iteration-scat-<band>.csv`.
+Write `log-iteration-scat-<band>.csv`.
 """
 function write_scattering_iteration_log_csv(
     path::AbstractString,
@@ -1296,7 +1254,7 @@ end
 """
     node_links_stats_alldirs_table(scene, turtle, cfg; columns=nothing)
 
-Build Java-like `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
+Build `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
 """
 function node_links_stats_alldirs_table(
     scene::SceneGeometry,
@@ -1306,7 +1264,8 @@ function node_links_stats_alldirs_table(
 )
     cols = columns === nothing ? copy(_NODE_LINKS_STATS_ALLDIRS_ORDER) : _canonical_node_links_stats_order(String.(columns))
     pair_counts, _, _, _ = _pair_counts_for_scattering(scene, turtle, cfg)
-    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
+    id_meta = _output_identity_metadata(scene, cfg)
+    node_ids = id_meta.node_ids
 
     neighbours_by_node = Dict{Int,Set{Int}}()
     hits_by_node = Dict{Int,Int}()
@@ -1327,15 +1286,13 @@ function node_links_stats_alldirs_table(
         hits_by_node[to] = get(hits_by_node, to, 0) + c
     end
 
-    node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(item_per_node, nid, -1), get(comp_per_node, nid, nid), nid))
+    node_ids = sort(collect(keys(neighbours_by_node)))
     rows = Dict{String,Any}[]
     for nid in node_ids
         row = Dict{String,Any}()
         for c in cols
-            if c == "plantid"
-                row[c] = get(item_per_node, nid, -1)
-            elseif c == "nodeid"
-                row[c] = get(comp_per_node, nid, nid)
+            if c == "node_id"
+                row[c] = nid
             elseif c == "links"
                 row[c] = length(get(neighbours_by_node, nid, Set{Int}()))
             elseif c == "hits"
@@ -1352,7 +1309,7 @@ end
 """
     write_node_links_stats_alldirs_csv(path, scene, turtle, cfg; columns=nothing)
 
-Write Java-like `log-nodelinks-stats-alldirs.csv`.
+Write `log-nodelinks-stats-alldirs.csv`.
 """
 function write_node_links_stats_alldirs_csv(
     path::AbstractString,
@@ -1368,7 +1325,7 @@ end
 """
     node_links_dir_table(scene, turtle, cfg; direction_index=0, columns=nothing)
 
-Build Java-like `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
+Build `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
 """
 function node_links_dir_table(
     scene::SceneGeometry,
@@ -1379,7 +1336,6 @@ function node_links_dir_table(
 )
     0 <= direction_index < length(turtle.sectors) || error("direction_index out of bounds")
     cols = columns === nothing ? copy(_NODE_LINKS_DIR_ORDER) : _canonical_node_links_dir_order(String.(columns))
-    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
     vertices, faces, face2node, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
     sector = turtle.sectors[direction_index + 1]
@@ -1392,33 +1348,22 @@ function node_links_dir_table(
         for h in 1:(length(stack) - 1)
             n1 = stack[h][2]
             n2 = stack[h + 1][2]
-            k1 = (get(item_per_node, n1, -1), get(comp_per_node, n1, n1))
-            k2 = (get(item_per_node, n2, -1), get(comp_per_node, n2, n2))
-            a, b = k1 <= k2 ? (n1, n2) : (n2, n1)
+            a, b = n1 <= n2 ? (n1, n2) : (n2, n1)
             counts[(a, b)] = get(counts, (a, b), 0) + 1
         end
     end
 
-    keys_sorted = sort(collect(keys(counts)); by=k -> (
-        get(item_per_node, k[1], -1),
-        get(comp_per_node, k[1], k[1]),
-        get(item_per_node, k[2], -1),
-        get(comp_per_node, k[2], k[2]),
-    ))
+    keys_sorted = sort(collect(keys(counts)))
     rows = Dict{String,Any}[]
     for (n1, n2) in keys_sorted
         row = Dict{String,Any}()
         for c in cols
             if c == "dir"
                 row[c] = direction_index
-            elseif c == "plantid1"
-                row[c] = get(item_per_node, n1, -1)
-            elseif c == "id1"
-                row[c] = get(comp_per_node, n1, n1)
-            elseif c == "plantid2"
-                row[c] = get(item_per_node, n2, -1)
-            elseif c == "id2"
-                row[c] = get(comp_per_node, n2, n2)
+            elseif c == "node_id1"
+                row[c] = n1
+            elseif c == "node_id2"
+                row[c] = n2
             elseif c == "n"
                 row[c] = get(counts, (n1, n2), 0)
             else
@@ -1433,7 +1378,7 @@ end
 """
     write_node_links_dir_csv(path, scene, turtle, cfg; direction_index=0, columns=nothing)
 
-Write Java-like `log-nodelinks-dirXX.csv` for one direction.
+Write `log-nodelinks-dirXX.csv` for one direction.
 """
 function write_node_links_dir_csv(
     path::AbstractString,
@@ -1450,8 +1395,8 @@ end
 """
     summary_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
 
-Build a Java-like `summary.csv` table represented as `(columns, rows)`.
-Rows are grouped by `(item_id, group, type)` for each step.
+Build a `summary.csv` table represented as `(columns, rows)`.
+Rows are grouped by `(object_id, group, type)` for each step.
 """
 function summary_values_table(
     scene::SceneGeometry,
@@ -1469,7 +1414,7 @@ function summary_values_table(
     meta = _output_node_metadata(scene, cfg)
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
-    item_per_node = meta.item_per_node
+    object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
 
@@ -1479,12 +1424,12 @@ function summary_values_table(
         step_no = start_step_number + i - 1
         acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
         for nid in node_ids
-            item = get(item_per_node, nid, -1)
+            object_id = get(object_id_per_node, nid, nid)
             group = get(group_per_node, nid, "")
             type = get(type_per_node, nid, unavailable)
             area = get(area_per_node, nid, 0.0)
             ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
-            k = (item, group, type)
+            k = (object_id, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))
             acc[k] = (a0 + area, r0 + ri_q)
         end
@@ -1498,12 +1443,12 @@ function summary_values_table(
                     row[c] = step_no
                 elseif c == "step_duration"
                     row[c] = dt
+                elseif c == "object_id"
+                    row[c] = k[1]
                 elseif c == "group"
                     row[c] = k[2]
                 elseif c == "type"
                     row[c] = k[3]
-                elseif c == "item_id"
-                    row[c] = k[1]
                 elseif c == "area"
                     row[c] = area
                 elseif c == "Ri_q"
@@ -1521,7 +1466,7 @@ end
 """
     write_summary_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
 
-Write Java-like `summary.csv`.
+Write `summary.csv`.
 """
 function write_summary_csv(
     path::AbstractString,
@@ -1548,7 +1493,7 @@ end
 """
     write_light_outputs(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, outdir=nothing, write_component=nothing, write_scene=nothing, write_summary=nothing, write_sun_position_log=nothing, write_scattering_log=nothing, scattering_log_bands=["PAR"])
 
-High-level Java-style output writer driven by config defaults and optional debug-log toggles.
+High-level output writer driven by config defaults and optional debug-log toggles.
 Returns a dictionary mapping output kind to written path.
 """
 function write_light_outputs(
@@ -1685,7 +1630,7 @@ end
 """
     write_component_values_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
-Write Java-like `component_values.csv` output for one simulation step.
+Write `component_values.csv` output for one simulation step.
 """
 function write_component_values_csv(
     path::AbstractString,

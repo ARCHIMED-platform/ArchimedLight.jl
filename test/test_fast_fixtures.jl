@@ -130,7 +130,7 @@ end
                     cfg;
                     meteo_row=meteo_row,
                     step_number=0,
-                    columns=["step_number", "item_id", "component_id", "area", "Ri_PAR_0_q"],
+                    columns=["step_number", "node_id", "area", "Ri_PAR_0_q"],
                     strict=false,
                 )
                 observed_rows = collect(Tables.rowtable(CSV.File(observed_csv; delim=';', normalizenames=false)))
@@ -161,7 +161,7 @@ end
                     cfg;
                     meteo_row=meteo_row,
                     step_number=0,
-                    columns=["step_number", "item_id", "component_id", "area", "Ri_PAR_0_q"],
+                    columns=["step_number", "node_id", "area", "Ri_PAR_0_q"],
                     strict=false,
                 )
                 observed_rows = collect(Tables.rowtable(CSV.File(observed_csv; delim=';', normalizenames=false)))

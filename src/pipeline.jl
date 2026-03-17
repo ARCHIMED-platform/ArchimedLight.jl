@@ -383,7 +383,7 @@ function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, cfg::LightConfig)
         rows,
         t0,
         t1;
-        closed=true, # Java uses closed-interval overlap semantics.
+        closed=true, # Use closed-interval overlap semantics.
         date_cols=(:date,),
         start_cols=(:hour_start, :hour),
         end_cols=(:hour_end,),
@@ -445,7 +445,7 @@ end
 """
     prepare_meteo(meteo, cfg)::MeteoTable
 
-Return the effective meteo table after Java-like meteo controls are applied:
+Return the effective meteo table after the configured meteo controls are applied:
 sequence validation, optional `meteo_range`, and optional `active` filtering.
 """
 function prepare_meteo(meteo::MeteoTable, cfg::LightConfig)
