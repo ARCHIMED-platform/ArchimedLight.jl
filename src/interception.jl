@@ -21,11 +21,11 @@ function _normalize_group_name_local(x)
 end
 
 function _cfg_toricity(cfg::LightConfig)
-    _as_bool_local(get(cfg.raw, "toricity", true), true)
+    _as_bool_local(config_value(cfg, "toricity", true), true)
 end
 
 function _cfg_debug_drop_leading_hit(cfg::LightConfig)
-    spec = get(cfg.raw, "debug_drop_leading_hit", nothing)
+    spec = config_value(cfg, "debug_drop_leading_hit", nothing)
     spec isa AbstractDict || return nothing
     node_id = try
         Int(get(spec, "node_id", 0))
@@ -72,42 +72,30 @@ end
 
 function _cfg_plot_paving(cfg::LightConfig)
     best = 0
-    for model in cfg.model_raw
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (_, tconf) in types
-            tconf isa AbstractDict || continue
-            v = try
-                Int(get(tconf, "plot_paving", 0))
-            catch
-                0
-            end
-            best = max(best, v)
+    for spec in model_type_configs(cfg)
+        v = try
+            Int(get(spec.params, "plot_paving", 0))
+        catch
+            0
         end
+        best = max(best, v)
     end
     return best
 end
 
 function _virtual_sensor_groups(cfg::LightConfig)
     out = Set{String}()
-    for model in cfg.model_raw
-        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
+    for spec in model_type_configs(cfg)
+        group = _normalize_group_name_local(spec.group)
         isempty(group) && continue
-
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (_, tconf) in types
-            tconf isa AbstractDict || continue
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            if model == "virtualsensor"
-                push!(out, group)
-                break
-            end
+        inter = get(spec.params, "Interception", nothing)
+        inter isa AbstractDict || continue
+        iuse = get(inter, "use", nothing)
+        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
+        iconf isa AbstractDict || continue
+        model = lowercase(strip(string(get(iconf, "model", ""))))
+        if model == "virtualsensor"
+            push!(out, group)
         end
     end
     out
@@ -125,28 +113,22 @@ end
 
 function _ignored_group_types(cfg::LightConfig)
     out = Dict{String,Set{String}}()
-    for model in cfg.model_raw
-        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
+    for spec in model_type_configs(cfg)
+        group = _normalize_group_name_local(spec.group)
         isempty(group) && continue
-
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (type_name0, tconf) in types
-            tconf isa AbstractDict || continue
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            model == "ignore" || continue
-            tname = strip(string(type_name0))
-            isempty(tname) && continue
-            s = get!(out, group) do
-                Set{String}()
-            end
-            push!(s, tname)
+        inter = get(spec.params, "Interception", nothing)
+        inter isa AbstractDict || continue
+        iuse = get(inter, "use", nothing)
+        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
+        iconf isa AbstractDict || continue
+        model = lowercase(strip(string(get(iconf, "model", ""))))
+        model == "ignore" || continue
+        tname = strip(string(spec.type))
+        isempty(tname) && continue
+        s = get!(out, group) do
+            Set{String}()
         end
+        push!(s, tname)
     end
     out
 end
@@ -164,63 +146,56 @@ end
 
 function _group_light_emitters(cfg::LightConfig)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for model in cfg.model_raw
-        group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
+    for spec in model_type_configs(cfg)
+        group = strip(string(spec.group))
         isempty(group) && continue
+        type_name = strip(string(spec.type))
+        em0 = get(spec.params, "LightEmitter", nothing)
+        em0 isa AbstractDict || continue
+        em = em0
+        model = lowercase(strip(string(get(em, "model", ""))))
+        model == "lambertianemitter" || continue
 
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-
-        for (type_name0, tconf) in types
-            tconf isa AbstractDict || continue
-            type_name = strip(string(type_name0))
-            em0 = get(tconf, "LightEmitter", nothing)
-            em0 isa AbstractDict || continue
-            em = em0
-            model = lowercase(strip(string(get(em, "model", ""))))
-            model == "lambertianemitter" || continue
-
-            radiance = try
-                Float64(em["radiance"])
+        radiance = try
+            Float64(em["radiance"])
+        catch
+            try
+                parse(Float64, string(get(em, "radiance", "0")))
             catch
-                try
-                    parse(Float64, string(get(em, "radiance", "0")))
-                catch
-                    0.0
-                end
+                0.0
             end
-            radiance > 0.0 || continue
+        end
+        radiance > 0.0 || continue
 
+        gpar = 0.48
+        gnir = 0.52
+        g0 = get(em, "gamma", nothing)
+        if g0 isa AbstractDict
+            gpar = try
+                Float64(get(g0, "PAR", gpar))
+            catch
+                gpar
+            end
+            gnir = try
+                Float64(get(g0, "NIR", gnir))
+            catch
+                gnir
+            end
+        end
+        gpar = max(gpar, 0.0)
+        gnir = max(gnir, 0.0)
+        gsum = gpar + gnir
+        if gsum > 0.0
+            gpar /= gsum
+            gnir /= gsum
+        else
             gpar = 0.48
             gnir = 0.52
-            g0 = get(em, "gamma", nothing)
-            if g0 isa AbstractDict
-                gpar = try
-                    Float64(get(g0, "PAR", gpar))
-                catch
-                    gpar
-                end
-                gnir = try
-                    Float64(get(g0, "NIR", gnir))
-                catch
-                    gnir
-                end
-            end
-            gpar = max(gpar, 0.0)
-            gnir = max(gnir, 0.0)
-            gsum = gpar + gnir
-            if gsum > 0.0
-                gpar /= gsum
-                gnir /= gsum
-            else
-                gpar = 0.48
-                gnir = 0.52
-            end
-
-            key = (group, type_name)
-            cur = get(out, key, (par=0.0, nir=0.0))
-            out[key] = (par=cur.par + radiance * gpar, nir=cur.nir + radiance * gnir)
         end
+
+        key = (group, type_name)
+        cur = get(out, key, (par=0.0, nir=0.0))
+        out[key] = (par=cur.par + radiance * gpar, nir=cur.nir + radiance * gnir)
     end
     out
 end
@@ -228,7 +203,7 @@ end
 function _use_upper_hit_pixel_table(cfg::LightConfig)
     # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
     # or explicit light emitters require complete interception stacks.
-    if cfg.scattering
+    if get(cfg.general, "scattering", true)
         return false
     end
     isempty(_virtual_sensor_groups(cfg)) || return false
@@ -324,18 +299,19 @@ function _emitter_transfer_weights(
 end
 
 function _cfg_cache_pixel_table(cfg::LightConfig)
-    if haskey(cfg.raw, "cache_pixel_table")
-        return _as_bool_local(cfg.raw["cache_pixel_table"], false)
+    if haskey(cfg.general, "cache_pixel_table")
+        return _as_bool_local(cfg.general["cache_pixel_table"], false)
     end
-    if haskey(cfg.raw, "save_on_disk")
-        return _as_bool_local(cfg.raw["save_on_disk"], false)
+    if haskey(cfg.general, "save_on_disk")
+        return _as_bool_local(cfg.general["save_on_disk"], false)
     end
     false
 end
 
 function _projection_cache_dir(cfg::LightConfig)
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    out_rel = haskey(cfg.raw, "output_directory") ? string(cfg.raw["output_directory"]) : ".archimedlight_cache"
+    base = _config_base_dir(cfg)
+    out_rel = cfg.outputs.directory
+    isempty(strip(out_rel)) && (out_rel = ".archimedlight_cache")
     out_dir = isabspath(out_rel) ? out_rel : normpath(joinpath(base, out_rel))
     joinpath(out_dir, "pixel_tables_cache")
 end
@@ -737,7 +713,7 @@ function _rasterize_direction_java(
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
-        if !cfg.area_ratio
+        if !get(cfg.general, "area_ratio", true)
             ratios[nid] = 1.0
         else
             ppa = get(projected_pixels_area, nid, 0.0)
@@ -930,7 +906,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
-    plotbox = _plotbox(scene, vertices, cfg.pixel_size)
+    plotbox = _plotbox(scene, vertices, get(cfg.general, "pixel_size", 0.0025))
 
     node_ids = unique(face2node)
     node_group = Dict{Int,String}(nid => get(scene.node_group, nid, "") for nid in node_ids)

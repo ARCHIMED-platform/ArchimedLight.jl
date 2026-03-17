@@ -84,7 +84,7 @@ end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, cfg::LightConfig, node_ids)
     all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
-    if !cfg.all_in_turtle
+    if !get(cfg.general, "all_in_turtle", false)
         for (nid, hsun) in sun_hits
             all_hits[nid] = max(0, get(all_hits, nid, 0) - hsun)
         end
@@ -95,47 +95,36 @@ end
 function _group_optical_coeffs(cfg::LightConfig)
     coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
-    for model in cfg.model_raw
-        group = haskey(model, "Group") ? string(model["Group"]) : ""
+    for spec in model_type_configs(cfg)
+        group = string(spec.group)
         isempty(group) && continue
+        inter = get(spec.params, "Interception", nothing)
+        inter isa AbstractDict || continue
+        iuse = get(inter, "use", nothing)
+        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
+        iconf isa AbstractDict || continue
 
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        isempty(types) && continue
-
-        for (tkey, tval) in types
-            tconf = tval
-            tconf isa AbstractDict || continue
-
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            c =
-                if model == "virtualsensor"
-                    Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
-                else
-                    op = get(iconf, "optical_properties", nothing)
-                    op isa AbstractDict || continue
-                    ctmp = Dict{String,Float64}()
-                    for (k, v) in op
-                        try
-                            ctmp[uppercase(string(k))] = Float64(v)
-                        catch
-                        end
+        model = lowercase(strip(string(get(iconf, "model", ""))))
+        c =
+            if model == "virtualsensor"
+                Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+            else
+                op = get(iconf, "optical_properties", nothing)
+                op isa AbstractDict || continue
+                ctmp = Dict{String,Float64}()
+                for (k, v) in op
+                    try
+                        ctmp[uppercase(string(k))] = Float64(v)
+                    catch
                     end
-                    ctmp
                 end
-
-            tname = string(tkey)
-            coeffs[(group, tname)] = c
-            # Group-level fallback for nodes without explicit type metadata.
-            if !haskey(coeffs, (group, "*"))
-                coeffs[(group, "*")] = c
+                ctmp
             end
+
+        tname = string(spec.type)
+        coeffs[(group, tname)] = c
+        if !haskey(coeffs, (group, "*"))
+            coeffs[(group, "*")] = c
         end
     end
 
@@ -232,8 +221,8 @@ end
 
 function _default_band_coeff(cfg::LightConfig, band_key::String)
     bk = uppercase(band_key)
-    bk == "NIR" && return cfg.scattering_coeff_nir
-    return cfg.scattering_coeff_par
+    bk == "NIR" && return get(cfg.general, "scattering_coeff_nir", 0.30)
+    return get(cfg.general, "scattering_coeff_par", 0.15)
 end
 
 function _coeff_by_node(
@@ -269,11 +258,11 @@ function _propagate_scattering_one_band(
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     added = _dict_zero(node_ids)
     ref = _sum_dict_values(current)
-    thr = cfg.scattering_stop_ratio * max(ref, eps(Float64))
+    thr = get(cfg.general, "scattering_stop_ratio", 0.01) * max(ref, eps(Float64))
     iterations = 0
 
     converged = false
-    for it in 1:cfg.scattering_max_iter
+    for it in 1:get(cfg.general, "scattering_max_iter", 20)
         iterations = it
 
         hit_energy = _dict_zero(node_ids)
@@ -447,14 +436,14 @@ function compute_scattering(
         graph,
         cfg,
         "PAR",
-        cfg.scattering_coeff_par,
+        get(cfg.general, "scattering_coeff_par", 0.15),
     )
     added_nir, it_nir, conv_nir = _scattering_one_band(
         initial_nir,
         graph,
         cfg,
         "NIR",
-        cfg.scattering_coeff_nir,
+        get(cfg.general, "scattering_coeff_nir", 0.30),
     )
 
     ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)

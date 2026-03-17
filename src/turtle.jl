@@ -320,10 +320,10 @@ end
     build_turtle(cfg, sky)::TurtleGrid
 
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
-sector when `cfg.all_in_turtle == false`.
+sector when `cfg.general["all_in_turtle"] == false`.
 """
 function build_turtle(cfg::LightConfig, sky::SkyState)
-    n = max(cfg.turtle_sectors, 1)
+    n = max(get(cfg.general, "sky_sectors", 46), 1)
     dirs =
         if _java_turtle_order(n) >= 0
             _java_turtle_incoming(n)
@@ -336,7 +336,7 @@ function build_turtle(cfg::LightConfig, sky::SkyState)
         push!(sectors, TurtleSector(i, dirs[i], w, :sky))
     end
 
-    if !cfg.all_in_turtle && sky.sun_elevation_deg > 0.0
+    if !get(cfg.general, "all_in_turtle", false) && sky.sun_elevation_deg > 0.0
         push!(sectors, TurtleSector(length(sectors) + 1, _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg), 0.0, :sun))
     end
     TurtleGrid(sectors)
@@ -461,7 +461,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
         end
     end
 
-    if cfg.all_in_turtle
+    if get(cfg.general, "all_in_turtle", false)
         # Java Turtle.directInTurtle parity:
         # distribute direct irradiance by angular overlap between a sun halo and each sector.
         dir_count = length(sky_ids)

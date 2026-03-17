@@ -19,19 +19,19 @@ function _synthetic_cfg(
     java_logged_turtle_dirs::Bool=false,
 )
     out = deepcopy(cfg)
-    out.raw["all_in_turtle"] = all_in_turtle
-    out.raw["sky_sectors"] = sectors
-    out.raw["scattering"] = scattering
-    out.raw["pixel_size"] = pixel_size_m * 100.0
-    out.raw["toricity"] = toricity
-    out.raw["area_ratio"] = area_ratio
-    out.raw["cache_radiation"] = cache_radiation
-    out.raw["cache_pixel_table"] = cache_pixel_table
-    out.raw["radiation_timestep"] = radiation_timestep
-    out.raw["nir_interception"] = nir_interception
-    out.raw["nir_scattering"] = nir_scattering
-    out.raw["java_logged_turtle_dirs"] = java_logged_turtle_dirs
-    ArchimedLight.refresh_light_config!(out; reload_models=true)
+    out.general["all_in_turtle"] = all_in_turtle
+    out.general["sky_sectors"] = sectors
+    out.general["scattering"] = scattering
+    out.general["pixel_size"] = pixel_size_m
+    out.general["toricity"] = toricity
+    out.general["area_ratio"] = area_ratio
+    out.general["cache_radiation"] = cache_radiation
+    out.general["cache_pixel_table"] = cache_pixel_table
+    out.general["radiation_timestep"] = radiation_timestep
+    out.general["nir_interception"] = nir_interception
+    out.general["nir_scattering"] = nir_scattering
+    out.general["java_logged_turtle_dirs"] = java_logged_turtle_dirs
+    ArchimedLight.refresh_light_config!(out)
     return out
 end
 

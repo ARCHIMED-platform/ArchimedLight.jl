@@ -61,8 +61,8 @@ end
             turtle = ArchimedLight.build_turtle(cfg, sky)
             flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
 
-            @test cfg.turtle_sectors == 6
-            @test cfg.all_in_turtle == false
+            @test get(cfg.general, "sky_sectors", 46) == 6
+            @test get(cfg.general, "all_in_turtle", false) == false
             @test length(turtle.sectors) == 7
             @test count(s -> s.source == :sun, turtle.sectors) == 1
             @test all(v -> v >= 0.0, flux.par)
@@ -80,8 +80,8 @@ end
             turtle = ArchimedLight.build_turtle(cfg, sky)
             flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
 
-            @test cfg.turtle_sectors == 16
-            @test cfg.all_in_turtle == true
+            @test get(cfg.general, "sky_sectors", 46) == 16
+            @test get(cfg.general, "all_in_turtle", false) == true
             @test length(turtle.sectors) == 16
             @test count(s -> s.source == :sun, turtle.sectors) == 0
             @test all(v -> v >= 0.0, flux.par)
@@ -99,8 +99,8 @@ end
             turtle = ArchimedLight.build_turtle(cfg, sky)
             flux = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
 
-            @test cfg.turtle_sectors == 46
-            @test cfg.all_in_turtle == false
+            @test get(cfg.general, "sky_sectors", 46) == 46
+            @test get(cfg.general, "all_in_turtle", false) == false
             @test length(turtle.sectors) == 47
             @test count(s -> s.source == :sun, turtle.sectors) == 1
             @test all(v -> v >= 0.0, flux.par)
@@ -114,8 +114,8 @@ end
         if _fast_case_enabled("simpleplant_16_notoric")
             case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric")
             cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-            scene = ArchimedLight.read_scene(cfg.scene)
-            meteo = ArchimedLight.read_meteo(cfg.meteo)
+            scene = ArchimedLight.read_scene(cfg.source_files.scene)
+            meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
             selected = ArchimedLight.prepare_meteo(meteo, cfg)
             series = ArchimedLight.run_light_series(scene, meteo, cfg)
             step = first(series)
@@ -145,8 +145,8 @@ end
         if _fast_case_enabled("simpleplant_16_toric")
             case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_toric")
             cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-            scene = ArchimedLight.read_scene(cfg.scene)
-            meteo = ArchimedLight.read_meteo(cfg.meteo)
+            scene = ArchimedLight.read_scene(cfg.source_files.scene)
+            meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
             selected = ArchimedLight.prepare_meteo(meteo, cfg)
             series = ArchimedLight.run_light_series(scene, meteo, cfg)
             step = first(series)

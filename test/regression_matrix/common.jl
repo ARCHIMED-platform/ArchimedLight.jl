@@ -296,7 +296,7 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
         "Ra_PAR_0_q",
         "Ra_NIR_0_q",
     ]
-    if cfg.scattering
+    if get(cfg.general, "scattering", true)
         append!(cols, ["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"])
     end
     for i in eachindex(series)
@@ -319,8 +319,8 @@ function _write_sky_summary_csv(path::AbstractString, sky, turtle, fluxes, cfg; 
     row = OrderedDict{String,Any}(
         "step_number" => step_number,
         "sky_mode" => String(sky_mode),
-        "turtle_sectors" => cfg.turtle_sectors,
-        "all_in_turtle" => cfg.all_in_turtle,
+        "turtle_sectors" => get(cfg.general, "sky_sectors", 46),
+        "all_in_turtle" => get(cfg.general, "all_in_turtle", false),
         "sun_sector_count" => count(s -> s.source == :sun, turtle.sectors),
         "ri_par_f" => sky.ri_par_f,
         "ri_nir_f" => sky.ri_nir_f,

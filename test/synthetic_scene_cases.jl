@@ -1,3 +1,5 @@
+using OrderedCollections: OrderedDict
+
 const _SYNTHETIC_CASE_FILTERS = Set(filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_SYNTHETIC_CASE", ""), ",")))))
 
 function _synthetic_case_enabled(name::String)
@@ -16,14 +18,23 @@ function _synthetic_cfg(
     models::Vector{String}=String[],
 )
     out = deepcopy(cfg)
-    out.raw["all_in_turtle"] = all_in_turtle
-    out.raw["sky_sectors"] = sectors
-    out.raw["scattering"] = scattering
-    out.raw["pixel_size"] = pixel_size * 100.0
-    out.raw["toricity"] = toricity
-    out.raw["cache_radiation"] = cache_radiation
-    out.raw["models"] = models
-    ArchimedLight.refresh_light_config!(out; reload_models=true)
+    out.general["all_in_turtle"] = all_in_turtle
+    out.general["sky_sectors"] = sectors
+    out.general["scattering"] = scattering
+    out.general["pixel_size"] = pixel_size
+    out.general["toricity"] = toricity
+    out.general["cache_radiation"] = cache_radiation
+    base = out.source_files.base_dir
+    out.source_files.models = OrderedDict{String,String}()
+    if !isempty(models)
+        for rel in models
+            abs_path = isabspath(rel) ? rel : normpath(joinpath(base, rel))
+            group = ArchimedLight._model_group_from_file(abs_path)
+            out.source_files.models[group] = abs_path
+        end
+    end
+    out.models = OrderedDict{String,OrderedDict{String,Any}}()
+    ArchimedLight.refresh_light_config!(out; reload_models=!isempty(models))
     return out
 end
 

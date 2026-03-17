@@ -20,8 +20,8 @@ Energy balance, transpiration and photosynthesis are intentionally out of scope 
 using ArchimedLight
 
 cfg = read_light_config("config.yml")
-scene = read_scene(cfg.scene)
-meteo = read_meteo(cfg.meteo)
+scene = read_scene(cfg.source_files.scene)
+meteo = read_meteo(cfg.source_files.meteo)
 
 sky = compute_sky(first(meteo.rows), cfg)
 turtle = build_turtle(cfg, sky)

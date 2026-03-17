@@ -361,7 +361,7 @@ function _dict_float_or_nan(d, key::String)
 end
 
 function _cfg_radiation_timestep_hours(cfg::LightConfig)
-    mins = _dict_float_or_nan(cfg.raw, "radiation_timestep")
+    mins = _dict_float_or_nan(cfg.general, "radiation_timestep")
     isnan(mins) && (mins = 15.0)
     mins <= 0.0 && (mins = 15.0)
     mins / 60.0

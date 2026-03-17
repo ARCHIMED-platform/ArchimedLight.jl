@@ -42,40 +42,251 @@ function _load_yaml_ordered(path::AbstractString)
     YAML.load_file(path; dicttype=OrderedDict{String,Any})
 end
 
-function _model_paths_from_raw(d::AbstractDict{String,Any}, scene::AbstractString)
-    models = get(d, "models", nothing)
-    models isa AbstractVector || return String[]
-    base = get(d, "__base_dir", dirname(scene))
-    [_join_if_relative(base, string(m)) for m in models]
+const _GENERAL_BOOL_KEYS = Set([
+    "all_in_turtle",
+    "photosynthesis",
+    "scattering",
+    "cache_pixel_table",
+    "toricity",
+    "cache_radiation",
+    "area_ratio",
+    "save_on_disk",
+    "nir_interception",
+    "nir_scattering",
+    "log_debug",
+    "debug",
+])
+
+const _GENERAL_INT_KEYS = Set([
+    "sky_sectors",
+    "radiation_timestep",
+    "scattering_max_iter",
+])
+
+const _GENERAL_FLOAT_KEYS = Set([
+    "scene_rotation",
+    "scattering_stop_ratio",
+    "scattering_coeff_par",
+    "scattering_coeff_nir",
+])
+
+const _OUTPUT_CONFIG_ORDER = [
+    "output_directory",
+    "simulation_directory",
+    "write_summary",
+    "export_ops",
+    "component_variables",
+    "scene_variables",
+    "opf_variables",
+    "opf_overwrite_variables",
+]
+
+function _normalize_group_name(x)
+    s = strip(string(x))
+    isempty(s) && return s
+    replace(s, r"^#\[[^\]]+\]\s*" => "")
+end
+
+function _normalize_ordered_dict(x)
+    x isa AbstractDict || return OrderedDict{String,Any}()
+    out = OrderedDict{String,Any}()
+    for (k, v) in x
+        key = string(k)
+        out[key] =
+            if v isa AbstractDict
+                _normalize_ordered_dict(v)
+            elseif v isa AbstractVector
+                Any[
+                    item isa AbstractDict ? _normalize_ordered_dict(item) : item for item in v
+                ]
+            else
+                v
+            end
+    end
+    return out
+end
+
+function _normalize_general_value(key::String, value; from_yaml::Bool=false)
+    if key == "pixel_size"
+        v = _as_float(value, 0.25)
+        return from_yaml ? (v / 100.0) : v
+    elseif key in _GENERAL_BOOL_KEYS
+        return _as_bool(value, false)
+    elseif key in _GENERAL_INT_KEYS
+        return _as_int(value, 0)
+    elseif key in _GENERAL_FLOAT_KEYS
+        return _as_float(value, 0.0)
+    elseif key == "meteo_range"
+        value === nothing && return nothing
+        s = strip(string(value))
+        return isempty(s) ? nothing : s
+    end
+    return value isa AbstractDict ? _normalize_ordered_dict(value) : value
+end
+
+function _parse_general_config(raw::AbstractDict{String,Any}; from_yaml::Bool=false)
+    out = OrderedDict{String,Any}()
+    for (k, v) in raw
+        key = string(k)
+        key in ("scene", "models", "meteo") && continue
+        key in _OUTPUT_CONFIG_ORDER && continue
+        out[key] = _normalize_general_value(key, v; from_yaml=from_yaml)
+    end
+    return out
+end
+
+function _bool_flags_dict(x)
+    x isa AbstractDict || return OrderedDict{String,Bool}()
+    out = OrderedDict{String,Bool}()
+    for (k, v) in x
+        out[string(k)] = _as_bool(v, false)
+    end
+    return out
+end
+
+function _parse_outputs(raw::AbstractDict{String,Any})
+    vars = LightOutputVariables(
+        _bool_flags_dict(get(raw, "component_variables", OrderedDict{String,Any}())),
+        _bool_flags_dict(get(raw, "scene_variables", OrderedDict{String,Any}())),
+        _bool_flags_dict(get(raw, "opf_variables", OrderedDict{String,Any}())),
+    )
+    return LightOutputsConfig(
+        string(get(raw, "output_directory", "output")),
+        strip(string(get(raw, "simulation_directory", ""))),
+        _as_bool(get(raw, "write_summary", false), false),
+        get(raw, "export_ops", nothing),
+        _as_bool(get(raw, "opf_overwrite_variables", true), true),
+        vars,
+    )
+end
+
+function _normalize_outputs!(cfg::LightConfig)
+    out = cfg.outputs
+    out.directory = string(out.directory)
+    out.simulation_directory = strip(string(out.simulation_directory))
+    out.write_summary = _as_bool(out.write_summary, false)
+    out.opf_overwrite_variables = _as_bool(out.opf_overwrite_variables, true)
+    out.variables.component = _bool_flags_dict(out.variables.component)
+    out.variables.scene = _bool_flags_dict(out.variables.scene)
+    out.variables.opf = _bool_flags_dict(out.variables.opf)
+    return cfg
+end
+
+function _model_group_from_file(path::AbstractString)
+    raw = _load_yaml_ordered(path)
+    group = haskey(raw, "Group") ? _normalize_group_name(raw["Group"]) : ""
+    isempty(group) && error("Model file $(path) is missing a non-empty `Group` entry.")
+    return group
+end
+
+function _source_files_from_yaml(path::AbstractString, raw::AbstractDict{String,Any})
+    base = dirname(path)
+    haskey(raw, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
+    haskey(raw, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
+    scene = _join_if_relative(base, string(raw["scene"]))
+    meteo = _join_if_relative(base, string(raw["meteo"]))
+
+    model_paths = OrderedDict{String,String}()
+    models = get(raw, "models", nothing)
+    if models isa AbstractVector
+        for entry in models
+            abs_path = _join_if_relative(base, string(entry))
+            group = _model_group_from_file(abs_path)
+            haskey(model_paths, group) && error("Duplicate model group $(repr(group)) in config models list.")
+            model_paths[group] = abs_path
+        end
+    end
+
+    const_path = joinpath(base, "const.yml")
+    return LightConfigSourceFiles(
+        String(path),
+        scene,
+        meteo,
+        model_paths,
+        isfile(const_path) ? const_path : nothing,
+        base,
+    )
+end
+
+function _load_models_from_paths(model_paths::OrderedDict{String,String})
+    out = OrderedDict{String,OrderedDict{String,Any}}()
+    for (group, path) in model_paths
+        raw = _load_yaml_ordered(path)
+        types = get(raw, "Type", nothing)
+        types isa AbstractDict || (types = OrderedDict{String,Any}())
+        out[group] = _normalize_ordered_dict(types)
+    end
+    return out
+end
+
+function _load_constants(const_path::Union{Nothing,String})
+    const_path === nothing && return OrderedDict{String,Any}()
+    isfile(const_path) || return OrderedDict{String,Any}()
+    return _normalize_ordered_dict(_load_yaml_ordered(const_path))
+end
+
+function _config_base_dir(cfg::LightConfig)
+    return cfg.source_files.base_dir
+end
+
+function config_value(cfg::LightConfig, key::String, default=nothing)
+    return get(cfg.general, key, default)
+end
+
+function output_variable_flags(cfg::LightConfig, kind::Symbol)
+    vars = cfg.outputs.variables
+    if kind === :component
+        return vars.component
+    elseif kind === :scene
+        return vars.scene
+    elseif kind === :opf
+        return vars.opf
+    end
+    error("Unsupported output variable kind: $(kind)")
+end
+
+function model_type_configs(cfg::LightConfig)
+    out = NamedTuple[]
+    for (group, types) in cfg.models
+        for (type_name, params) in types
+            push!(out, (group=group, type=type_name, params=params))
+        end
+    end
+    return out
 end
 
 function refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
-    d = cfg.raw
-    base = get(d, "__base_dir", dirname(cfg.source_path))
-    d["__base_dir"] = base
+    src = cfg.source_files
+    src.base_dir = isempty(src.base_dir) ? dirname(src.config) : src.base_dir
+    src.scene = _join_if_relative(src.base_dir, string(src.scene))
+    src.meteo = _join_if_relative(src.base_dir, string(src.meteo))
 
-    haskey(d, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
-    haskey(d, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
+    norm_models = OrderedDict{String,String}()
+    for (group, path) in src.models
+        norm_models[string(group)] = _join_if_relative(src.base_dir, string(path))
+    end
+    src.models = norm_models
 
-    cfg.scene = _join_if_relative(base, string(d["scene"]))
-    cfg.meteo = _join_if_relative(base, string(d["meteo"]))
-    cfg.all_in_turtle = _as_bool(get(d, "all_in_turtle", false), false)
-    cfg.turtle_sectors = _as_int(get(d, "sky_sectors", 46), 46)
-    cfg.pixel_size = _as_float(get(d, "pixel_size", 0.25), 0.25) / 100.0
-    cfg.area_ratio = _as_bool(get(d, "area_ratio", true), true)
-    cfg.scattering = _as_bool(get(d, "scattering", true), true)
-    cfg.scattering_max_iter = _as_int(get(d, "scattering_max_iter", 20), 20)
-    cfg.scattering_stop_ratio = _as_float(get(d, "scattering_stop_ratio", 0.01), 0.01)
-    cfg.scattering_coeff_par = _as_float(get(d, "scattering_coeff_par", 0.15), 0.15)
-    cfg.scattering_coeff_nir = _as_float(get(d, "scattering_coeff_nir", 0.30), 0.30)
-    cfg.cache_radiation = _as_bool(get(d, "cache_radiation", false), false)
+    normalized_general = OrderedDict{String,Any}()
+    for (k, v) in cfg.general
+        normalized_general[string(k)] = _normalize_general_value(string(k), v; from_yaml=false)
+    end
+    cfg.general = normalized_general
+    _normalize_outputs!(cfg)
 
-    model_paths = _model_paths_from_raw(d, cfg.scene)
-    if reload_models || model_paths != cfg.model_paths
-        cfg.model_paths = model_paths
-        cfg.model_raw = OrderedDict{String,Any}[
-            isfile(path) ? _load_yaml_ordered(path) : OrderedDict{String,Any}() for path in model_paths
-        ]
+    if reload_models
+        cfg.models = _load_models_from_paths(src.models)
+    else
+        normalized_models = OrderedDict{String,OrderedDict{String,Any}}()
+        for (group, types) in cfg.models
+            normalized_models[string(group)] = _normalize_ordered_dict(types)
+        end
+        cfg.models = normalized_models
+    end
+
+    cfg.constants = _normalize_ordered_dict(cfg.constants)
+    if isempty(cfg.constants)
+        cfg.constants = _load_constants(src.constants)
     end
     return cfg
 end
@@ -100,24 +311,13 @@ Read a YAML configuration file and normalize ARCHIMED light options into a `Ligh
 """
 function read_light_config(path::AbstractString)
     d = _load_yaml_ordered(path)
-    d["__base_dir"] = dirname(path)
     cfg = LightConfig(
-        "",
-        "",
-        false,
-        46,
-        0.0025,
-        true,
-        true,
-        20,
-        0.01,
-        0.15,
-        0.30,
-        false,
-        d,
         String(path),
-        String[],
-        OrderedDict{String,Any}[],
+        _source_files_from_yaml(path, d),
+        _parse_general_config(d; from_yaml=true),
+        OrderedDict{String,OrderedDict{String,Any}}(),
+        _parse_outputs(d),
+        OrderedDict{String,Any}(),
     )
     return refresh_light_config!(cfg; reload_models=true)
 end
@@ -137,31 +337,55 @@ function write_light_inputs(
     outroot = String(outdir)
     mkpath(outroot)
 
-    raw = copy(cfg.raw)
-    delete!(raw, "__base_dir")
+    raw = OrderedDict{String,Any}()
+    raw["scene"] = _safe_output_relpath(scene_rel)
 
     model_rels = String[]
-    model_specs = get(raw, "models", nothing)
-    if model_specs isa AbstractVector
-        for i in eachindex(cfg.model_raw)
-            rel = i <= length(model_specs) ? _safe_output_relpath(string(model_specs[i])) : joinpath("models", "model$(i).yml")
-            path = joinpath(outroot, rel)
-            mkpath(dirname(path))
-            YAML.write_file(path, cfg.model_raw[i])
-            push!(model_rels, rel)
+    for (group, types) in cfg.models
+        src_path = get(cfg.source_files.models, group, joinpath("models", "$(group).yml"))
+        rel0 = if isabspath(src_path)
+            try
+                relpath(src_path, _config_base_dir(cfg))
+            catch
+                basename(src_path)
+            end
+        else
+            src_path
         end
-        raw["models"] = model_rels
+        rel = _safe_output_relpath(rel0)
+        path = joinpath(outroot, rel)
+        mkpath(dirname(path))
+        YAML.write_file(path, OrderedDict{String,Any}("Group" => group, "Type" => _normalize_ordered_dict(types)))
+        push!(model_rels, rel)
+    end
+    !isempty(model_rels) && (raw["models"] = model_rels)
+
+    meteo_rel = basename(cfg.source_files.meteo)
+    if isfile(cfg.source_files.meteo)
+        cp(cfg.source_files.meteo, joinpath(outroot, meteo_rel); force=true)
+    end
+    raw["meteo"] = meteo_rel
+
+    for (k, v) in cfg.general
+        raw[k] = k == "pixel_size" ? (Float64(v) * 100.0) : v
     end
 
-    meteo_rel = basename(cfg.meteo)
-    if isfile(cfg.meteo)
-        cp(cfg.meteo, joinpath(outroot, meteo_rel); force=true)
-    end
-    raw["scene"] = _safe_output_relpath(scene_rel)
-    raw["meteo"] = meteo_rel
+    raw["output_directory"] = cfg.outputs.directory
+    !isempty(cfg.outputs.simulation_directory) && (raw["simulation_directory"] = cfg.outputs.simulation_directory)
+    raw["write_summary"] = cfg.outputs.write_summary
+    cfg.outputs.export_ops !== nothing && (raw["export_ops"] = cfg.outputs.export_ops)
+    !isempty(cfg.outputs.variables.component) && (raw["component_variables"] = cfg.outputs.variables.component)
+    !isempty(cfg.outputs.variables.scene) && (raw["scene_variables"] = cfg.outputs.variables.scene)
+    !isempty(cfg.outputs.variables.opf) && (raw["opf_variables"] = cfg.outputs.variables.opf)
+    raw["opf_overwrite_variables"] = cfg.outputs.opf_overwrite_variables
 
     cfg_path = joinpath(outroot, config_name)
     YAML.write_file(cfg_path, raw)
+
+    if !isempty(cfg.constants)
+        const_name = cfg.source_files.constants === nothing ? "const.yml" : basename(cfg.source_files.constants)
+        YAML.write_file(joinpath(outroot, const_name), cfg.constants)
+    end
     return cfg_path
 end
 

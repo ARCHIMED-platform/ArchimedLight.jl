@@ -10,23 +10,37 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 
 struct LinksScatteringBackend <: ScatteringBackend end
 
-mutable struct LightConfig
+mutable struct LightConfigSourceFiles
+    config::String
     scene::String
     meteo::String
-    all_in_turtle::Bool
-    turtle_sectors::Int
-    pixel_size::Float64
-    area_ratio::Bool
-    scattering::Bool
-    scattering_max_iter::Int
-    scattering_stop_ratio::Float64
-    scattering_coeff_par::Float64
-    scattering_coeff_nir::Float64
-    cache_radiation::Bool
-    raw::OrderedDict{String,Any}
+    models::OrderedDict{String,String}
+    constants::Union{Nothing,String}
+    base_dir::String
+end
+
+mutable struct LightOutputVariables
+    component::OrderedDict{String,Bool}
+    scene::OrderedDict{String,Bool}
+    opf::OrderedDict{String,Bool}
+end
+
+mutable struct LightOutputsConfig
+    directory::String
+    simulation_directory::String
+    write_summary::Bool
+    export_ops
+    opf_overwrite_variables::Bool
+    variables::LightOutputVariables
+end
+
+mutable struct LightConfig
     source_path::String
-    model_paths::Vector{String}
-    model_raw::Vector{OrderedDict{String,Any}}
+    source_files::LightConfigSourceFiles
+    general::OrderedDict{String,Any}
+    models::OrderedDict{String,OrderedDict{String,Any}}
+    outputs::LightOutputsConfig
+    constants::OrderedDict{String,Any}
 end
 
 struct MeteoTable

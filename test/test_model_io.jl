@@ -41,13 +41,14 @@ import MultiScaleTreeGraph
         write(meteo_path, "date;hour_start;hour_end;Rg;Tac;latitude;longitude;altitude\n2016/07/01;08:00:00;09:00:00;0;25;0;0;0\n")
 
         cfg = ArchimedLight.read_light_config(cfg_path)
-        @test collect(keys(cfg.raw))[1:5] == ["scene", "models", "meteo", "pixel_size", "scattering"]
+        @test collect(keys(cfg.general))[1:2] == ["pixel_size", "scattering"]
+        @test collect(keys(cfg.source_files.models)) == ["plant"]
 
-        cfg.raw["pixel_size"] = 2.5
+        cfg.general["pixel_size"] = 0.025
         ArchimedLight.refresh_light_config!(cfg)
-        cfg.model_raw[1]["Type"]["Leaf"]["Interception"]["transparency"] = 0.25
+        cfg.models["plant"]["Leaf"]["Interception"]["transparency"] = 0.25
 
-        @test isapprox(cfg.pixel_size, 0.025; atol=1e-12)
+        @test isapprox(get(cfg.general, "pixel_size", 0.0), 0.025; atol=1e-12)
 
         outdir = joinpath(tmp, "written")
         out_cfg = ArchimedLight.write_light_inputs(outdir, cfg; scene_rel="scene/exported.ops")
@@ -63,11 +64,11 @@ import MultiScaleTreeGraph
     @testset "Scene export writes OPF attrs" begin
         case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input")
         cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-        cfg.raw["export_ops"] = true
-        cfg.raw["opf_variables"] = OrderedDict("Ri_PAR_0_q" => true)
+        cfg.outputs.export_ops = true
+        cfg.outputs.variables.opf = OrderedDict("Ri_PAR_0_q" => true)
 
-        scene = ArchimedLight.read_scene(cfg.scene)
-        meteo = ArchimedLight.read_meteo(cfg.meteo)
+        scene = ArchimedLight.read_scene(cfg.source_files.scene)
+        meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
         selected = ArchimedLight.prepare_meteo(meteo, cfg)
         step = only(ArchimedLight.run_light_series(scene, meteo, cfg))
 
