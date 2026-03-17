@@ -29,7 +29,7 @@ end
 
 function _as_float(x, default::Real)
     x === nothing && return default
-    x isa Number && return Float64(x)
+    x isa Number && return float(x)
     x isa String && return something(tryparse(Float64, x), default)
     return default
 end
@@ -366,7 +366,7 @@ function write_light_inputs(
     raw["meteo"] = meteo_rel
 
     for (k, v) in cfg.general
-        raw[k] = k == "pixel_size" ? (Float64(v) * 100.0) : v
+        raw[k] = k == "pixel_size" ? (100 * v) : v
     end
 
     raw["output_directory"] = cfg.outputs.directory
@@ -584,10 +584,10 @@ function _scene_xy_bounds_from_mtg(mtg)
     p0 = dims[1]
     p1 = dims[2]
     return (
-        min(Float64(p0[1]), Float64(p1[1])),
-        min(Float64(p0[2]), Float64(p1[2])),
-        max(Float64(p0[1]), Float64(p1[1])),
-        max(Float64(p0[2]), Float64(p1[2])),
+        min(p0[1], p1[1]),
+        min(p0[2], p1[2]),
+        max(p0[1], p1[1]),
+        max(p0[2], p1[2]),
     )
 end
 
