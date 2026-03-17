@@ -135,26 +135,34 @@ function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::
     vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
     upper_hit = _use_upper_hit_pixel_table(cfg)
-    pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
-    hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
-    for i in 1:n
-        pa_by_sector[i], hits_by_sector[i] = _rasterize_direction_java(
+    sector_responses = [
+        _rasterize_direction_java(
             vertices,
             faces,
             face2node,
-            turtle.sectors[i].direction,
+            sector.direction,
             cfg,
             plotbox,
             cache_ctx=cache_ctx,
             upper_hit=upper_hit,
         )
-    end
+        for sector in turtle.sectors
+    ]
+    pa_by_sector = first.(sector_responses)
+    hits_by_sector = last.(sector_responses)
     emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     emitter_weights =
-        isempty(emitter_nodes) ? Dict{Tuple{Int,Int},Float64}() :
+        isempty(emitter_nodes) ? Dict{Tuple{Int,Int},eltype(values(emit_par))}() :
         _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
     return pa_by_sector, hits_by_sector, node_ids, emit_par, emit_nir, emitter_weights
+end
+
+function _first_nonempty_value(dicts, default)
+    for dict in dicts
+        isempty(dict) || return first(values(dict))
+    end
+    default
 end
 
 function _combine_sector_responses(
@@ -162,9 +170,9 @@ function _combine_sector_responses(
     hits_by_sector,
     fluxes::DirectionalFluxes,
     node_ids_all,
-    emit_par::Dict{Int,Float64}=Dict{Int,Float64}(),
-    emit_nir::Dict{Int,Float64}=Dict{Int,Float64}(),
-    emitter_weights::Dict{Tuple{Int,Int},Float64}=Dict{Tuple{Int,Int},Float64}(),
+    emit_par=Dict{Int,eltype(fluxes.par)}(),
+    emit_nir=Dict{Int,eltype(fluxes.nir)}(),
+    emitter_weights=Dict{Tuple{Int,Int},eltype(fluxes.par)}(),
 )
     node_ids = Set{Int}()
     for k in node_ids_all
@@ -176,24 +184,28 @@ function _combine_sector_responses(
         end
     end
 
-    projected_area_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
-    incident_par_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
-    incident_nir_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
+    area0 = _first_nonempty_value(pa_by_sector, zero(eltype(fluxes.par)))
+    projected_area_per_node = Dict{Int,typeof(area0)}(id => zero(area0) for id in node_ids)
+    incident_par_power_per_node = Dict{Int,typeof(fluxes.par[1] * area0)}(id => zero(fluxes.par[1] * area0) for id in node_ids)
+    incident_nir_power_per_node = Dict{Int,typeof(fluxes.nir[1] * area0)}(id => zero(fluxes.nir[1] * area0) for id in node_ids)
     hits_per_node = Dict{Int,Int}(id => 0 for id in node_ids)
+    zero_area = zero(area0)
+    zero_par = zero(eltype(values(incident_par_power_per_node)))
+    zero_nir = zero(eltype(values(incident_nir_power_per_node)))
 
     for i in eachindex(pa_by_sector)
         pf = fluxes.par[i]
         nf = fluxes.nir[i]
-        active_flux = (pf != 0.0) || (nf != 0.0)
+        active_flux = !iszero(pf) || !iszero(nf)
 
         for (nid, pa) in pa_by_sector[i]
             if active_flux
-                projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-                if pf != 0.0
-                    incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + pf * pa
+                projected_area_per_node[nid] = get(projected_area_per_node, nid, zero_area) + pa
+                if !iszero(pf)
+                    incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, zero_par) + pf * pa
                 end
-                if nf != 0.0
-                    incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nf * pa
+                if !iszero(nf)
+                    incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, zero_nir) + nf * pa
                 end
             end
         end
@@ -203,8 +215,8 @@ function _combine_sector_responses(
     end
 
     for ((to, src), w) in emitter_weights
-        incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + w * get(emit_par, src, 0.0)
-        incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + w * get(emit_nir, src, 0.0)
+        incident_par_power_per_node[to] = get(incident_par_power_per_node, to, zero_par) + w * get(emit_par, src, zero_par)
+        incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, zero_nir) + w * get(emit_nir, src, zero_nir)
     end
 
     FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
@@ -491,8 +503,7 @@ end
 
 function _interception_area_per_node_local(scene::SceneGeometry, cfg::LightConfig)
     vertices, faces, face2node, node_ids, _, _ = _scene_geometry_for_interception(scene, cfg)
-    # T = isempty(vertices) ? Float64 : typeof(first(vertices)[1])
-    T = Float64 # This is given by the vertices in _scene_geometry_for_interception, I prefer to be explicit here to avoid type instability in the area computation.
+    T = isempty(vertices) ? Float64 : typeof(first(vertices)[1])
     zero_t = zero(T)
     area = Dict{Int,T}(nid => zero_t for nid in node_ids)
     @inbounds for i in eachindex(faces)
@@ -509,7 +520,7 @@ function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band
     virtual_groups = _virtual_sensor_groups(cfg)
     b = uppercase(band)
     sf_default = _default_scattering_factor_local(cfg, b)
-    out = Dict{Int,Float64}()
+    out = Dict{Int,typeof(sf_default)}()
     _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
     for nid in node_ids
         group = get(node_group, nid, get(scene.node_group, nid, ""))
@@ -522,7 +533,7 @@ function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band
         coeffs = get(
             coeffs_by_group_type,
             (group, typ),
-            get(coeffs_by_group_type, (group, "*"), Dict{String,Float64}()),
+            get(coeffs_by_group_type, (group, "*"), Dict{String,typeof(sf_default)}()),
         )
         sf = get(coeffs, b, sf_default)
         out[nid] = clamp(1.0 - sf, 0.0, 1.0)
@@ -570,8 +581,8 @@ function _compute_extra_band_light(
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
     extras_irr = _extra_band_irradiance(meteo_row)
-    extra_0_q = Dict{String,Dict{Int,Float64}}()
-    extra_q = Dict{String,Dict{Int,Float64}}()
+    extra_0_q = Dict{String,AbstractDict}()
+    extra_q = Dict{String,AbstractDict}()
 
     isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
 
@@ -582,11 +593,11 @@ function _compute_extra_band_light(
         first_band = compute_first_order(
             scene,
             turtle,
-            DirectionalFluxes(ids, flux_band, zeros(Float64, n)),
+            DirectionalFluxes(ids, flux_band, zeros(eltype(flux_band), n)),
             cfg;
             backend=interception_backend,
         )
-        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_par_power_per_node)
+        order0 = copy(first_band.incident_par_power_per_node)
 
         added =
             if get(cfg.general, "scattering", true)
@@ -600,12 +611,13 @@ function _compute_extra_band_light(
                     band=band,
                 ).added_power_per_node
             else
-                Dict{Int,Float64}()
+                Dict{Int,valtype(order0)}()
             end
 
-        total = Dict{Int,Float64}()
+        total = copy(order0)
+        zero_t = zero(valtype(order0))
         for nid in union(keys(order0), keys(added))
-            total[nid] = get(order0, nid, 0.0) + get(added, nid, 0.0)
+            total[nid] = get(order0, nid, zero_t) + get(added, nid, zero_t)
         end
         extra_0_q[band] = order0
         extra_q[band] = total
@@ -641,7 +653,7 @@ function run_light_step(
     dt_seconds = _step_duration_seconds_local(meteo_row)
     area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
-    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
+    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,valtype(abs_par)}()
     sky = compute_sky(meteo_row, cfg)
     nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(cfg, sky)
@@ -699,16 +711,9 @@ function run_light_series(
     nir_scattering = _nir_scattering_enabled_local(cfg) && nir_interception
     area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
-    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
+    abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,valtype(abs_par)}()
     use_cache = get(cfg.general, "cache_radiation", false) && _can_use_series_radiation_cache(ib)
-    cache = Dict{UInt64,Tuple{
-        Vector{Dict{Int,Float64}},
-        Vector{Dict{Int,Int}},
-        Vector{Int},
-        Dict{Int,Float64},
-        Dict{Int,Float64},
-        Dict{Tuple{Int,Int},Float64},
-    }}()
+    cache = Dict{UInt64,Any}()
     rows_eff = _prepare_meteo_rows_for_series(meteo, cfg)
     out = Vector{LightStepResult}(undef, length(rows_eff))
     for i in eachindex(rows_eff)
