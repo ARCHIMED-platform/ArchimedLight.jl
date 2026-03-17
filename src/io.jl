@@ -50,7 +50,6 @@ const _GENERAL_BOOL_KEYS = Set([
     "toricity",
     "cache_radiation",
     "area_ratio",
-    "save_on_disk",
     "nir_interception",
     "nir_scattering",
     "log_debug",

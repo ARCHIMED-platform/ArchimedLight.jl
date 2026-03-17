@@ -52,7 +52,7 @@ sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 
 ## Caching Options
 - `cache_radiation: true` in config reuses directional responses across meteo rows in `run_light_series`.
-- `save_on_disk: true` (or `cache_pixel_table: true`) stores per-direction projection tables under
+- `cache_pixel_table: true` stores per-direction projection tables under
   `<output_directory>/pixel_tables_cache`.
 
 ## Backends and Modes
