@@ -272,7 +272,7 @@ function main()
         println("- 3D visualization (Java PAR): ", out_java_png)
     else
         println("- Java component_values.csv not found at: ", java_component_path)
-        println("  Run Java once and place outputs under example/output/000001 to enable comparison.")
+        println("  Run the reference implementation once and place outputs under example_1/output/000001 to enable comparison.")
     end
 end
 

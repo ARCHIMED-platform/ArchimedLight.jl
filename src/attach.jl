@@ -205,7 +205,9 @@ end
     attach_light_step!(scene, step; fields=[:incident_par_flux], names=Dict(), fill_value=nothing)
 
 Attach one or more per-node `LightBudget` fields from a single `LightStepResult`
-onto `scene.mtg`, using Java-style attribute names by default.
+onto `scene.mtg`. The selectors in `fields` are Julia-facing (`:incident_par_flux`,
+`:absorbed_par_energy`, ...), while the attached MTG attributes default to the
+ARCHIMED names (`:Ri_PAR_f`, `:Ra_PAR_q`, ...).
 
 Example:
 
@@ -242,6 +244,8 @@ Return a copied MTG prepared for visualization with `plantviz`.
 The copy keeps the original plant geometry, optionally materializes ARCHIMED paving as
 `Cobblestone` geometry nodes, and can attach one or several simulated light outputs directly
 onto the nodes so `plantviz(..., color=:Ri_PAR_f)` works on the full simulated scene.
+Field selectors such as `:incident_par_flux` are mapped to MTG attribute names such as
+`:Ri_PAR_f` unless you override them with `names=...`.
 
 `xy_bounds=(xmin, ymin, xmax, ymax)` can be used to keep only a local paving neighborhood in
 the visualization copy while leaving the plant untouched.

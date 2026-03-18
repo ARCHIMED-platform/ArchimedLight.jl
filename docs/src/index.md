@@ -8,7 +8,7 @@ Julia reimplementation of the ARCHIMED light model.
 
 ![Coffee scene light interception](assets/coffee_scene_light_interception.png)
 
-The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script builds a visualization MTG with `visual_scene_mtg(...)`, which materializes the ARCHIMED cobblestone paving as regular geometry nodes and writes `Ri_PAR_f` back onto every plotted node before calling `plantviz(..., color=:Ri_PAR_f)`.
+The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script builds a visualization MTG with `visual_scene_mtg(...; fields=[:incident_par_flux])`, which materializes the ARCHIMED cobblestone paving as regular geometry nodes and writes the MTG attribute `Ri_PAR_f` before calling `plantviz(..., color=:Ri_PAR_f)`.
 
 ## Scope
 
@@ -31,7 +31,12 @@ meteo = read_meteo(cfg.paths.meteo)
 
 row = first(meteo.rows)
 step = run_light_step(scene, row, cfg)
+
+step.budget.incident_flux.total.par
+step.budget.absorbed_energy.total.par
 ```
+
+In Julia code, the runtime results are grouped by quantity and waveband. Exported CSV files and MTG attributes keep the ARCHIMED names such as `Ri_PAR_f` and `Ra_PAR_q`.
 
 ## Navigation
 - See [ARCHIMED Reference](archimed_reference.md) for a detailed explanation of the original Java algorithm, the Julia port, and the modeling assumptions.
