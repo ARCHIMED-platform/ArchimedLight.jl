@@ -534,13 +534,13 @@ function _sky_fraction_per_node(
     area_per_node::Dict{Int,Float64},
     node_ids::Vector{Int},
 )
-    pa_by_sector, _, _, _, _, _ = _build_sector_responses(scene, turtle, cfg)
+    responses = _build_sector_responses(scene, turtle, cfg)
     sky_count = 0
     visible_sum = Dict{Int,Float64}()
     for (i, sector) in enumerate(turtle.sectors)
         sector.source == :sun && continue
         sky_count += 1
-        for (nid, a) in pa_by_sector[i]
+        for (nid, a) in responses.projected_area_per_sector[i]
             visible_sum[nid] = get(visible_sum, nid, 0.0) + a
         end
     end
