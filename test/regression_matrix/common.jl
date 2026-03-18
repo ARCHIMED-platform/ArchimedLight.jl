@@ -356,7 +356,7 @@ end
 
 function _render_ri_par_f_figure(scene, step, cfg; title::String)
     vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
-    metric = step.budget.ri_par_f_per_node
+    metric = step.budget.incident.par.flux_per_node
 
     v_sum = zeros(Float64, length(vertices))
     v_count = zeros(Int, length(vertices))

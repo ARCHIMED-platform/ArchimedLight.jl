@@ -153,8 +153,6 @@ function _row_get(row::NamedTuple, column::AbstractString, default="NA")
     hasproperty(row, name) ? getproperty(row, name) : default
 end
 
-Base.getindex(row::NamedTuple, column::AbstractString) = getproperty(row, Symbol(column))
-
 function _row_get(row::AbstractDict, column::AbstractString, default="NA")
     get(row, column, default)
 end
@@ -535,22 +533,23 @@ function _ri_value(
     step_duration::Float64,
 )
     b = uppercase(band)
+    incident = step.budget.incident
     if b == "PAR"
         if interception_only
-            return quantity ? get(step.budget.ri_par_0_q_per_node, nid, 0.0) : get(step.budget.ri_par_0_f_per_node, nid, 0.0)
+            return quantity ? get(incident.par.initial_energy_per_node, nid, 0.0) : get(incident.par.initial_flux_per_node, nid, 0.0)
         end
-        return quantity ? get(step.budget.ri_par_q_per_node, nid, 0.0) : get(step.budget.ri_par_f_per_node, nid, 0.0)
+        return quantity ? get(incident.par.energy_per_node, nid, 0.0) : get(incident.par.flux_per_node, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(step.budget.ri_nir_0_q_per_node, nid, 0.0) : get(step.budget.ri_nir_0_f_per_node, nid, 0.0)
+            return quantity ? get(incident.nir.initial_energy_per_node, nid, 0.0) : get(incident.nir.initial_flux_per_node, nid, 0.0)
         end
-        return quantity ? get(step.budget.ri_nir_q_per_node, nid, 0.0) : get(step.budget.ri_nir_f_per_node, nid, 0.0)
+        return quantity ? get(incident.nir.energy_per_node, nid, 0.0) : get(incident.nir.flux_per_node, nid, 0.0)
     end
 
     qdict =
         interception_only ?
-        get(step.budget.extra_0_q_per_band, Symbol(b), nothing) :
-        get(step.budget.extra_q_per_band, Symbol(b), nothing)
+        get(step.budget.extra_initial_energy_per_band, Symbol(b), nothing) :
+        get(step.budget.extra_energy_per_band, Symbol(b), nothing)
     q = isnothing(qdict) ? 0.0 : get(qdict, nid, 0.0)
     if quantity
         return q
@@ -571,16 +570,17 @@ function _ra_value(
     absorptance_cache::Dict{String,Dict{Int,Float64}},
 )
     b = uppercase(band)
+    absorbed = step.budget.absorbed
     if b == "PAR"
         if interception_only
-            return quantity ? get(step.budget.ra_par_0_q_per_node, nid, 0.0) : get(step.budget.ra_par_0_f_per_node, nid, 0.0)
+            return quantity ? get(absorbed.par.initial_energy_per_node, nid, 0.0) : get(absorbed.par.initial_flux_per_node, nid, 0.0)
         end
-        return quantity ? get(step.budget.ra_par_q_per_node, nid, 0.0) : get(step.budget.ra_par_f_per_node, nid, 0.0)
+        return quantity ? get(absorbed.par.energy_per_node, nid, 0.0) : get(absorbed.par.flux_per_node, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(step.budget.ra_nir_0_q_per_node, nid, 0.0) : get(step.budget.ra_nir_0_f_per_node, nid, 0.0)
+            return quantity ? get(absorbed.nir.initial_energy_per_node, nid, 0.0) : get(absorbed.nir.initial_flux_per_node, nid, 0.0)
         end
-        return quantity ? get(step.budget.ra_nir_q_per_node, nid, 0.0) : get(step.budget.ra_nir_f_per_node, nid, 0.0)
+        return quantity ? get(absorbed.nir.energy_per_node, nid, 0.0) : get(absorbed.nir.flux_per_node, nid, 0.0)
     end
 
     abs_band = get!(absorptance_cache, b) do
@@ -1370,7 +1370,7 @@ function summary_values_table(
             group = get(group_per_node, nid, "")
             type = get(type_per_node, nid, unavailable)
             area = get(area_per_node, nid, 0.0)
-            ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
+            ri_q = get(step.budget.incident.par.energy_per_node, nid, 0.0) + get(step.budget.incident.nir.energy_per_node, nid, 0.0)
             k = (object_id, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))
             acc[k] = (a0 + area, r0 + ri_q)

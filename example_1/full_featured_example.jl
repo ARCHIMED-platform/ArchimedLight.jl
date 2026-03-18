@@ -61,14 +61,14 @@ end
 
 function build_julia_component_values(scene, cfg, step)
     area_by_node = node_area_from_interception_geometry(scene, cfg)
-    custom0 = get(step.budget.extra_0_q_per_band, "CUSTOM", Dict{Int,Float64}())
-    customn = get(step.budget.extra_q_per_band, "CUSTOM", Dict{Int,Float64}())
+    custom0 = get(step.budget.extra_initial_energy_per_band, :CUSTOM, Dict{Int,Float64}())
+    customn = get(step.budget.extra_energy_per_band, :CUSTOM, Dict{Int,Float64}())
     d = Dict{Int,NamedTuple}()
     for nid in keys(area_by_node)
         d[nid] = (
             area=get(area_by_node, nid, NaN),
-            Ri_PAR_0_q=get(step.budget.ri_par_0_q_per_node, nid, NaN),
-            Ri_PAR_q=get(step.budget.ri_par_q_per_node, nid, NaN),
+            Ri_PAR_0_q=get(step.budget.incident.par.initial_energy_per_node, nid, NaN),
+            Ri_PAR_q=get(step.budget.incident.par.energy_per_node, nid, NaN),
             Ri_custom_0_q=get(custom0, nid, NaN),
             Ri_custom_q=get(customn, nid, NaN),
         )
@@ -178,11 +178,11 @@ function main()
     # Sanity checks: first-order geometry should match exactly on CPU.
     @assert max_abs_float_dict_diff(first_order.projected_area_per_node, step.first_order.projected_area_per_node) == 0.0
     @assert max_abs_int_dict_diff(first_order.hits_per_node, step.first_order.hits_per_node) == 0
-    staged_pipeline_par_diff = max_abs_float_dict_diff(budget.ri_par_q_per_node, step.budget.ri_par_q_per_node)
-    staged_pipeline_nir_diff = max_abs_float_dict_diff(budget.ri_nir_q_per_node, step.budget.ri_nir_q_per_node)
+    staged_pipeline_par_diff = max_abs_float_dict_diff(budget.incident.par.energy_per_node, step.budget.incident.par.energy_per_node)
+    staged_pipeline_nir_diff = max_abs_float_dict_diff(budget.incident.nir.energy_per_node, step.budget.incident.nir.energy_per_node)
 
     # The fixture contains an extra band (RI_custom_f).
-    @assert haskey(step.extra_band_irradiance, "CUSTOM")
+    @assert haskey(step.extra_band_irradiance, :CUSTOM)
 
     # Series execution (same inputs) with links backend selection.
     series = run_light_series(
@@ -194,14 +194,14 @@ function main()
         scattering_backend=LinksScatteringBackend(),
     )
 
-    par_vals = collect(values(step.budget.ri_par_q_per_node))
-    nir_vals = collect(values(step.budget.ri_nir_q_per_node))
+    par_vals = collect(values(step.budget.incident.par.energy_per_node))
+    nir_vals = collect(values(step.budget.incident.nir.energy_per_node))
 
     println("ArchimedLight full example completed")
     println("- meteo rows: ", length(meteo.rows))
     println("- turtle sectors: ", length(step.turtle.sectors))
-    println("- nodes in budget: ", length(step.budget.ri_par_q_per_node))
-    println("- custom bands: ", join(sort(collect(keys(step.extra_band_irradiance))), ", "))
+    println("- nodes in budget: ", length(step.budget.incident.par.energy_per_node))
+    println("- custom bands: ", join(string.(sort(collect(keys(step.extra_band_irradiance)))), ", "))
     println("- mean Ri_PAR_q: ", mean(par_vals))
     println("- mean Ri_NIR_q: ", mean(nir_vals))
     println("- series steps: ", length(series))
@@ -210,7 +210,7 @@ function main()
 
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
     par_q_by_node = Dict{Int,Float64}()
-    for (nid, q) in step.budget.ri_par_q_per_node
+    for (nid, q) in step.budget.incident.par.energy_per_node
         par_q_by_node[nid] = Float64(q)
     end
     traverse!(scene.mtg) do node

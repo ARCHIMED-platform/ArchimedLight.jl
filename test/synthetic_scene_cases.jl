@@ -2,6 +2,19 @@ using OrderedCollections: OrderedDict
 
 const _SYNTHETIC_CASE_FILTERS = Set(filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_SYNTHETIC_CASE", ""), ",")))))
 
+_incident_par_initial_flux(budget) = budget.incident.par.initial_flux_per_node
+_incident_nir_initial_flux(budget) = budget.incident.nir.initial_flux_per_node
+_incident_par_flux(budget) = budget.incident.par.flux_per_node
+_incident_nir_flux(budget) = budget.incident.nir.flux_per_node
+_incident_par_initial_energy(budget) = budget.incident.par.initial_energy_per_node
+_incident_nir_initial_energy(budget) = budget.incident.nir.initial_energy_per_node
+_incident_par_energy(budget) = budget.incident.par.energy_per_node
+_incident_nir_energy(budget) = budget.incident.nir.energy_per_node
+_absorbed_par_initial_flux(budget) = budget.absorbed.par.initial_flux_per_node
+_absorbed_nir_initial_flux(budget) = budget.absorbed.nir.initial_flux_per_node
+_absorbed_par_initial_energy(budget) = budget.absorbed.par.initial_energy_per_node
+_absorbed_nir_initial_energy(budget) = budget.absorbed.nir.initial_energy_per_node
+
 function _synthetic_case_enabled(name::String)
     isempty(_SYNTHETIC_CASE_FILTERS) && return true
     lowercase(name) in _SYNTHETIC_CASE_FILTERS
@@ -176,8 +189,8 @@ end
             budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.incident_par_q; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(budget.ri_par_0_f_per_node, 1, 0.0), expected.ri_par_0_f; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.incident_par_q; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(_incident_par_initial_flux(budget), 1, 0.0), expected.ri_par_0_f; atol=1e-10, rtol=1e-10)
         end
     end
 
@@ -201,8 +214,8 @@ end
             budget_no_scat = ArchimedLight.integrate_light(first_no_scat, nothing, cfg_no_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
             @test isapprox(get(first_no_scat.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(budget_no_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget_no_scat.ri_par_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_initial_energy(budget_no_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_energy(budget_no_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
 
             cfg_scat = _synthetic_cfg(cfg_ref; inputs.cfg_scat...)
             turtle_scat = ArchimedLight.build_turtle(cfg_scat, inputs.sky)
@@ -212,9 +225,9 @@ end
             budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
             @test get(scat.added_par_power_per_node, 2, 0.0) > 0.0
-            @test isapprox(get(budget_scat.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-            @test get(budget_scat.ri_par_q_per_node, 2, 0.0) > 0.0
-            @test get(budget_scat.ri_par_q_per_node, 2, 0.0) ≈ get(scat.added_par_power_per_node, 2, 0.0) atol = 1e-10 rtol = 1e-10
+            @test isapprox(get(_incident_par_initial_energy(budget_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+            @test get(_incident_par_energy(budget_scat), 2, 0.0) > 0.0
+            @test get(_incident_par_energy(budget_scat), 2, 0.0) ≈ get(scat.added_par_power_per_node, 2, 0.0) atol = 1e-10 rtol = 1e-10
         end
     end
 
@@ -244,8 +257,8 @@ end
 
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.upper_projected; atol=1e-10, rtol=1e-10)
             @test isapprox(get(first.projected_area_per_node, 2, 0.0), expected.lower_projected; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(budget.ri_par_0_q_per_node, 2, 0.0), expected.lower_ri_par_0_q; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget), 2, 0.0), expected.lower_ri_par_0_q; atol=1e-9, rtol=1e-9)
         end
     end
 
@@ -278,7 +291,7 @@ end
 
             @test isapprox(scene.total_area_per_node[1], expected.area; atol=1e-10, rtol=1e-10)
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(budget.ri_par_0_q_per_node, 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
         end
     end
 
@@ -343,9 +356,9 @@ end
             budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
             @test isapprox(get(first_notoric.projected_area_per_node, 1, 0.0), expected.no_toric_projected_area; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 1, 0.0), expected.no_toric_ri_par_0_q; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_ri_par_0_q; atol=1e-12, rtol=1e-12)
             @test isapprox(get(first_toric.projected_area_per_node, 1, 0.0), expected.toric_projected_area; atol=1e-6, rtol=1e-9)
-            @test isapprox(get(budget_toric.ri_par_0_q_per_node, 1, 0.0), expected.toric_ri_par_0_q; atol=1e-5, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget_toric), 1, 0.0), expected.toric_ri_par_0_q; atol=1e-5, rtol=1e-9)
             @test get(first_toric.projected_area_per_node, 1, 0.0) > get(first_notoric.projected_area_per_node, 1, 0.0)
         end
     end
@@ -384,8 +397,8 @@ end
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
             budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
-            @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
 
             @test get(first_toric.projected_area_per_node, 1, 0.0) > 0.0
             @test get(first_toric.projected_area_per_node, 2, 0.0) < get(first_notoric.projected_area_per_node, 2, 0.0)
@@ -395,10 +408,10 @@ end
                 atol=2e-2,
                 rtol=0.0,
             )
-            @test get(budget_toric.ri_par_0_q_per_node, 1, 0.0) > get(budget_notoric.ri_par_0_q_per_node, 1, 0.0)
-            @test get(budget_toric.ri_par_0_q_per_node, 2, 0.0) < get(budget_notoric.ri_par_0_q_per_node, 2, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) < get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
             @test isapprox(
-                get(budget_toric.ri_par_0_q_per_node, 1, 0.0) + get(budget_toric.ri_par_0_q_per_node, 2, 0.0),
+                get(_incident_par_initial_energy(budget_toric), 1, 0.0) + get(_incident_par_initial_energy(budget_toric), 2, 0.0),
                 100.0;
                 atol=2.0,
                 rtol=0.0,
@@ -438,12 +451,12 @@ end
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
             budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
-            @test get(budget_notoric.ri_par_0_q_per_node, 1, 0.0) > 0.0
-            @test get(budget_notoric.ri_par_0_q_per_node, 2, 0.0) > get(budget_notoric.ri_par_0_q_per_node, 1, 0.0)
-            @test get(budget_toric.ri_par_0_q_per_node, 1, 0.0) > get(budget_notoric.ri_par_0_q_per_node, 1, 0.0)
-            @test get(budget_toric.ri_par_0_q_per_node, 2, 0.0) < get(budget_notoric.ri_par_0_q_per_node, 2, 0.0)
-            @test get(budget_toric.ri_par_0_q_per_node, 1, 0.0) > 10.0
-            @test get(budget_toric.ri_par_0_q_per_node, 2, 0.0) > 70.0
+            @test get(_incident_par_initial_energy(budget_notoric), 1, 0.0) > 0.0
+            @test get(_incident_par_initial_energy(budget_notoric), 2, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) < get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > 10.0
+            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) > 70.0
         end
     end
 
@@ -486,24 +499,24 @@ end
             scat_toric = ArchimedLight.compute_scattering(scene, turtle_toric, first_toric, cfg_toric)
             budget_toric = ArchimedLight.integrate_light(first_toric, scat_toric, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
-            @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget_notoric.ri_par_q_per_node, 1, 0.0), expected.no_toric_upper_ri_par_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(budget_notoric.ri_par_0_q_per_node, 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
-            @test isapprox(get(budget_notoric.ri_par_q_per_node, 2, 0.0), expected.no_toric_lower_ri_par_q; atol=1e-5, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_q; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
+            @test isapprox(get(_incident_par_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_q; atol=1e-5, rtol=1e-9)
 
-            @test get(budget_toric.ri_par_0_q_per_node, 1, 0.0) > 0.0
-            @test get(budget_toric.ri_par_q_per_node, 1, 0.0) > get(budget_toric.ri_par_0_q_per_node, 1, 0.0)
-            @test get(budget_toric.ri_par_0_q_per_node, 2, 0.0) >= get(budget_notoric.ri_par_0_q_per_node, 2, 0.0)
-            @test get(budget_toric.ri_par_q_per_node, 2, 0.0) > get(budget_toric.ri_par_0_q_per_node, 2, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > 0.0
+            @test get(_incident_par_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_toric), 1, 0.0)
+            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) >= get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
+            @test get(_incident_par_energy(budget_toric), 2, 0.0) > get(_incident_par_initial_energy(budget_toric), 2, 0.0)
             @test get(scat_toric.added_par_power_per_node, 2, 0.0) > 0.0
             @test isapprox(
-                get(budget_toric.ri_par_q_per_node, 2, 0.0) - get(budget_toric.ri_par_0_q_per_node, 2, 0.0),
+                get(_incident_par_energy(budget_toric), 2, 0.0) - get(_incident_par_initial_energy(budget_toric), 2, 0.0),
                 get(scat_toric.added_par_power_per_node, 2, 0.0);
                 atol=1e-10,
                 rtol=1e-10,
             )
-            @test get(budget_toric.ri_par_q_per_node, 1, 0.0) > get(budget_notoric.ri_par_q_per_node, 1, 0.0)
-            @test get(budget_toric.ri_par_q_per_node, 2, 0.0) > get(budget_notoric.ri_par_q_per_node, 2, 0.0)
+            @test get(_incident_par_energy(budget_toric), 1, 0.0) > get(_incident_par_energy(budget_notoric), 1, 0.0)
+            @test get(_incident_par_energy(budget_toric), 2, 0.0) > get(_incident_par_energy(budget_notoric), 2, 0.0)
         end
     end
 
@@ -543,9 +556,9 @@ end
                 first_sensor = ArchimedLight.compute_first_order(scene, turtle_sensor, flux_sensor, cfg_sensor)
                 budget_sensor = ArchimedLight.integrate_light(first_sensor, nothing, cfg_sensor; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
-                @test isapprox(get(budget_opaque.ri_par_0_q_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-                @test isapprox(get(budget_sensor.ri_par_0_q_per_node, 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(budget_sensor.ri_par_0_q_per_node, 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_incident_par_initial_energy(budget_opaque), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+                @test isapprox(get(_incident_par_initial_energy(budget_sensor), 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_incident_par_initial_energy(budget_sensor), 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
             end
         end
     end
@@ -587,12 +600,12 @@ end
                 cfg = _synthetic_cfg(cfg_ref; models=[model_path])
                 step = ArchimedLight.run_light_step(scene, inputs.meteo, cfg)
 
-                @test isapprox(get(step.budget.ri_par_0_q_per_node, 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(step.budget.ri_nir_0_q_per_node, 1, 0.0), expected.ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(step.budget.ra_par_0_q_per_node, 1, 0.0), expected.ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(step.budget.ra_nir_0_q_per_node, 1, 0.0), expected.ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(step.budget.ra_par_0_f_per_node, 1, 0.0), expected.ra_par_0_f; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(step.budget.ra_nir_0_f_per_node, 1, 0.0), expected.ra_nir_0_f; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_incident_par_initial_energy(step.budget), 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_incident_nir_initial_energy(step.budget), 1, 0.0), expected.ri_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_absorbed_par_initial_energy(step.budget), 1, 0.0), expected.ra_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_absorbed_nir_initial_energy(step.budget), 1, 0.0), expected.ra_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_absorbed_par_initial_flux(step.budget), 1, 0.0), expected.ra_par_0_f; atol=1e-9, rtol=1e-9)
+                @test isapprox(get(_absorbed_nir_initial_flux(step.budget), 1, 0.0), expected.ra_nir_0_f; atol=1e-9, rtol=1e-9)
             end
         end
     end
@@ -656,16 +669,16 @@ end
                     step_duration_seconds=2.0,
                     columns=["node_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
                 ).rows
-                row_by_node = Dict(Int(r["node_id"]) => r for r in rows)
+                row_by_node = Dict(Int(r.node_id) => r for r in rows)
 
-                @test isapprox(Float64(row_by_node[1]["Ri_PAR_0_q"]), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ri_NIR_0_q"]), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ra_PAR_0_q"]), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ra_NIR_0_q"]), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[2]["Ri_PAR_0_q"]), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ri_NIR_0_q"]), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ra_PAR_0_q"]), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ra_NIR_0_q"]), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[1].Ri_PAR_0_q), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ri_NIR_0_q), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ra_PAR_0_q), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ra_NIR_0_q), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[2].Ri_PAR_0_q), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ri_NIR_0_q), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ra_PAR_0_q), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ra_NIR_0_q), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
             end
         end
     end
@@ -700,24 +713,24 @@ end
             @test length(series_uncached) == 3
             @test length(series_cached) == 3
             for i in eachindex(series_uncached)
-                @test _max_abs_float_dict_diff(series_uncached[i].budget.ri_par_f_per_node, series_cached[i].budget.ri_par_f_per_node) == 0.0
-                @test _max_abs_float_dict_diff(series_uncached[i].budget.ri_nir_f_per_node, series_cached[i].budget.ri_nir_f_per_node) == 0.0
-                @test _max_abs_float_dict_diff(series_uncached[i].budget.ri_par_q_per_node, series_cached[i].budget.ri_par_q_per_node) == 0.0
-                @test _max_abs_float_dict_diff(series_uncached[i].budget.ri_nir_q_per_node, series_cached[i].budget.ri_nir_q_per_node) == 0.0
+                @test _max_abs_float_dict_diff(_incident_par_flux(series_uncached[i].budget), _incident_par_flux(series_cached[i].budget)) == 0.0
+                @test _max_abs_float_dict_diff(_incident_nir_flux(series_uncached[i].budget), _incident_nir_flux(series_cached[i].budget)) == 0.0
+                @test _max_abs_float_dict_diff(_incident_par_energy(series_uncached[i].budget), _incident_par_energy(series_cached[i].budget)) == 0.0
+                @test _max_abs_float_dict_diff(_incident_nir_energy(series_uncached[i].budget), _incident_nir_energy(series_cached[i].budget)) == 0.0
             end
 
-            @test isapprox(get(series_uncached[1].budget.ri_par_f_per_node, 1, 0.0), expected.ri_par_f; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(series_uncached[1].budget.ri_nir_f_per_node, 1, 0.0), expected.ri_nir_f; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(series_uncached[1].budget.ri_par_q_per_node, 1, 0.0), expected.step1_ri_par_q; atol=1e-6, rtol=1e-12)
-            @test isapprox(get(series_uncached[1].budget.ri_nir_q_per_node, 1, 0.0), expected.step1_ri_nir_q; atol=1e-6, rtol=1e-12)
+            @test isapprox(get(_incident_par_flux(series_uncached[1].budget), 1, 0.0), expected.ri_par_f; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_nir_flux(series_uncached[1].budget), 1, 0.0), expected.ri_nir_f; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_par_energy(series_uncached[1].budget), 1, 0.0), expected.step1_ri_par_q; atol=1e-6, rtol=1e-12)
+            @test isapprox(get(_incident_nir_energy(series_uncached[1].budget), 1, 0.0), expected.step1_ri_nir_q; atol=1e-6, rtol=1e-12)
             @test isapprox(
-                get(series_uncached[2].budget.ri_par_q_per_node, 1, 0.0),
+                get(_incident_par_energy(series_uncached[2].budget), 1, 0.0),
                 expected.step2_scale * expected.step1_ri_par_q;
                 atol=1e-6,
                 rtol=1e-12,
             )
             @test isapprox(
-                get(series_uncached[2].budget.ri_nir_q_per_node, 1, 0.0),
+                get(_incident_nir_energy(series_uncached[2].budget), 1, 0.0),
                 expected.step2_scale * expected.step1_ri_nir_q;
                 atol=1e-6,
                 rtol=1e-12,

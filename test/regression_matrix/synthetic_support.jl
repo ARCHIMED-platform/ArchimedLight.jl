@@ -3,6 +3,10 @@ using GeometryBasics
 using LinearAlgebra: cross, norm
 using StaticArrays: SVector
 
+_incident_par_initial_flux(budget) = budget.incident.par.initial_flux_per_node
+_incident_par_initial_energy(budget) = budget.incident.par.initial_energy_per_node
+_incident_par_energy(budget) = budget.incident.par.energy_per_node
+
 function _synthetic_cfg(
     cfg::ArchimedLight.LightConfig;
     sectors::Int=1,
@@ -179,8 +183,8 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
     if source_id == "single_plate_direct"
         step = result.step
         pa = get(step.first_order.projected_area_per_node, 1, 0.0)
-        q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
-        f = get(step.budget.ri_par_0_f_per_node, 1, 0.0)
+        q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
+        f = get(_incident_par_initial_flux(step.budget), 1, 0.0)
         ok = isapprox(pa, 1.0; atol=1e-12, rtol=1e-12) &&
              isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
              isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
@@ -190,8 +194,8 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
         step = result.step
         upper_pa = get(step.first_order.projected_area_per_node, 1, 0.0)
         lower_pa = get(step.first_order.projected_area_per_node, 2, 0.0)
-        upper_q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
-        lower_q = get(step.budget.ri_par_0_q_per_node, 2, 0.0)
+        upper_q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
+        lower_q = get(_incident_par_initial_energy(step.budget), 2, 0.0)
         ok = isapprox(upper_pa, 0.5; atol=1e-10, rtol=1e-10) &&
              isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
              isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
@@ -201,7 +205,7 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
     elseif source_id == "toricity_wraparound"
         step = result.step
         pa = get(step.first_order.projected_area_per_node, 1, 0.0)
-        q = get(step.budget.ri_par_0_q_per_node, 1, 0.0)
+        q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
         toric = Bool(get(result.meta, "toricity", false))
         target_pa = toric ? 0.4 : 0.19512196866477877
         target_q = toric ? 40.0 : 19.512196866477876
@@ -211,8 +215,8 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
         return (ok=ok, detail=detail)
     elseif source_id == "stacked_scattering"
         step = result.step
-        lower_0 = get(step.budget.ri_par_0_q_per_node, 2, 0.0)
-        lower_q = get(step.budget.ri_par_q_per_node, 2, 0.0)
+        lower_0 = get(_incident_par_initial_energy(step.budget), 2, 0.0)
+        lower_q = get(_incident_par_energy(step.budget), 2, 0.0)
         scat_q = isnothing(step.scattering) ? 0.0 : get(step.scattering.added_par_power_per_node, 2, 0.0)
         scattering = Bool(get(result.meta, "scattering", false))
         ok =

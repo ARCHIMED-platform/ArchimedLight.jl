@@ -11,6 +11,6 @@ using Test
     @test !isempty(selected.rows)
     @test !isempty(series)
     @test length(series) == length(selected.rows)
-    @test !isempty(series[1].budget.ri_par_q_per_node)
+    @test !isempty(series[1].budget.incident.par.energy_per_node)
     @test length(series[1].turtle.sectors) == 17
 end

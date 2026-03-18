@@ -147,25 +147,23 @@ struct ScatteringTransferGraph{T<:Real}
     group_type_coeffs::Dict{Tuple{String,String},OpticalCoefficients{T}}
 end
 
+struct BandLightBudget{T<:Real}
+    initial_flux_per_node::Dict{Int,T}
+    flux_per_node::Dict{Int,T}
+    initial_energy_per_node::Dict{Int,T}
+    energy_per_node::Dict{Int,T}
+end
+
+struct SpectralLightBudget{T<:Real}
+    par::BandLightBudget{T}
+    nir::BandLightBudget{T}
+end
+
 struct LightBudget{T<:Real}
-    ri_par_0_f_per_node::Dict{Int,T}
-    ri_nir_0_f_per_node::Dict{Int,T}
-    ri_par_f_per_node::Dict{Int,T}
-    ri_nir_f_per_node::Dict{Int,T}
-    ri_par_0_q_per_node::Dict{Int,T}
-    ri_nir_0_q_per_node::Dict{Int,T}
-    ri_par_q_per_node::Dict{Int,T}
-    ri_nir_q_per_node::Dict{Int,T}
-    ra_par_0_f_per_node::Dict{Int,T}
-    ra_nir_0_f_per_node::Dict{Int,T}
-    ra_par_f_per_node::Dict{Int,T}
-    ra_nir_f_per_node::Dict{Int,T}
-    ra_par_0_q_per_node::Dict{Int,T}
-    ra_nir_0_q_per_node::Dict{Int,T}
-    ra_par_q_per_node::Dict{Int,T}
-    ra_nir_q_per_node::Dict{Int,T}
-    extra_0_q_per_band::Dict{Symbol,Dict{Int,T}}
-    extra_q_per_band::Dict{Symbol,Dict{Int,T}}
+    incident::SpectralLightBudget{T}
+    absorbed::SpectralLightBudget{T}
+    extra_initial_energy_per_band::Dict{Symbol,Dict{Int,T}}
+    extra_energy_per_band::Dict{Symbol,Dict{Int,T}}
 end
 
 struct LightStepResult{SkyT<:SkyState,TurtleT<:TurtleGrid,FluxT<:DirectionalFluxes,FirstT<:FirstOrderResult,ScatteringT,BudgetT<:LightBudget,ExtraT<:AbstractDict}

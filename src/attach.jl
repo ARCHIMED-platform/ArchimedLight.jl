@@ -1,20 +1,20 @@
 const _DEFAULT_BUDGET_ATTRS = Dict{Symbol,Symbol}(
-    :ri_par_0_f_per_node => :Ri_PAR_0_f,
-    :ri_nir_0_f_per_node => :Ri_NIR_0_f,
-    :ri_par_f_per_node => :Ri_PAR_f,
-    :ri_nir_f_per_node => :Ri_NIR_f,
-    :ri_par_0_q_per_node => :Ri_PAR_0_q,
-    :ri_nir_0_q_per_node => :Ri_NIR_0_q,
-    :ri_par_q_per_node => :Ri_PAR_q,
-    :ri_nir_q_per_node => :Ri_NIR_q,
-    :ra_par_0_f_per_node => :Ra_PAR_0_f,
-    :ra_nir_0_f_per_node => :Ra_NIR_0_f,
-    :ra_par_f_per_node => :Ra_PAR_f,
-    :ra_nir_f_per_node => :Ra_NIR_f,
-    :ra_par_0_q_per_node => :Ra_PAR_0_q,
-    :ra_nir_0_q_per_node => :Ra_NIR_0_q,
-    :ra_par_q_per_node => :Ra_PAR_q,
-    :ra_nir_q_per_node => :Ra_NIR_q,
+    :incident_par_initial_flux => :Ri_PAR_0_f,
+    :incident_nir_initial_flux => :Ri_NIR_0_f,
+    :incident_par_flux => :Ri_PAR_f,
+    :incident_nir_flux => :Ri_NIR_f,
+    :incident_par_initial_energy => :Ri_PAR_0_q,
+    :incident_nir_initial_energy => :Ri_NIR_0_q,
+    :incident_par_energy => :Ri_PAR_q,
+    :incident_nir_energy => :Ri_NIR_q,
+    :absorbed_par_initial_flux => :Ra_PAR_0_f,
+    :absorbed_nir_initial_flux => :Ra_NIR_0_f,
+    :absorbed_par_flux => :Ra_PAR_f,
+    :absorbed_nir_flux => :Ra_NIR_f,
+    :absorbed_par_initial_energy => :Ra_PAR_0_q,
+    :absorbed_nir_initial_energy => :Ra_NIR_0_q,
+    :absorbed_par_energy => :Ra_PAR_q,
+    :absorbed_nir_energy => :Ra_NIR_q,
 )
 
 function _attach_node_values!(
@@ -39,10 +39,25 @@ function _geometry_node_ids(scene::SceneGeometry)
 end
 
 function _budget_node_field(step::LightStepResult, field::Symbol)
-    field in propertynames(step.budget) || error("Unknown LightBudget field: $field")
-    values = getproperty(step.budget, field)
-    values isa AbstractDict || error("LightBudget field `$field` is not a per-node dictionary.")
-    return values
+    budget = step.budget
+    field === :incident_par_initial_flux && return budget.incident.par.initial_flux_per_node
+    field === :incident_nir_initial_flux && return budget.incident.nir.initial_flux_per_node
+    field === :incident_par_flux && return budget.incident.par.flux_per_node
+    field === :incident_nir_flux && return budget.incident.nir.flux_per_node
+    field === :incident_par_initial_energy && return budget.incident.par.initial_energy_per_node
+    field === :incident_nir_initial_energy && return budget.incident.nir.initial_energy_per_node
+    field === :incident_par_energy && return budget.incident.par.energy_per_node
+    field === :incident_nir_energy && return budget.incident.nir.energy_per_node
+    field === :absorbed_par_initial_flux && return budget.absorbed.par.initial_flux_per_node
+    field === :absorbed_nir_initial_flux && return budget.absorbed.nir.initial_flux_per_node
+    field === :absorbed_par_flux && return budget.absorbed.par.flux_per_node
+    field === :absorbed_nir_flux && return budget.absorbed.nir.flux_per_node
+    field === :absorbed_par_initial_energy && return budget.absorbed.par.initial_energy_per_node
+    field === :absorbed_nir_initial_energy && return budget.absorbed.nir.initial_energy_per_node
+    field === :absorbed_par_energy && return budget.absorbed.par.energy_per_node
+    field === :absorbed_nir_energy && return budget.absorbed.nir.energy_per_node
+    supported = sort!(String.(collect(keys(_DEFAULT_BUDGET_ATTRS))))
+    error("Unknown light field `$field`. Supported fields: $(join(supported, ", ")).")
 end
 
 function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
@@ -195,7 +210,7 @@ function attach_node_values!(
 end
 
 """
-    attach_light_step!(scene, step; fields=[:ri_par_f_per_node], names=Dict(), fill_value=nothing)
+    attach_light_step!(scene, step; fields=[:incident_par_flux], names=Dict(), fill_value=nothing)
 
 Attach one or more per-node `LightBudget` fields from a single `LightStepResult`
 onto `scene.mtg`, using the default output attribute names.
@@ -203,14 +218,14 @@ onto `scene.mtg`, using the default output attribute names.
 Example:
 
 ```julia
-attach_light_step!(scene, step; fields=[:ri_par_f_per_node])
+attach_light_step!(scene, step; fields=[:incident_par_flux])
 plantviz(scene.mtg, color=:Ri_PAR_f)
 ```
 """
 function attach_light_step!(
     scene::SceneGeometry,
     step::LightStepResult;
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     fill_value=nothing,
 )
@@ -227,8 +242,8 @@ end
 
 """
     visual_scene_mtg(scene, cfg; include_paving=true, keep_scene_surface=false, xy_bounds=nothing)
-    visual_scene_mtg(scene, cfg, step; fields=[:ri_par_f_per_node], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=nothing)
-    visual_scene_mtg(scene, cfg, steps; fields=[:ri_par_f_per_node], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=NaN)
+    visual_scene_mtg(scene, cfg, step; fields=[:incident_par_flux], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=nothing)
+    visual_scene_mtg(scene, cfg, steps; fields=[:incident_par_flux], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=NaN)
 
 Return a copied MTG prepared for visualization with `plantviz`.
 
@@ -256,7 +271,7 @@ function visual_scene_mtg(
     scene::SceneGeometry,
     cfg::LightConfig,
     step::LightStepResult;
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     include_paving::Bool=true,
     keep_scene_surface::Bool=false,
@@ -277,7 +292,7 @@ function visual_scene_mtg(
     scene::SceneGeometry,
     cfg::LightConfig,
     steps::AbstractVector{<:LightStepResult};
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     include_paving::Bool=true,
     keep_scene_surface::Bool=false,
@@ -295,7 +310,7 @@ function visual_scene_mtg(
 end
 
 """
-    attach_light_series!(scene, steps; fields=[:ri_par_f_per_node], names=Dict(), fill_value=NaN)
+    attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fill_value=NaN)
 
 Attach one or more `LightBudget` fields from several time steps onto `scene.mtg`.
 Each attached attribute becomes a vector ordered like `steps`, which can then be
@@ -304,7 +319,7 @@ visualized with `plantviz(..., color=:Attr, index=timestep)`.
 function attach_light_series!(
     scene::SceneGeometry,
     steps::AbstractVector{<:LightStepResult};
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     fill_value=NaN,
 )

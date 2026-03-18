@@ -288,21 +288,21 @@ end
 function _budget_metric_map(step::ArchimedLight.LightStepResult, metric::String)
     b = step.budget
     if metric == "Ri_PAR_f"
-        return b.ri_par_f_per_node
+        return b.incident.par.flux_per_node
     elseif metric == "Ri_PAR_0_f"
-        return b.ri_par_0_f_per_node
+        return b.incident.par.initial_flux_per_node
     elseif metric == "Ri_NIR_f"
-        return b.ri_nir_f_per_node
+        return b.incident.nir.flux_per_node
     elseif metric == "Ri_NIR_0_f"
-        return b.ri_nir_0_f_per_node
+        return b.incident.nir.initial_flux_per_node
     elseif metric == "Ri_PAR_q"
-        return b.ri_par_q_per_node
+        return b.incident.par.energy_per_node
     elseif metric == "Ri_PAR_0_q"
-        return b.ri_par_0_q_per_node
+        return b.incident.par.initial_energy_per_node
     elseif metric == "Ri_NIR_q"
-        return b.ri_nir_q_per_node
+        return b.incident.nir.energy_per_node
     elseif metric == "Ri_NIR_0_q"
-        return b.ri_nir_0_q_per_node
+        return b.incident.nir.initial_energy_per_node
     end
     error("unsupported visual metric $(repr(metric))")
 end
