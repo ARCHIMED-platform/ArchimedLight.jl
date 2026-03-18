@@ -358,21 +358,21 @@ function _write_sector_flux_csv(path::AbstractString, turtle, fluxes; step_numbe
 end
 
 function _render_ri_par_f_figure(scene, step, cfg; title::String)
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
-    metric = step.budget.ri_par_f_per_node
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+    metric = step.budget.incident_flux.total.par
 
-    v_sum = zeros(Float64, length(vertices))
-    v_count = zeros(Int, length(vertices))
-    for i in eachindex(faces)
-        f = faces[i]
-        v = get(metric, face2node[i], NaN)
+    v_sum = zeros(Float64, length(geometry.vertices))
+    v_count = zeros(Int, length(geometry.vertices))
+    for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        v = get(metric, geometry.face2node[i], NaN)
         isfinite(v) || continue
         for vid in (Int(f[1]), Int(f[2]), Int(f[3]))
             v_sum[vid] += v
             v_count[vid] += 1
         end
     end
-    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(vertices)]
+    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(geometry.vertices)]
 
     colorrange = (0.0, max(step.sky.ri_par_f, eps(Float64)))
     fig = Figure(size=(960, 720))
@@ -386,8 +386,8 @@ function _render_ri_par_f_figure(scene, step, cfg; title::String)
     )
     p = mesh!(
         ax,
-        vertices,
-        faces;
+        geometry.vertices,
+        geometry.faces;
         color=vertex_values,
         colormap=:viridis,
         colorrange=colorrange,

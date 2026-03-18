@@ -1,33 +1,34 @@
 """
-    integrate_light(first, scat, cfg; extra_0_q_per_band=..., extra_q_per_band=..., step_duration_seconds=1.0, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
+    integrate_light(first, scat, cfg; extra_initial_energy_per_band=..., extra_energy_per_band=..., step_duration_seconds=1.0, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
 
 Combine first-order and scattering results into per-node irradiance (`*_f`, W m^-2)
 and energy (`*_q`, J component^-1 timestep^-1) budgets, including absorbed light.
 """
-function _zero_budget_maps(node_ids)
-    names = (
-        :ri_par_0_f_per_node,
-        :ri_nir_0_f_per_node,
-        :ri_par_f_per_node,
-        :ri_nir_f_per_node,
-        :ri_par_0_q_per_node,
-        :ri_nir_0_q_per_node,
-        :ri_par_q_per_node,
-        :ri_nir_q_per_node,
-        :ra_par_0_f_per_node,
-        :ra_nir_0_f_per_node,
-        :ra_par_f_per_node,
-        :ra_nir_f_per_node,
-        :ra_par_0_q_per_node,
-        :ra_nir_0_q_per_node,
-        :ra_par_q_per_node,
-        :ra_nir_q_per_node,
+function _zero_spectral_node_values(node_ids)
+    SpectralNodeValues(
+        Dict{Int,Float64}(nid => 0.0 for nid in node_ids),
+        Dict{Int,Float64}(nid => 0.0 for nid in node_ids),
     )
-    return (; (name => Dict{Int,Float64}(nid => 0.0 for nid in node_ids) for name in names)...)
+end
+
+function _zero_initial_total_spectral_node_values(node_ids)
+    InitialTotalSpectralNodeValues(
+        _zero_spectral_node_values(node_ids),
+        _zero_spectral_node_values(node_ids),
+    )
+end
+
+function _zero_budget_components(node_ids)
+    return (
+        incident_flux=_zero_initial_total_spectral_node_values(node_ids),
+        incident_energy=_zero_initial_total_spectral_node_values(node_ids),
+        absorbed_flux=_zero_initial_total_spectral_node_values(node_ids),
+        absorbed_energy=_zero_initial_total_spectral_node_values(node_ids),
+    )
 end
 
 function _store_node_budget!(
-    budget_maps,
+    budget,
     nid::Int,
     area::Float64,
     par0::Float64,
@@ -43,24 +44,24 @@ function _store_node_budget!(
     ri_par_f = (par0 + par_scat) / area
     ri_nir_f = (nir0 + nir_scat) / area
 
-    budget_maps.ri_par_0_f_per_node[nid] = ri_par_0_f
-    budget_maps.ri_nir_0_f_per_node[nid] = ri_nir_0_f
-    budget_maps.ri_par_f_per_node[nid] = ri_par_f
-    budget_maps.ri_nir_f_per_node[nid] = ri_nir_f
+    budget.incident_flux.initial.par[nid] = ri_par_0_f
+    budget.incident_flux.initial.nir[nid] = ri_nir_0_f
+    budget.incident_flux.total.par[nid] = ri_par_f
+    budget.incident_flux.total.nir[nid] = ri_nir_f
 
-    budget_maps.ri_par_0_q_per_node[nid] = par0 * step_duration_seconds
-    budget_maps.ri_nir_0_q_per_node[nid] = nir0 * step_duration_seconds
-    budget_maps.ri_par_q_per_node[nid] = (par0 + par_scat) * step_duration_seconds
-    budget_maps.ri_nir_q_per_node[nid] = (nir0 + nir_scat) * step_duration_seconds
+    budget.incident_energy.initial.par[nid] = par0 * step_duration_seconds
+    budget.incident_energy.initial.nir[nid] = nir0 * step_duration_seconds
+    budget.incident_energy.total.par[nid] = (par0 + par_scat) * step_duration_seconds
+    budget.incident_energy.total.nir[nid] = (nir0 + nir_scat) * step_duration_seconds
 
-    budget_maps.ra_par_0_f_per_node[nid] = ri_par_0_f * abs_par
-    budget_maps.ra_nir_0_f_per_node[nid] = ri_nir_0_f * abs_nir
-    budget_maps.ra_par_f_per_node[nid] = ri_par_f * abs_par
-    budget_maps.ra_nir_f_per_node[nid] = ri_nir_f * abs_nir
-    budget_maps.ra_par_0_q_per_node[nid] = par0 * abs_par * step_duration_seconds
-    budget_maps.ra_nir_0_q_per_node[nid] = nir0 * abs_nir * step_duration_seconds
-    budget_maps.ra_par_q_per_node[nid] = (par0 + par_scat) * abs_par * step_duration_seconds
-    budget_maps.ra_nir_q_per_node[nid] = (nir0 + nir_scat) * abs_nir * step_duration_seconds
+    budget.absorbed_flux.initial.par[nid] = ri_par_0_f * abs_par
+    budget.absorbed_flux.initial.nir[nid] = ri_nir_0_f * abs_nir
+    budget.absorbed_flux.total.par[nid] = ri_par_f * abs_par
+    budget.absorbed_flux.total.nir[nid] = ri_nir_f * abs_nir
+    budget.absorbed_energy.initial.par[nid] = par0 * abs_par * step_duration_seconds
+    budget.absorbed_energy.initial.nir[nid] = nir0 * abs_nir * step_duration_seconds
+    budget.absorbed_energy.total.par[nid] = (par0 + par_scat) * abs_par * step_duration_seconds
+    budget.absorbed_energy.total.nir[nid] = (nir0 + nir_scat) * abs_nir * step_duration_seconds
     return nothing
 end
 
@@ -75,15 +76,15 @@ function integrate_light(
     first::FirstOrderResult,
     scat::Union{Nothing,ScatteringResult},
     cfg::LightConfig;
-    extra_0_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
-    extra_q_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+    extra_initial_energy_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+    extra_energy_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
     step_duration_seconds::Float64=1.0,
     component_area_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_par_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
 )
     node_ids = collect(keys(first.projected_area_per_node))
-    budget_maps = _zero_budget_maps(node_ids)
+    budget = _zero_budget_components(node_ids)
     default_abs_par = clamp(1.0 - cfg.general.scattering_coeff_par, 0.0, 1.0)
     default_abs_nir = clamp(1.0 - cfg.general.scattering_coeff_nir, 0.0, 1.0)
     for nid in node_ids
@@ -94,10 +95,10 @@ function integrate_light(
                 get(component_area_per_node, nid, get(first.projected_area_per_node, nid, 0.0))
             end
         pa = max(pa, eps(Float64))
-        p0 = get(first.incident_par_power_per_node, nid, 0.0)
-        n0 = get(first.incident_nir_power_per_node, nid, 0.0)
-        ps = scat === nothing ? 0.0 : get(scat.added_par_power_per_node, nid, 0.0)
-        ns = scat === nothing ? 0.0 : get(scat.added_nir_power_per_node, nid, 0.0)
+        p0 = get(first.incident_power.par, nid, 0.0)
+        n0 = get(first.incident_power.nir, nid, 0.0)
+        ps = scat === nothing ? 0.0 : get(scat.added_power.par, nid, 0.0)
+        ns = scat === nothing ? 0.0 : get(scat.added_power.nir, nid, 0.0)
         abs_par =
             if absorption_par_per_node === nothing
                 default_abs_par
@@ -111,31 +112,16 @@ function integrate_light(
                 clamp(get(absorption_nir_per_node, nid, default_abs_nir), 0.0, 1.0)
             end
 
-        _store_node_budget!(budget_maps, nid, pa, p0, n0, ps, ns, abs_par, abs_nir, step_duration_seconds)
+        _store_node_budget!(budget, nid, pa, p0, n0, ps, ns, abs_par, abs_nir, step_duration_seconds)
     end
 
-    scaled_extra_0_q = _scale_extra_band_energy(extra_0_q_per_band, step_duration_seconds)
-    scaled_extra_q = _scale_extra_band_energy(extra_q_per_band, step_duration_seconds)
-
-    LightBudget(
-        budget_maps.ri_par_0_f_per_node,
-        budget_maps.ri_nir_0_f_per_node,
-        budget_maps.ri_par_f_per_node,
-        budget_maps.ri_nir_f_per_node,
-        budget_maps.ri_par_0_q_per_node,
-        budget_maps.ri_nir_0_q_per_node,
-        budget_maps.ri_par_q_per_node,
-        budget_maps.ri_nir_q_per_node,
-        budget_maps.ra_par_0_f_per_node,
-        budget_maps.ra_nir_0_f_per_node,
-        budget_maps.ra_par_f_per_node,
-        budget_maps.ra_nir_f_per_node,
-        budget_maps.ra_par_0_q_per_node,
-        budget_maps.ra_nir_0_q_per_node,
-        budget_maps.ra_par_q_per_node,
-        budget_maps.ra_nir_q_per_node,
-        scaled_extra_0_q,
-        scaled_extra_q,
+    return LightBudget(
+        budget.incident_flux,
+        budget.incident_energy,
+        budget.absorbed_flux,
+        budget.absorbed_energy,
+        _scale_extra_band_energy(extra_initial_energy_per_band, step_duration_seconds),
+        _scale_extra_band_energy(extra_energy_per_band, step_duration_seconds),
     )
 end
 
@@ -159,19 +145,19 @@ end
 
 function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
     n = length(turtle.sectors)
-    vertices, faces, face2node, node_ids, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
     upper_hit = _use_upper_hit_pixel_table(cfg)
     pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
     hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
     for i in 1:n
         pa_by_sector[i], hits_by_sector[i] = _rasterize_direction_java(
-            vertices,
-            faces,
-            face2node,
+            geometry.vertices,
+            geometry.faces,
+            geometry.face2node,
             turtle.sectors[i].direction,
             cfg,
-            plotbox,
+            geometry.plotbox,
             cache_ctx=cache_ctx,
             upper_hit=upper_hit,
         )
@@ -180,8 +166,8 @@ function _build_sector_responses(scene::SceneGeometry, turtle::TurtleGrid, cfg::
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     emitter_weights =
         isempty(emitter_nodes) ? Dict{Tuple{Int,Int},Float64}() :
-        _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
-    return SectorResponsesCache(pa_by_sector, hits_by_sector, node_ids, emit_par, emit_nir, emitter_weights)
+        _emitter_transfer_weights(geometry.vertices, geometry.faces, geometry.face2node, turtle, cfg, geometry.plotbox, emitter_nodes, cache_ctx)
+    return SectorResponsesCache(pa_by_sector, hits_by_sector, geometry.node_ids, emit_par, emit_nir, emitter_weights)
 end
 
 function _combine_sector_responses(
@@ -199,8 +185,7 @@ function _combine_sector_responses(
     end
 
     projected_area_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
-    incident_par_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
-    incident_nir_power_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
+    incident_power = _zero_spectral_node_values(node_ids)
     hits_per_node = Dict{Int,Int}(id => 0 for id in node_ids)
 
     for i in eachindex(responses.projected_area_per_sector)
@@ -212,10 +197,10 @@ function _combine_sector_responses(
             if active_flux
                 projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
                 if pf != 0.0
-                    incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + pf * pa
+                    incident_power.par[nid] = get(incident_power.par, nid, 0.0) + pf * pa
                 end
                 if nf != 0.0
-                    incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nf * pa
+                    incident_power.nir[nid] = get(incident_power.nir, nid, 0.0) + nf * pa
                 end
             end
         end
@@ -225,11 +210,11 @@ function _combine_sector_responses(
     end
 
     for ((to, src), w) in responses.emitter_weights
-        incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + w * get(responses.emitter_par_power_per_node, src, 0.0)
-        incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + w * get(responses.emitter_nir_power_per_node, src, 0.0)
+        incident_power.par[to] = get(incident_power.par, to, 0.0) + w * get(responses.emitter_par_power_per_node, src, 0.0)
+        incident_power.nir[to] = get(incident_power.nir, to, 0.0) + w * get(responses.emitter_nir_power_per_node, src, 0.0)
     end
 
-    FirstOrderResult(projected_area_per_node, incident_par_power_per_node, incident_nir_power_per_node, hits_per_node)
+    FirstOrderResult(projected_area_per_node, incident_power, hits_per_node)
 end
 
 function _row_number_local(row, name::Symbol, default::Float64=0.0)
@@ -504,19 +489,19 @@ function _compute_scattering_with_flags(
         mode=mode,
         backend=backend,
         band="PAR",
-        initial_power_per_node=first.incident_par_power_per_node,
+        initial_power_per_node=first.incident_power.par,
         default_coeff=cfg.general.scattering_coeff_par,
     )
-    return ScatteringResult(par_only.added_power_per_node, Dict{Int,Float64}(), par_only.iterations, par_only.converged)
+    return ScatteringResult(SpectralNodeValues(par_only.added_power_per_node, Dict{Int,Float64}()), par_only.iterations, par_only.converged)
 end
 
 function _interception_area_per_node_local(scene::SceneGeometry, cfg::LightConfig)
-    vertices, faces, face2node, node_ids, _, _ = _scene_geometry_for_interception(scene, cfg)
-    area = Dict{Int,Float64}(nid => 0.0 for nid in node_ids)
-    @inbounds for i in eachindex(faces)
-        f = faces[i]
-        nid = face2node[i]
-        a = _triangle_area3d(vertices[f[1]], vertices[f[2]], vertices[f[3]])
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    area = Dict{Int,Float64}(nid => 0.0 for nid in geometry.node_ids)
+    @inbounds for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        nid = geometry.face2node[i]
+        a = _triangle_area3d(geometry.vertices[f[1]], geometry.vertices[f[2]], geometry.vertices[f[3]])
         area[nid] = get(area, nid, 0.0) + a
     end
     return area
@@ -528,9 +513,9 @@ function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band
     b = uppercase(band)
     sf_default = _default_scattering_factor_local(cfg, b)
     out = Dict{Int,Float64}()
-    _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
-    for nid in node_ids
-        group = get(node_group, nid, get(scene.node_group, nid, ""))
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    for nid in geometry.node_ids
+        group = get(geometry.node_group, nid, get(scene.node_group, nid, ""))
         if group in virtual_groups
             out[nid] = 0.0
             continue
@@ -604,7 +589,7 @@ function _compute_extra_band_light(
             cfg;
             backend=interception_backend,
         )
-        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_par_power_per_node)
+        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_power.par)
 
         added =
             if cfg.general.scattering
@@ -688,8 +673,8 @@ function run_light_step(
         first,
         scat,
         cfg;
-        extra_0_q_per_band=extra_0_q,
-        extra_q_per_band=extra_q,
+        extra_initial_energy_per_band=extra_0_q,
+        extra_energy_per_band=extra_q,
         step_duration_seconds=dt_seconds,
         component_area_per_node=area_per_node,
         absorption_par_per_node=abs_par,
@@ -764,8 +749,8 @@ function run_light_series(
             first,
             scat,
             cfg;
-            extra_0_q_per_band=extra_0_q,
-            extra_q_per_band=extra_q,
+            extra_initial_energy_per_band=extra_0_q,
+            extra_energy_per_band=extra_q,
             step_duration_seconds=dt_seconds,
             component_area_per_node=area_per_node,
             absorption_par_per_node=abs_par,

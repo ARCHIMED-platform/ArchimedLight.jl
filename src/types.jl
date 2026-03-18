@@ -159,16 +159,24 @@ struct DirectionalFluxes
     nir::Vector{Float64}
 end
 
+struct SpectralNodeValues
+    par::Dict{Int,Float64}
+    nir::Dict{Int,Float64}
+end
+
+struct InitialTotalSpectralNodeValues
+    initial::SpectralNodeValues
+    total::SpectralNodeValues
+end
+
 struct FirstOrderResult
     projected_area_per_node::Dict{Int,Float64}
-    incident_par_power_per_node::Dict{Int,Float64}
-    incident_nir_power_per_node::Dict{Int,Float64}
+    incident_power::SpectralNodeValues
     hits_per_node::Dict{Int,Int}
 end
 
 struct ScatteringResult
-    added_par_power_per_node::Dict{Int,Float64}
-    added_nir_power_per_node::Dict{Int,Float64}
+    added_power::SpectralNodeValues
     iterations::Int
     converged::Bool
 end
@@ -183,24 +191,12 @@ struct ScatteringTransferGraph
 end
 
 struct LightBudget
-    ri_par_0_f_per_node::Dict{Int,Float64}
-    ri_nir_0_f_per_node::Dict{Int,Float64}
-    ri_par_f_per_node::Dict{Int,Float64}
-    ri_nir_f_per_node::Dict{Int,Float64}
-    ri_par_0_q_per_node::Dict{Int,Float64}
-    ri_nir_0_q_per_node::Dict{Int,Float64}
-    ri_par_q_per_node::Dict{Int,Float64}
-    ri_nir_q_per_node::Dict{Int,Float64}
-    ra_par_0_f_per_node::Dict{Int,Float64}
-    ra_nir_0_f_per_node::Dict{Int,Float64}
-    ra_par_f_per_node::Dict{Int,Float64}
-    ra_nir_f_per_node::Dict{Int,Float64}
-    ra_par_0_q_per_node::Dict{Int,Float64}
-    ra_nir_0_q_per_node::Dict{Int,Float64}
-    ra_par_q_per_node::Dict{Int,Float64}
-    ra_nir_q_per_node::Dict{Int,Float64}
-    extra_0_q_per_band::Dict{String,Dict{Int,Float64}}
-    extra_q_per_band::Dict{String,Dict{Int,Float64}}
+    incident_flux::InitialTotalSpectralNodeValues
+    incident_energy::InitialTotalSpectralNodeValues
+    absorbed_flux::InitialTotalSpectralNodeValues
+    absorbed_energy::InitialTotalSpectralNodeValues
+    extra_initial_energy_per_band::Dict{String,Dict{Int,Float64}}
+    extra_energy_per_band::Dict{String,Dict{Int,Float64}}
 end
 
 struct LightStepResult

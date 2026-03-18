@@ -288,21 +288,21 @@ end
 function _budget_metric_map(step::ArchimedLight.LightStepResult, metric::String)
     b = step.budget
     if metric == "Ri_PAR_f"
-        return b.ri_par_f_per_node
+        return b.incident_flux.total.par
     elseif metric == "Ri_PAR_0_f"
-        return b.ri_par_0_f_per_node
+        return b.incident_flux.initial.par
     elseif metric == "Ri_NIR_f"
-        return b.ri_nir_f_per_node
+        return b.incident_flux.total.nir
     elseif metric == "Ri_NIR_0_f"
-        return b.ri_nir_0_f_per_node
+        return b.incident_flux.initial.nir
     elseif metric == "Ri_PAR_q"
-        return b.ri_par_q_per_node
+        return b.incident_energy.total.par
     elseif metric == "Ri_PAR_0_q"
-        return b.ri_par_0_q_per_node
+        return b.incident_energy.initial.par
     elseif metric == "Ri_NIR_q"
-        return b.ri_nir_q_per_node
+        return b.incident_energy.total.nir
     elseif metric == "Ri_NIR_0_q"
-        return b.ri_nir_0_q_per_node
+        return b.incident_energy.initial.nir
     end
     error("unsupported visual metric $(repr(metric))")
 end
@@ -329,13 +329,13 @@ end
 
 function render_fixture_montage(fx::JuliaFixture; data=nothing)
     data === nothing && (data = fixture_runtime_data(fx))
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(data.scene, data.cfg)
+    geometry = ArchimedLight._scene_geometry_for_interception(data.scene, data.cfg)
 
     step_values = Vector{Vector{Float64}}(undef, length(data.series))
     allvals = Float64[]
     for i in eachindex(data.series)
         metric_map = _budget_metric_map(data.series[i], fx.visual_metric)
-        vals = _vertex_values_for_step(vertices, faces, face2node, metric_map)
+        vals = _vertex_values_for_step(geometry.vertices, geometry.faces, geometry.face2node, metric_map)
         step_values[i] = vals
         for v in vals
             isfinite(v) && push!(allvals, v)
@@ -369,8 +369,8 @@ function render_fixture_montage(fx::JuliaFixture; data=nothing)
         )
         p = mesh!(
             ax,
-            vertices,
-            faces;
+            geometry.vertices,
+            geometry.faces;
             color=step_values[i],
             colormap=:viridis,
             colorrange=colorrange,

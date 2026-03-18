@@ -29,12 +29,12 @@ function triangle_area3d(p1, p2, p3)
 end
 
 function node_area_from_interception_geometry(scene, cfg)
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
     area = Dict{Int,Float64}()
-    for i in eachindex(faces)
-        f = faces[i]
-        a = triangle_area3d(vertices[f[1]], vertices[f[2]], vertices[f[3]])
-        nid = face2node[i]
+    for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        a = triangle_area3d(geometry.vertices[f[1]], geometry.vertices[f[2]], geometry.vertices[f[3]])
+        nid = geometry.face2node[i]
         area[nid] = get(area, nid, 0.0) + a
     end
     area
@@ -63,14 +63,14 @@ end
 function build_julia_component_values(scene, cfg, step)
     key_by_node = ArchimedLight._interception_output_keys(scene, cfg)
     area_by_node = node_area_from_interception_geometry(scene, cfg)
-    custom0 = get(step.budget.extra_0_q_per_band, "CUSTOM", Dict{Int,Float64}())
-    customn = get(step.budget.extra_q_per_band, "CUSTOM", Dict{Int,Float64}())
+    custom0 = get(step.budget.extra_initial_energy_per_band, "CUSTOM", Dict{Int,Float64}())
+    customn = get(step.budget.extra_energy_per_band, "CUSTOM", Dict{Int,Float64}())
     d = Dict{Tuple{Int,Int},NamedTuple}()
     for (nid, key) in key_by_node
         d[key] = (
             area=get(area_by_node, nid, NaN),
-            Ri_PAR_0_q=get(step.budget.ri_par_0_q_per_node, nid, NaN),
-            Ri_PAR_q=get(step.budget.ri_par_q_per_node, nid, NaN),
+            Ri_PAR_0_q=get(step.budget.incident_energy.initial.par, nid, NaN),
+            Ri_PAR_q=get(step.budget.incident_energy.total.par, nid, NaN),
             Ri_custom_0_q=get(custom0, nid, NaN),
             Ri_custom_q=get(customn, nid, NaN),
         )
@@ -180,8 +180,8 @@ function main()
     # Sanity checks: staged and pipeline outputs should match exactly on CPU.
     @assert max_abs_float_dict_diff(first_order.projected_area_per_node, step.first_order.projected_area_per_node) == 0.0
     @assert max_abs_int_dict_diff(first_order.hits_per_node, step.first_order.hits_per_node) == 0
-    staged_pipeline_par_diff = max_abs_float_dict_diff(budget.ri_par_q_per_node, step.budget.ri_par_q_per_node)
-    staged_pipeline_nir_diff = max_abs_float_dict_diff(budget.ri_nir_q_per_node, step.budget.ri_nir_q_per_node)
+    staged_pipeline_par_diff = max_abs_float_dict_diff(budget.incident_energy.total.par, step.budget.incident_energy.total.par)
+    staged_pipeline_nir_diff = max_abs_float_dict_diff(budget.incident_energy.total.nir, step.budget.incident_energy.total.nir)
 
     # The fixture contains an extra band (RI_custom_f).
     @assert haskey(step.extra_band_irradiance, "CUSTOM")
@@ -196,13 +196,13 @@ function main()
         scattering_backend=LinksScatteringBackend(),
     )
 
-    par_vals = collect(values(step.budget.ri_par_q_per_node))
-    nir_vals = collect(values(step.budget.ri_nir_q_per_node))
+    par_vals = collect(values(step.budget.incident_energy.total.par))
+    nir_vals = collect(values(step.budget.incident_energy.total.nir))
 
     println("ArchimedLight full example completed")
     println("- meteo rows: ", length(meteo.rows))
     println("- turtle sectors: ", length(step.turtle.sectors))
-    println("- nodes in budget: ", length(step.budget.ri_par_q_per_node))
+    println("- nodes in budget: ", length(step.budget.incident_energy.total.par))
     println("- custom bands: ", join(sort(collect(keys(step.extra_band_irradiance))), ", "))
     println("- mean Ri_PAR_q: ", mean(par_vals))
     println("- mean Ri_NIR_q: ", mean(nir_vals))
@@ -212,13 +212,14 @@ function main()
 
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
     par_q_by_source_topology = Dict{Int,Float64}()
-    for (nid, q) in step.budget.ri_par_q_per_node
+    for (nid, q) in step.budget.incident_energy.total.par
         source_topology_id = get(scene.source_topology_id_per_node, nid, nothing)
         source_topology_id === nothing && continue
         par_q_by_source_topology[Int(source_topology_id)] = Float64(q)
     end
     traverse!(scene.mtg) do node
-        source_topology_id = get(node, :source_topology_id, nothing)
+        haskey(node, :source_topology_id) || return true
+        source_topology_id = node[:source_topology_id]
         source_topology_id === nothing && return true
         node[:Ri_PAR_q] = get(par_q_by_source_topology, to_int(source_topology_id), nothing)
         return true
@@ -258,7 +259,8 @@ function main()
             java_par_by_source_topology[source_topology_id] = vals.Ri_PAR_q
         end
         traverse!(scene.mtg) do node
-            source_topology_id = get(node, :source_topology_id, nothing)
+            haskey(node, :source_topology_id) || return true
+            source_topology_id = node[:source_topology_id]
             source_topology_id === nothing && return true
             node[:Ri_PAR_q_java] = get(java_par_by_source_topology, to_int(source_topology_id), nothing)
             return true

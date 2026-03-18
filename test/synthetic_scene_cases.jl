@@ -2,18 +2,18 @@ using OrderedCollections: OrderedDict
 
 const _SYNTHETIC_CASE_FILTERS = Set(filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_SYNTHETIC_CASE", ""), ",")))))
 
-_incident_par_initial_flux(budget) = budget.ri_par_0_f_per_node
-_incident_nir_initial_flux(budget) = budget.ri_nir_0_f_per_node
-_incident_par_flux(budget) = budget.ri_par_f_per_node
-_incident_nir_flux(budget) = budget.ri_nir_f_per_node
-_incident_par_initial_energy(budget) = budget.ri_par_0_q_per_node
-_incident_nir_initial_energy(budget) = budget.ri_nir_0_q_per_node
-_incident_par_energy(budget) = budget.ri_par_q_per_node
-_incident_nir_energy(budget) = budget.ri_nir_q_per_node
-_absorbed_par_initial_flux(budget) = budget.ra_par_0_f_per_node
-_absorbed_nir_initial_flux(budget) = budget.ra_nir_0_f_per_node
-_absorbed_par_initial_energy(budget) = budget.ra_par_0_q_per_node
-_absorbed_nir_initial_energy(budget) = budget.ra_nir_0_q_per_node
+_incident_par_initial_flux(budget) = budget.incident_flux.initial.par
+_incident_nir_initial_flux(budget) = budget.incident_flux.initial.nir
+_incident_par_flux(budget) = budget.incident_flux.total.par
+_incident_nir_flux(budget) = budget.incident_flux.total.nir
+_incident_par_initial_energy(budget) = budget.incident_energy.initial.par
+_incident_nir_initial_energy(budget) = budget.incident_energy.initial.nir
+_incident_par_energy(budget) = budget.incident_energy.total.par
+_incident_nir_energy(budget) = budget.incident_energy.total.nir
+_absorbed_par_initial_flux(budget) = budget.absorbed_flux.initial.par
+_absorbed_nir_initial_flux(budget) = budget.absorbed_flux.initial.nir
+_absorbed_par_initial_energy(budget) = budget.absorbed_energy.initial.par
+_absorbed_nir_initial_energy(budget) = budget.absorbed_energy.initial.nir
 
 function _synthetic_case_enabled(name::String)
     isempty(_SYNTHETIC_CASE_FILTERS) && return true
@@ -224,10 +224,10 @@ end
             scat = ArchimedLight.compute_scattering(scene, turtle_scat, first_scat, cfg_scat)
             budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
 
-            @test get(scat.added_par_power_per_node, 2, 0.0) > 0.0
+            @test get(scat.added_power.par, 2, 0.0) > 0.0
             @test isapprox(get(_incident_par_initial_energy(budget_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
             @test get(_incident_par_energy(budget_scat), 2, 0.0) > 0.0
-            @test get(_incident_par_energy(budget_scat), 2, 0.0) ≈ get(scat.added_par_power_per_node, 2, 0.0) atol = 1e-10 rtol = 1e-10
+            @test get(_incident_par_energy(budget_scat), 2, 0.0) ≈ get(scat.added_power.par, 2, 0.0) atol = 1e-10 rtol = 1e-10
         end
     end
 
@@ -318,9 +318,9 @@ end
             flux_clear = ArchimedLight.compute_directional_fluxes(inputs.sky_clear, turtle_clear, cfg)
             first_clear = ArchimedLight.compute_first_order(scene, turtle_clear, flux_clear, cfg)
 
-            @test isapprox(get(first_shadow.incident_par_power_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(first_clear.incident_par_power_per_node, 2, 0.0), 100.0; atol=1e-5, rtol=1e-7)
-            @test get(first_shadow.incident_par_power_per_node, 2, 0.0) < 0.02 * get(first_clear.incident_par_power_per_node, 2, 0.0)
+            @test isapprox(get(first_shadow.incident_power.par, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(first_clear.incident_power.par, 2, 0.0), 100.0; atol=1e-5, rtol=1e-7)
+            @test get(first_shadow.incident_power.par, 2, 0.0) < 0.02 * get(first_clear.incident_power.par, 2, 0.0)
         end
     end
 
@@ -508,10 +508,10 @@ end
             @test get(_incident_par_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_toric), 1, 0.0)
             @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) >= get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
             @test get(_incident_par_energy(budget_toric), 2, 0.0) > get(_incident_par_initial_energy(budget_toric), 2, 0.0)
-            @test get(scat_toric.added_par_power_per_node, 2, 0.0) > 0.0
+            @test get(scat_toric.added_power.par, 2, 0.0) > 0.0
             @test isapprox(
                 get(_incident_par_energy(budget_toric), 2, 0.0) - get(_incident_par_initial_energy(budget_toric), 2, 0.0),
-                get(scat_toric.added_par_power_per_node, 2, 0.0);
+                get(scat_toric.added_power.par, 2, 0.0);
                 atol=1e-10,
                 rtol=1e-10,
             )

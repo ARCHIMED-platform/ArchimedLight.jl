@@ -5,6 +5,27 @@ import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Serialization
 
+struct ProjectionCacheContext
+    cache_dir::String
+    scene_key::UInt64
+end
+
+struct DirectionProjectionResult
+    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}}
+    node_hits::Dict{Int,Int}
+    projected_mesh_area::Dict{Int,Float64}
+    projected_pixels_area::Dict{Int,Float64}
+end
+
+struct InterceptionSceneData
+    vertices
+    faces::Vector{PlantGeom.Face3}
+    face2node::Vector{Int}
+    node_ids::Vector{Int}
+    plotbox
+    node_group::Dict{Int,String}
+end
+
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -215,10 +236,10 @@ function _emitter_transfer_weights(
 
     for sector in turtle.sectors
         sector.source == :sun && continue
-        pixel_hits, _, _, _ =
+        projection =
             _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx, upper_hit=false)
 
-        for stack in values(pixel_hits)
+        for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
             # Java uses a stable sort for hit heights; preserve insertion order on ties.
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
@@ -321,13 +342,13 @@ end
 
 function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::LightConfig)
     _cfg_cache_pixel_table(cfg) || return nothing
-    return (
-        cache_dir=_projection_cache_dir(cfg),
-        scene_key=_projection_scene_key(vertices, faces, face2node, plotbox, cfg),
+    return ProjectionCacheContext(
+        _projection_cache_dir(cfg),
+        _projection_scene_key(vertices, faces, face2node, plotbox, cfg),
     )
 end
 
-function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
+function _projection_cache_path(cache_ctx::ProjectionCacheContext, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
     mode = (upper_hit ? "u1" : "u0") * (strict_java_float ? "_sf1" : "_sf0")
@@ -342,7 +363,7 @@ function _read_projection_cache(path::AbstractString)
             (:version in propertynames(payload) && getproperty(payload, :version) == 1) || return nothing
             req = (:pixel_hits, :node_hits, :projected_mesh_area, :projected_pixels_area)
             all(n -> n in propertynames(payload), req) || return nothing
-            return (
+            return DirectionProjectionResult(
                 getproperty(payload, :pixel_hits),
                 getproperty(payload, :node_hits),
                 getproperty(payload, :projected_mesh_area),
@@ -354,15 +375,15 @@ function _read_projection_cache(path::AbstractString)
     end
 end
 
-function _write_projection_cache(path::AbstractString, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
+function _write_projection_cache(path::AbstractString, result::DirectionProjectionResult)
     mkpath(dirname(path))
     tmp = path * ".tmp-" * string(getpid()) * "-" * string(time_ns())
     payload = (
         version=1,
-        pixel_hits=pixel_hits,
-        node_hits=node_hits,
-        projected_mesh_area=projected_mesh_area,
-        projected_pixels_area=projected_pixels_area,
+        pixel_hits=result.pixel_hits,
+        node_hits=result.node_hits,
+        projected_mesh_area=result.projected_mesh_area,
+        projected_pixels_area=result.projected_pixels_area,
     )
     open(tmp, "w") do io
         Serialization.serialize(io, payload)
@@ -748,21 +769,21 @@ function _rasterize_direction_java(
     upper_hit::Bool=false,
 )
     strict_java_float = _strict_java_float(cfg)
-    pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
+    projection =
         _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
 
     ratios = Dict{Int,Float64}()
-    for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
+    for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
         if !cfg.general.area_ratio
             ratios[nid] = 1.0
         else
-            ppa = get(projected_pixels_area, nid, 0.0)
-            ratios[nid] = ppa > 0.0 ? get(projected_mesh_area, nid, 0.0) / ppa : 1.0
+            ppa = get(projection.projected_pixels_area, nid, 0.0)
+            ratios[nid] = ppa > 0.0 ? get(projection.projected_mesh_area, nid, 0.0) / ppa : 1.0
         end
     end
 
     visible_area = Dict{Int,Float64}()
-    for stack in values(pixel_hits)
+    for stack in values(projection.pixel_hits)
         isempty(stack) && continue
         # Java uses a stable sort for hit heights; preserve insertion order on ties.
         sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
@@ -787,7 +808,7 @@ function _rasterize_direction_java(
         end
     end
 
-    return visible_area, node_hits
+    return visible_area, projection.node_hits
 end
 
 function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
@@ -829,8 +850,7 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
     end
 
     _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg)
-
-    return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+    return DirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
 
 function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
@@ -845,10 +865,9 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
         rm(path; force=true)
     end
 
-    pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
-    _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
-    return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+    result = _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
+    _write_projection_cache(path, result)
+    return result
 end
 
 function _strict_java_float(cfg::LightConfig)
@@ -978,19 +997,19 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
         end
     end
 
-    return vertices, faces, face2node, unique(node_ids), plotbox, node_group
+    return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group)
 end
 
 function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
-    _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
-    pav_ids = sort(Int[nid for nid in node_ids if get(node_group, nid, "") == "pavement"])
+    pav_ids = sort(Int[nid for nid in geometry.node_ids if get(geometry.node_group, nid, "") == "pavement"])
     for (i, nid) in enumerate(pav_ids)
         keys_by_node[nid] = (-1, i + 1)
     end
 
-    for nid in node_ids
+    for nid in geometry.node_ids
         haskey(keys_by_node, nid) && continue
         object_id = get(scene.object_id_per_node, nid, 1)
         source_topology_id = get(scene.source_topology_id_per_node, nid, nid + 1)
@@ -1042,25 +1061,27 @@ function compute_first_order(
     ::RasterCPUBackend,
 )
 
-    vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
-    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, cfg)
     upper_hit = _use_upper_hit_pixel_table(cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
 
-    projected_area_per_node = Dict(id => 0.0 for id in node_ids)
-    incident_par_power_per_node = Dict(id => 0.0 for id in node_ids)
-    incident_nir_power_per_node = Dict(id => 0.0 for id in node_ids)
-    hits_per_node = Dict(id => 0 for id in node_ids)
+    projected_area_per_node = Dict(id => 0.0 for id in geometry.node_ids)
+    incident_power = SpectralNodeValues(
+        Dict(id => 0.0 for id in geometry.node_ids),
+        Dict(id => 0.0 for id in geometry.node_ids),
+    )
+    hits_per_node = Dict(id => 0 for id in geometry.node_ids)
 
     for (k, sector) in enumerate(turtle.sectors)
         visible_area, node_hits =
             _rasterize_direction_java(
-                vertices,
-                faces,
-                face2node,
+                geometry.vertices,
+                geometry.faces,
+                geometry.face2node,
                 sector.direction,
                 cfg,
-                plotbox;
+                geometry.plotbox;
                 cache_ctx=cache_ctx,
                 virtual_nodes=virtual_nodes,
                 upper_hit=upper_hit,
@@ -1079,25 +1100,33 @@ function compute_first_order(
         for (nid, pa) in visible_area
             pa <= 0.0 && continue
             projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-            incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + par_flux * pa
-            incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nir_flux * pa
+            incident_power.par[nid] = get(incident_power.par, nid, 0.0) + par_flux * pa
+            incident_power.nir[nid] = get(incident_power.nir, nid, 0.0) + nir_flux * pa
         end
     end
 
     emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     if !isempty(emitter_nodes)
-        w = _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
+        w = _emitter_transfer_weights(
+            geometry.vertices,
+            geometry.faces,
+            geometry.face2node,
+            turtle,
+            cfg,
+            geometry.plotbox,
+            emitter_nodes,
+            cache_ctx,
+        )
         for ((to, src), ww) in w
-            incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + ww * get(emit_par, src, 0.0)
-            incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + ww * get(emit_nir, src, 0.0)
+            incident_power.par[to] = get(incident_power.par, to, 0.0) + ww * get(emit_par, src, 0.0)
+            incident_power.nir[to] = get(incident_power.nir, to, 0.0) + ww * get(emit_nir, src, 0.0)
         end
     end
 
     FirstOrderResult(
         projected_area_per_node,
-        incident_par_power_per_node,
-        incident_nir_power_per_node,
+        incident_power,
         hits_per_node,
     )
 end

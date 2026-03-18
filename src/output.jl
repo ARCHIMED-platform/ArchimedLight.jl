@@ -428,14 +428,14 @@ function _node_ids_for_output(scene::SceneGeometry)
 end
 
 function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
-    vertices, faces, face2node, _, _, node_group_geom = _scene_geometry_for_interception(scene, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
     area_per_node = Dict{Int,Float64}()
     bary_sum_per_node = Dict{Int,NTuple{3,Float64}}()
-    for (i, f) in enumerate(faces)
-        nid = face2node[i]
-        p1 = vertices[f[1]]
-        p2 = vertices[f[2]]
-        p3 = vertices[f[3]]
+    for (i, f) in enumerate(geometry.faces)
+        nid = geometry.face2node[i]
+        p1 = geometry.vertices[f[1]]
+        p2 = geometry.vertices[f[2]]
+        p3 = geometry.vertices[f[3]]
         a = _triangle_area3d(p1, p2, p3)
         area_per_node[nid] = get(area_per_node, nid, 0.0) + a
         cx = (p1[1] + p2[1] + p3[1]) / 3.0
@@ -473,7 +473,7 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         object_id, source_topology_id = key_by_node[nid]
         source_topology_id_per_node[nid] = source_topology_id
         object_id_per_node[nid] = object_id
-        g = haskey(node_group_geom, nid) ? node_group_geom[nid] : get(scene.node_group, nid, "")
+        g = haskey(geometry.node_group, nid) ? geometry.node_group[nid] : get(scene.node_group, nid, "")
         group_per_node[nid] = g
         t = strip(get(scene.node_type, nid, ""))
         if isempty(t)
@@ -569,17 +569,17 @@ function _ri_value(
     b = uppercase(band)
     if b == "PAR"
         if interception_only
-            return quantity ? get(step.budget.ri_par_0_q_per_node, nid, 0.0) : get(step.budget.ri_par_0_f_per_node, nid, 0.0)
+            return quantity ? get(step.budget.incident_energy.initial.par, nid, 0.0) : get(step.budget.incident_flux.initial.par, nid, 0.0)
         end
-        return quantity ? get(step.budget.ri_par_q_per_node, nid, 0.0) : get(step.budget.ri_par_f_per_node, nid, 0.0)
+        return quantity ? get(step.budget.incident_energy.total.par, nid, 0.0) : get(step.budget.incident_flux.total.par, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(step.budget.ri_nir_0_q_per_node, nid, 0.0) : get(step.budget.ri_nir_0_f_per_node, nid, 0.0)
+            return quantity ? get(step.budget.incident_energy.initial.nir, nid, 0.0) : get(step.budget.incident_flux.initial.nir, nid, 0.0)
         end
-        return quantity ? get(step.budget.ri_nir_q_per_node, nid, 0.0) : get(step.budget.ri_nir_f_per_node, nid, 0.0)
+        return quantity ? get(step.budget.incident_energy.total.nir, nid, 0.0) : get(step.budget.incident_flux.total.nir, nid, 0.0)
     end
 
-    qdict = interception_only ? get(step.budget.extra_0_q_per_band, b, Dict{Int,Float64}()) : get(step.budget.extra_q_per_band, b, Dict{Int,Float64}())
+    qdict = interception_only ? get(step.budget.extra_initial_energy_per_band, b, Dict{Int,Float64}()) : get(step.budget.extra_energy_per_band, b, Dict{Int,Float64}())
     q = get(qdict, nid, 0.0)
     if quantity
         return q
@@ -602,14 +602,14 @@ function _ra_value(
     b = uppercase(band)
     if b == "PAR"
         if interception_only
-            return quantity ? get(step.budget.ra_par_0_q_per_node, nid, 0.0) : get(step.budget.ra_par_0_f_per_node, nid, 0.0)
+            return quantity ? get(step.budget.absorbed_energy.initial.par, nid, 0.0) : get(step.budget.absorbed_flux.initial.par, nid, 0.0)
         end
-        return quantity ? get(step.budget.ra_par_q_per_node, nid, 0.0) : get(step.budget.ra_par_f_per_node, nid, 0.0)
+        return quantity ? get(step.budget.absorbed_energy.total.par, nid, 0.0) : get(step.budget.absorbed_flux.total.par, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(step.budget.ra_nir_0_q_per_node, nid, 0.0) : get(step.budget.ra_nir_0_f_per_node, nid, 0.0)
+            return quantity ? get(step.budget.absorbed_energy.initial.nir, nid, 0.0) : get(step.budget.absorbed_flux.initial.nir, nid, 0.0)
         end
-        return quantity ? get(step.budget.ra_nir_q_per_node, nid, 0.0) : get(step.budget.ra_nir_f_per_node, nid, 0.0)
+        return quantity ? get(step.budget.absorbed_energy.total.nir, nid, 0.0) : get(step.budget.absorbed_flux.total.nir, nid, 0.0)
     end
 
     abs_band = get!(absorptance_cache, b) do
@@ -886,8 +886,8 @@ function _row_field_string_local(row, sym::Symbol, default::String="NA")
 end
 
 function _scene_plot_area(scene::SceneGeometry, cfg::LightConfig)
-    _, _, _, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
-    return plotbox.xdim * plotbox.ydim
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    return geometry.plotbox.xdim * geometry.plotbox.ydim
 end
 
 function _scene_variable_value(
@@ -1162,9 +1162,9 @@ function scattering_iteration_log_table(
     graph = build_scattering_transfer_graph(scene, step.turtle, step.first_order, cfg; mode=mode, backend=backend)
     initial =
         if b == "NIR"
-            Dict{Int,Float64}(nid => get(step.first_order.incident_nir_power_per_node, nid, 0.0) for nid in graph.node_ids)
+            Dict{Int,Float64}(nid => get(step.first_order.incident_power.nir, nid, 0.0) for nid in graph.node_ids)
         else
-            Dict{Int,Float64}(nid => get(step.first_order.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
+            Dict{Int,Float64}(nid => get(step.first_order.incident_power.par, nid, 0.0) for nid in graph.node_ids)
         end
     dflt = _default_band_coeff(cfg, b)
     per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
@@ -1320,13 +1320,13 @@ function node_links_dir_table(
     0 <= direction_index < length(turtle.sectors) || error("direction_index out of bounds")
     cols = columns === nothing ? copy(_NODE_LINKS_DIR_ORDER) : _canonical_node_links_dir_order(String.(columns))
     object_id_per_node, source_topology_id_per_node = _output_identity_maps(scene, cfg)
-    vertices, faces, face2node, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
     sector = turtle.sectors[direction_index + 1]
-    pixel_hits, _, _, _ = _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+    projection = _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, cfg, geometry.plotbox, cache_ctx)
 
     counts = Dict{Tuple{Int,Int},Int}()
-    for stack in values(pixel_hits)
+    for stack in values(projection.pixel_hits)
         length(stack) <= 1 && continue
         sort!(stack, by=x -> x[1], rev=true)
         for h in 1:(length(stack) - 1)
@@ -1421,7 +1421,7 @@ function summary_values_table(
             group = get(group_per_node, nid, "")
             type = get(type_per_node, nid, unavailable)
             area = get(area_per_node, nid, 0.0)
-            ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
+            ri_q = get(step.budget.incident_energy.total.par, nid, 0.0) + get(step.budget.incident_energy.total.nir, nid, 0.0)
             k = (object_id, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))
             acc[k] = (a0 + area, r0 + ri_q)

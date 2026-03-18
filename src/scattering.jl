@@ -48,24 +48,24 @@ function _stack_transfer_pairs!(
 end
 
 function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
-    vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
-    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
 
     for sector in turtle.sectors
-        pixel_hits, node_hits, _, _ =
-            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+        projection =
+            _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, cfg, geometry.plotbox, cache_ctx)
 
         if sector.source == :sun
-            for (nid, h) in node_hits
+            for (nid, h) in projection.node_hits
                 sun_hits[nid] = get(sun_hits, nid, 0) + h
             end
             continue
         end
 
-        for stack in values(pixel_hits)
+        for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
             # Java PixelTable uses a stable height sort (Collections.sort on comparator).
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
@@ -98,11 +98,11 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
                 scatt_down[h] = down
             end
 
-            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, node_group)
+            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, geometry.node_group)
         end
     end
 
-    return pair_counts, sun_hits, node_ids, node_group
+    return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
 end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, cfg::LightConfig, node_ids)
@@ -165,10 +165,10 @@ function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::Fi
     for nid in geom_node_ids
         push!(node_set, nid)
     end
-    for nid in keys(first.incident_par_power_per_node)
+    for nid in keys(first.incident_power.par)
         push!(node_set, nid)
     end
-    for nid in keys(first.incident_nir_power_per_node)
+    for nid in keys(first.incident_power.nir)
         push!(node_set, nid)
     end
     node_ids = collect(node_set)
@@ -286,7 +286,7 @@ function _initial_scattering_power(
     if initial_power_per_node !== nothing
         return _copy_node_values(initial_power_per_node, graph.node_ids)
     end
-    source = uppercase(String(band)) == "NIR" ? first.incident_nir_power_per_node : first.incident_par_power_per_node
+    source = uppercase(String(band)) == "NIR" ? first.incident_power.nir : first.incident_power.par
     return _copy_node_values(source, graph.node_ids)
 end
 
@@ -486,7 +486,7 @@ function compute_scattering(
         cfg.general.scattering_coeff_nir,
     )
 
-    ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)
+    ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
 end
 
 function compute_scattering(

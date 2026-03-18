@@ -26,7 +26,7 @@ viz_mtg = visual_scene_mtg(
     scene,
     cfg,
     step;
-    fields=[:ri_par_f_per_node],
+    fields=[:incident_par_flux],
     xy_bounds=scene.scene_xy_bounds,
 )
 
