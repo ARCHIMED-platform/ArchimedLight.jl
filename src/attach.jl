@@ -1,20 +1,20 @@
 const _DEFAULT_BUDGET_ATTRS = Dict{Symbol,Symbol}(
-    :ri_par_0_f_per_node => :Ri_PAR_0_f,
-    :ri_nir_0_f_per_node => :Ri_NIR_0_f,
-    :ri_par_f_per_node => :Ri_PAR_f,
-    :ri_nir_f_per_node => :Ri_NIR_f,
-    :ri_par_0_q_per_node => :Ri_PAR_0_q,
-    :ri_nir_0_q_per_node => :Ri_NIR_0_q,
-    :ri_par_q_per_node => :Ri_PAR_q,
-    :ri_nir_q_per_node => :Ri_NIR_q,
-    :ra_par_0_f_per_node => :Ra_PAR_0_f,
-    :ra_nir_0_f_per_node => :Ra_NIR_0_f,
-    :ra_par_f_per_node => :Ra_PAR_f,
-    :ra_nir_f_per_node => :Ra_NIR_f,
-    :ra_par_0_q_per_node => :Ra_PAR_0_q,
-    :ra_nir_0_q_per_node => :Ra_NIR_0_q,
-    :ra_par_q_per_node => :Ra_PAR_q,
-    :ra_nir_q_per_node => :Ra_NIR_q,
+    :incident_par_initial_flux => :Ri_PAR_0_f,
+    :incident_nir_initial_flux => :Ri_NIR_0_f,
+    :incident_par_flux => :Ri_PAR_f,
+    :incident_nir_flux => :Ri_NIR_f,
+    :incident_par_initial_energy => :Ri_PAR_0_q,
+    :incident_nir_initial_energy => :Ri_NIR_0_q,
+    :incident_par_energy => :Ri_PAR_q,
+    :incident_nir_energy => :Ri_NIR_q,
+    :absorbed_par_initial_flux => :Ra_PAR_0_f,
+    :absorbed_nir_initial_flux => :Ra_NIR_0_f,
+    :absorbed_par_flux => :Ra_PAR_f,
+    :absorbed_nir_flux => :Ra_NIR_f,
+    :absorbed_par_initial_energy => :Ra_PAR_0_q,
+    :absorbed_nir_initial_energy => :Ra_NIR_0_q,
+    :absorbed_par_energy => :Ra_PAR_q,
+    :absorbed_nir_energy => :Ra_NIR_q,
 )
 
 function _attach_node_values!(
@@ -39,10 +39,25 @@ function _geometry_node_ids(scene::SceneGeometry)
 end
 
 function _budget_node_field(step::LightStepResult, field::Symbol)
-    field in propertynames(step.budget) || error("Unknown LightBudget field: $field")
-    values = getproperty(step.budget, field)
-    values isa AbstractDict || error("LightBudget field `$field` is not a per-node dictionary.")
-    return values
+    budget = step.budget
+    field === :incident_par_initial_flux && return budget.incident.par.initial_flux_per_node
+    field === :incident_nir_initial_flux && return budget.incident.nir.initial_flux_per_node
+    field === :incident_par_flux && return budget.incident.par.flux_per_node
+    field === :incident_nir_flux && return budget.incident.nir.flux_per_node
+    field === :incident_par_initial_energy && return budget.incident.par.initial_energy_per_node
+    field === :incident_nir_initial_energy && return budget.incident.nir.initial_energy_per_node
+    field === :incident_par_energy && return budget.incident.par.energy_per_node
+    field === :incident_nir_energy && return budget.incident.nir.energy_per_node
+    field === :absorbed_par_initial_flux && return budget.absorbed.par.initial_flux_per_node
+    field === :absorbed_nir_initial_flux && return budget.absorbed.nir.initial_flux_per_node
+    field === :absorbed_par_flux && return budget.absorbed.par.flux_per_node
+    field === :absorbed_nir_flux && return budget.absorbed.nir.flux_per_node
+    field === :absorbed_par_initial_energy && return budget.absorbed.par.initial_energy_per_node
+    field === :absorbed_nir_initial_energy && return budget.absorbed.nir.initial_energy_per_node
+    field === :absorbed_par_energy && return budget.absorbed.par.energy_per_node
+    field === :absorbed_nir_energy && return budget.absorbed.nir.energy_per_node
+    supported = sort!(String.(collect(keys(_DEFAULT_BUDGET_ATTRS))))
+    error("Unknown light field `$field`. Supported fields: $(join(supported, ", ")).")
 end
 
 function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
@@ -51,25 +66,34 @@ function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
     error("No default MTG attribute name for `$field`. Pass it explicitly in `names=Dict($field => :YourAttr)`.")
 end
 
+function _series_value_type(steps::AbstractVector{<:LightStepResult}, field::Symbol, fill_value::T) where {T}
+    for step in steps
+        vals = _budget_node_field(step, field)
+        isempty(vals) || return valtype(vals)
+    end
+    return T
+end
+
 function _resolved_step_fields(step::LightStepResult, fields, names)
-    Dict{Symbol,AbstractDict{Int,Float64}}(
+    Dict{Symbol,AbstractDict}(
         _budget_attr_name(field, names) => _budget_node_field(step, field) for field in fields
     )
 end
 
-function _resolved_series_fields(steps::AbstractVector{<:LightStepResult}, fields, names, fill_value::Float64)
-    out = Dict{Symbol,Dict{Int,Vector{Float64}}}()
+function _resolved_series_fields(steps::AbstractVector{<:LightStepResult}, fields, names, fill_value)
+    out = Dict{Symbol,AbstractDict}()
     for field in fields
         attr = _budget_attr_name(field, names)
         all_node_ids = Set{Int}()
         for step in steps
             union!(all_node_ids, keys(_budget_node_field(step, field)))
         end
-        by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in all_node_ids)
+        T = _series_value_type(steps, field, fill_value)
+        by_node = Dict{Int,Vector{T}}(nid => T[] for nid in all_node_ids)
         for step in steps
             vals = _budget_node_field(step, field)
             for nid in all_node_ids
-                push!(by_node[nid], Float64(get(vals, nid, fill_value)))
+                push!(by_node[nid], get(vals, nid, fill_value))
             end
         end
         out[attr] = by_node
@@ -81,8 +105,8 @@ function _paving_tile_mesh(points, faces_for_tile)
     used = sort!(unique(vcat([[Int(f[1]), Int(f[2]), Int(f[3])] for f in faces_for_tile]...)))
     remap = Dict{Int,Int}(old => new for (new, old) in enumerate(used))
     tile_points = GeometryBasics.Point3f[GeometryBasics.Point3f(points[idx]...) for idx in used]
-    tile_faces = PlantGeom.Face3[
-        PlantGeom.Face3(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
+    tile_faces = GeometryBasics.TriangleFace{Int}[
+        GeometryBasics.TriangleFace{Int}(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
     ]
     return GeometryBasics.Mesh(tile_points, tile_faces), tile_points
 end
@@ -92,22 +116,22 @@ function _paving_nodes_data(scene::SceneGeometry, cfg::LightConfig; xy_bounds=no
     plot_paving > 0 || return NamedTuple[]
 
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
-    vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    plotbox = _plotbox(scene, vertices, cfg.pixel_size)
+    vertices = [StaticArrays.SVector(v[1], v[2], v[3]) for v in raw_vertices]
+    plotbox = _plotbox(scene, vertices, get(cfg.general, "pixel_size", 0.0025))
     first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
     paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
 
-    faces_by_node = Dict{Int,Vector{PlantGeom.Face3}}()
+    faces_by_node = Dict{Int,Vector{GeometryBasics.TriangleFace{Int}}}()
     for (face, nid) in zip(paving_faces, paving_face2node)
-        push!(get!(faces_by_node, nid, PlantGeom.Face3[]), face)
+        push!(get!(faces_by_node, nid, GeometryBasics.TriangleFace{Int}[]), face)
     end
 
     out = NamedTuple[]
     for nid in sort!(collect(keys(faces_by_node)))
         tile_mesh, tile_points = _paving_tile_mesh(paving_vertices, faces_by_node[nid])
-        xs = Float64[p[1] for p in tile_points]
-        ys = Float64[p[2] for p in tile_points]
-        zs = Float64[p[3] for p in tile_points]
+        xs = [p[1] for p in tile_points]
+        ys = [p[2] for p in tile_points]
+        zs = [p[3] for p in tile_points]
         bary = ((minimum(xs) + maximum(xs)) / 2, (minimum(ys) + maximum(ys)) / 2, sum(zs) / length(zs))
         if xy_bounds !== nothing
             xmin, ymin, xmax, ymax = xy_bounds
@@ -146,8 +170,6 @@ function _append_paving_nodes!(
             :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
             :functional_group => "pavement",
             :type => "Cobblestone",
-            :item_id => -1,
-            :source_topology_id => tile.node_id,
         )
         for (attr, values) in field_values
             attrs[attr] = get(values, tile.node_id, fill_value)
@@ -188,22 +210,22 @@ function attach_node_values!(
 end
 
 """
-    attach_light_step!(scene, step; fields=[:ri_par_f_per_node], names=Dict(), fill_value=nothing)
+    attach_light_step!(scene, step; fields=[:incident_par_flux], names=Dict(), fill_value=nothing)
 
 Attach one or more per-node `LightBudget` fields from a single `LightStepResult`
-onto `scene.mtg`, using Java-style attribute names by default.
+onto `scene.mtg`, using the default output attribute names.
 
 Example:
 
 ```julia
-attach_light_step!(scene, step; fields=[:ri_par_f_per_node])
+attach_light_step!(scene, step; fields=[:incident_par_flux])
 plantviz(scene.mtg, color=:Ri_PAR_f)
 ```
 """
 function attach_light_step!(
     scene::SceneGeometry,
     step::LightStepResult;
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     fill_value=nothing,
 )
@@ -220,8 +242,8 @@ end
 
 """
     visual_scene_mtg(scene, cfg; include_paving=true, keep_scene_surface=false, xy_bounds=nothing)
-    visual_scene_mtg(scene, cfg, step; fields=[:ri_par_f_per_node], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=nothing)
-    visual_scene_mtg(scene, cfg, steps; fields=[:ri_par_f_per_node], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=NaN)
+    visual_scene_mtg(scene, cfg, step; fields=[:incident_par_flux], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=nothing)
+    visual_scene_mtg(scene, cfg, steps; fields=[:incident_par_flux], names=Dict(), include_paving=true, keep_scene_surface=false, xy_bounds=nothing, fill_value=NaN)
 
 Return a copied MTG prepared for visualization with `plantviz`.
 
@@ -241,7 +263,7 @@ function visual_scene_mtg(
 )
     mtg = deepcopy(scene.mtg)
     keep_scene_surface || _drop_scene_surface!(mtg)
-    include_paving && _append_paving_nodes!(mtg, scene, cfg, Dict{Symbol,Dict{Int,Float64}}(); xy_bounds=xy_bounds)
+    include_paving && _append_paving_nodes!(mtg, scene, cfg, Dict{Symbol,AbstractDict}(); xy_bounds=xy_bounds)
     return mtg
 end
 
@@ -249,7 +271,7 @@ function visual_scene_mtg(
     scene::SceneGeometry,
     cfg::LightConfig,
     step::LightStepResult;
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     include_paving::Bool=true,
     keep_scene_surface::Bool=false,
@@ -270,12 +292,12 @@ function visual_scene_mtg(
     scene::SceneGeometry,
     cfg::LightConfig,
     steps::AbstractVector{<:LightStepResult};
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     include_paving::Bool=true,
     keep_scene_surface::Bool=false,
     xy_bounds=nothing,
-    fill_value::Float64=NaN,
+    fill_value=NaN,
 )
     mtg = deepcopy(scene.mtg)
     field_values = _resolved_series_fields(steps, fields, names, fill_value)
@@ -288,7 +310,7 @@ function visual_scene_mtg(
 end
 
 """
-    attach_light_series!(scene, steps; fields=[:ri_par_f_per_node], names=Dict(), fill_value=NaN)
+    attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fill_value=NaN)
 
 Attach one or more `LightBudget` fields from several time steps onto `scene.mtg`.
 Each attached attribute becomes a vector ordered like `steps`, which can then be
@@ -297,17 +319,18 @@ visualized with `plantviz(..., color=:Attr, index=timestep)`.
 function attach_light_series!(
     scene::SceneGeometry,
     steps::AbstractVector{<:LightStepResult};
-    fields::AbstractVector{Symbol}=[:ri_par_f_per_node],
+    fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
-    fill_value::Float64=NaN,
+    fill_value=NaN,
 )
     node_ids = sort!(collect(keys(scene.total_area_per_node)))
     for field in fields
-        by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
+        T = _series_value_type(steps, field, fill_value)
+        by_node = Dict{Int,Vector{T}}(nid => T[] for nid in node_ids)
         for step in steps
             values = _budget_node_field(step, field)
             for nid in node_ids
-                push!(by_node[nid], Float64(get(values, nid, fill_value)))
+                push!(by_node[nid], get(values, nid, fill_value))
             end
         end
         attach_node_values!(

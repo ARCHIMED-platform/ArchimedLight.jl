@@ -16,27 +16,24 @@ const HOME_FIGURE_PLOT_PAVING = 2500
 const HOME_FIGURE_GROUND_SPAN = 45.0
 
 sim_dir = joinpath(REPO_ROOT, "example_2", "config.yml")
-# cfg = read_light_config(_home_figure_config_path())
 cfg = read_light_config(sim_dir)
-scene = read_scene(cfg.scene)
-meteo = read_meteo(cfg.meteo)
+cfg.models["pavement"]["Cobblestone"]["plot_paving"] = HOME_FIGURE_PLOT_PAVING
+scene = read_scene(cfg.source_files.scene)
+meteo = read_meteo(cfg.source_files.meteo)
 step = run_light_step(scene, first(meteo.rows), cfg)
 
-colorrange = _ri_par_colorrange(scene, step, cfg, NamedTuple{(:xmin, :ymin, :xmax, :ymax)}(scene.scene_xy_bounds))
 viz_mtg = visual_scene_mtg(
     scene,
     cfg,
     step;
-    fields=[:ri_par_f_per_node],
-    xy_bounds=scene.scene_xy_bounds,
+    fields=[:incident_par_flux]
 )
 
 CairoMakie.activate!()
 fig, ax, p = plantviz(
     viz_mtg;
     color=:Ri_PAR_f,
-    colormap=:thermal,#, :batlow, :thermal, :cividis
-    # colorrange=colorrange,
+    colormap=:thermal,
     colorrange=(0.0, 450.0),
     figure=(size=(980, 700), backgroundcolor=BG),
 )
@@ -46,4 +43,3 @@ PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 mkpath(dirname(OUT_PATH))
 save(OUT_PATH, fig)
 println("wrote ", OUT_PATH)
-

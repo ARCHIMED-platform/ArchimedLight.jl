@@ -19,7 +19,8 @@ write_summary: false
 
 component_variables:
   step_number: true
-  item_id: true
-  component_id: true
+  node_id: true
+  source_topology_id: true
+  object_id: true
   area: true
   Ri_PAR_0_q: true

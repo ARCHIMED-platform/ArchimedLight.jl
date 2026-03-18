@@ -7,7 +7,7 @@ using CairoMakie
 
 function render_ri_par_f_figure(scene, step, cfg; title::String)
     vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
-    metric = step.budget.ri_par_f_per_node
+    metric = step.budget.incident.par.flux_per_node
 
     v_sum = zeros(Float64, length(vertices))
     v_count = zeros(Int, length(vertices))
@@ -50,8 +50,8 @@ end
 function write_case(case_name::String)
     case_root = joinpath(dirname(@__DIR__), "test", "fast_fixtures", case_name)
     cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    scene = ArchimedLight.read_scene(cfg.source_files.scene)
+    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
     selected = ArchimedLight.prepare_meteo(meteo, cfg)
     series = ArchimedLight.run_light_series(scene, meteo, cfg)
 
@@ -68,7 +68,7 @@ function write_case(case_name::String)
         cfg;
         meteo_row=meteo_row,
         step_number=0,
-        columns=["step_number", "item_id", "component_id", "area", "Ri_PAR_0_q"],
+        columns=["step_number", "node_id", "area", "Ri_PAR_0_q"],
         strict=false,
     )
 

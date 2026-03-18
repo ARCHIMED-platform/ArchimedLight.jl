@@ -2,16 +2,16 @@
 
 A runnable, self-contained example is available in:
 
-- `example/full_featured_example.jl`
-- `example/README.md`
+- `example_1/full_featured_example.jl`
+- `example_1/README.md`
 
-It uses copied fixture input files under `example/` so it does not depend on paths inside `java_implementation/`.
+It uses copied fixture input files under `example_1/`.
 
 ## Run
 From repository root:
 
 ```bash
-julia --project=. example/full_featured_example.jl
+julia --project=. example_1/full_featured_example.jl
 ```
 
 ## What it demonstrates
@@ -20,6 +20,6 @@ julia --project=. example/full_featured_example.jl
 - Transfer-graph stage: `build_scattering_transfer_graph`
 - Pipeline API with backend kwargs: `run_light_step`, `run_light_series`
 - Extra waveband handling (custom band from `RI_custom_f`)
-- 3D visualization with PlantGeom + CairoMakie colored by intercepted PAR (saved to `example/output/scene_3d_par_intercepted.png`)
-- Java vs Julia per-component comparison using `example/output/000001/component_values.csv` (saved to `example/output/component_values_java_vs_julia.csv`)
-- 3D visualization colored by Java PAR (saved to `example/output/scene_3d_par_java.png`)
+- 3D visualization with PlantGeom + CairoMakie colored by intercepted PAR (saved to `example_1/output/scene_3d_par_intercepted.png`)
+- optional reference-vs-Julia per-component comparison using `example_1/output/000001/component_values.csv` (saved to `example_1/output/component_values_reference_vs_julia.csv`)
+- 3D visualization colored by reference PAR (saved to `example_1/output/scene_3d_par_reference.png`)

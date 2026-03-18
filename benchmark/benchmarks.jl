@@ -32,8 +32,8 @@ end
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
     cfg = ArchimedLight.read_light_config(paths.config)
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    scene = ArchimedLight.read_scene(cfg.source_files.scene)
+    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
     rows = ArchimedLight.prepare_meteo(meteo, cfg).rows
     return (paths=paths, cfg=cfg, scene=scene, meteo=meteo, rows=rows)
 end
@@ -42,26 +42,26 @@ function _override_cfg(cfg0::ArchimedLight.LightConfig; kwargs...)
     cfg = deepcopy(cfg0)
     for (k, v) in kwargs
         if k == :pixel_size_m
-            cfg.raw["pixel_size"] = Float64(v) * 100.0
+            cfg.general["pixel_size"] = Float64(v)
         else
-            cfg.raw[String(k)] = v
+            cfg.general[String(k)] = v
         end
     end
     ArchimedLight.refresh_light_config!(cfg; reload_models=true)
-    cfg.raw["output_directory"] = mktempdir()
+    cfg.outputs.directory = mktempdir()
     return cfg
 end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
-    points = GeometryBasics.Point{3,Float32}[]
-    faces = PlantGeom.Face3[]
+    points = GeometryBasics.Point{3,Float64}[]
+    faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
     total_area_per_node = Dict{Int,Float64}()
     barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
     node_group = Dict{Int,String}()
     node_type = Dict{Int,String}()
-    java_item_id_per_node = Dict{Int,Int}()
-    java_component_id_per_node = Dict{Int,Int}()
     xs = Float64[]
     ys = Float64[]
 
@@ -76,14 +76,14 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         base = length(points)
         append!(
             points,
-            GeometryBasics.Point{3,Float32}[
-                GeometryBasics.Point{3,Float32}(Float32(p1[1]), Float32(p1[2]), Float32(p1[3])),
-                GeometryBasics.Point{3,Float32}(Float32(p2[1]), Float32(p2[2]), Float32(p2[3])),
-                GeometryBasics.Point{3,Float32}(Float32(p3[1]), Float32(p3[2]), Float32(p3[3])),
-                GeometryBasics.Point{3,Float32}(Float32(p4[1]), Float32(p4[2]), Float32(p4[3])),
+            GeometryBasics.Point{3,Float64}[
+                GeometryBasics.Point{3,Float64}(p1[1], p1[2], p1[3]),
+                GeometryBasics.Point{3,Float64}(p2[1], p2[2], p2[3]),
+                GeometryBasics.Point{3,Float64}(p3[1], p3[2], p3[3]),
+                GeometryBasics.Point{3,Float64}(p4[1], p4[2], p4[3]),
             ],
         )
-        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(faces, GeometryBasics.TriangleFace{Int}[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
         append!(face2node, [i, i])
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
@@ -94,10 +94,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
+        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
+        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
         node_group[i] = String(get(spec, :group, "plate"))
         node_type[i] = String(get(spec, :type, "plate"))
-        java_item_id_per_node[i] = Int(get(spec, :item_id, i))
-        java_component_id_per_node[i] = Int(get(spec, :component_id, 1))
     end
 
     return ArchimedLight.SceneGeometry(
@@ -106,10 +106,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         face2node,
         total_area_per_node,
         barycenter_per_node,
+        source_topology_id_per_node,
+        object_id_per_node,
         node_group,
         node_type,
-        java_item_id_per_node,
-        java_component_id_per_node,
         "benchmark_synthetic_scene",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -151,8 +151,6 @@ function _synthetic_fixture()
             p2=(1.0, 0.0, 1.0),
             p3=(1.0, 1.0, 1.0),
             p4=(0.0, 1.0, 1.0),
-            item_id=1,
-            component_id=1,
             group="upper",
             type="plate",
         ),
@@ -161,8 +159,6 @@ function _synthetic_fixture()
             p2=(1.0, 0.0, 0.1),
             p3=(1.0, 1.0, 0.1),
             p4=(0.0, 1.0, 0.1),
-            item_id=2,
-            component_id=1,
             group="lower",
             type="plate",
         ),
@@ -177,8 +173,8 @@ const SYNTHETIC = _synthetic_fixture()
 
 SUITE["IO"] = BenchmarkGroup()
 SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_light_config($(SIMPLEPLANT.paths.config))
-SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.scene)) evals = 1
-SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.meteo))
+SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.source_files.scene)) evals = 1
+SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.source_files.meteo))
 
 SUITE["Run light"] = BenchmarkGroup()
 SUITE["Run light"]["step"] = BenchmarkGroup()

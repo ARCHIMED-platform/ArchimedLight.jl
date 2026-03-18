@@ -100,18 +100,18 @@ function fixture_runtime_data(fx::JuliaFixture)
     cfg = deepcopy(cfg0)
     if fx.scene_override !== nothing
         scene_path = normpath(joinpath(dirname(fx.config_path), fx.scene_override))
-        cfg.raw["scene"] = scene_path
+        cfg.source_files.scene = scene_path
     end
     if fx.meteo_override !== nothing
         meteo_path = normpath(joinpath(dirname(fx.config_path), fx.meteo_override))
-        cfg.raw["meteo"] = meteo_path
+        cfg.source_files.meteo = meteo_path
     end
-    scattering = fx.force_scattering === nothing ? cfg.scattering : Bool(fx.force_scattering)
-    cfg.raw["scattering"] = scattering
+    scattering = fx.force_scattering === nothing ? get(cfg.general, "scattering", true) : Bool(fx.force_scattering)
+    cfg.general["scattering"] = scattering
     ArchimedLight.refresh_light_config!(cfg)
 
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    scene = ArchimedLight.read_scene(cfg.source_files.scene)
+    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
     selected = ArchimedLight.prepare_meteo(meteo, cfg)
     series = ArchimedLight.run_light_series(scene, meteo, cfg)
     length(series) == length(selected.rows) || error("fixture $(fx.id): meteo/series length mismatch")
@@ -130,8 +130,9 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
     first_write = true
     cols = [
         "step_number",
-        "item_id",
-        "component_id",
+        "node_id",
+        "source_topology_id",
+        "object_id",
         "group",
         "type",
         "area",
@@ -144,7 +145,7 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
         "Ra_PAR_0_q",
         "Ra_NIR_0_q",
     ]
-    if cfg.scattering
+    if get(cfg.general, "scattering", true)
         append!(cols, ["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"])
     end
     for i in eachindex(series)
@@ -222,9 +223,9 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
                 "date",
                 "hour_start",
                 "hour_end",
+                "object_id",
                 "group",
                 "type",
-                "item_id",
                 "area",
                 "Ri_q",
                 "Ra_q",
@@ -239,7 +240,7 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
     ArchimedLight.write_sun_position_log_csv(sun_path, data.series, data.meteo.rows; start_step_number=0)
     files["log-sun-position.csv"] = sun_path
 
-    if data.cfg.scattering
+    if get(data.cfg.general, "scattering", true)
         scat_path = joinpath(out_root, "log-iteration-scat-par.csv")
         first_write = true
         for i in eachindex(data.series)
@@ -287,21 +288,21 @@ end
 function _budget_metric_map(step::ArchimedLight.LightStepResult, metric::String)
     b = step.budget
     if metric == "Ri_PAR_f"
-        return b.ri_par_f_per_node
+        return b.incident.par.flux_per_node
     elseif metric == "Ri_PAR_0_f"
-        return b.ri_par_0_f_per_node
+        return b.incident.par.initial_flux_per_node
     elseif metric == "Ri_NIR_f"
-        return b.ri_nir_f_per_node
+        return b.incident.nir.flux_per_node
     elseif metric == "Ri_NIR_0_f"
-        return b.ri_nir_0_f_per_node
+        return b.incident.nir.initial_flux_per_node
     elseif metric == "Ri_PAR_q"
-        return b.ri_par_q_per_node
+        return b.incident.par.energy_per_node
     elseif metric == "Ri_PAR_0_q"
-        return b.ri_par_0_q_per_node
+        return b.incident.par.initial_energy_per_node
     elseif metric == "Ri_NIR_q"
-        return b.ri_nir_q_per_node
+        return b.incident.nir.energy_per_node
     elseif metric == "Ri_NIR_0_q"
-        return b.ri_nir_0_q_per_node
+        return b.incident.nir.initial_energy_per_node
     end
     error("unsupported visual metric $(repr(metric))")
 end
@@ -418,11 +419,11 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "item_id", "component_id"]]
+            [["step_number", "node_id"]]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"
-            [["step_number", "group", "type", "item_id"], ["step_number", "item_id"]]
+            [["step_number", "object_id", "group", "type"], ["step_number", "group", "type"], ["step_number", "group"]]
         elseif name == "meteo.csv"
             [["step_number"], ["stepNumber"], ["date", "hour_start", "hour_end"]]
         elseif name == "log-sun-position.csv"
@@ -431,7 +432,7 @@ function _key_columns_for_file(name::String, cols::Vector{String})
             [
                 ["step_number", "iteration"],
                 ["stepNumber", "iteration"],
-                ["step", "iter", "plantid", "nodeid"],
+                ["step", "iter", "node_id"],
                 ["step", "iter"],
             ]
         else

@@ -112,7 +112,7 @@ function _apply_case_options(cfg0::ArchimedLight.LightConfig, options::OrderedDi
         nir_scattering=Bool(options["nir_scattering"]),
         java_logged_turtle_dirs=Bool(options["java_logged_turtle_dirs"]),
     )
-    cfg.raw["output_directory"] = mktempdir()
+    cfg.outputs.directory = mktempdir()
     return cfg
 end
 
@@ -134,8 +134,8 @@ function _fast_fixture_source(source_id::String)
     get!(_FAST_FIXTURE_CACHE, source_id) do
         case_root = joinpath(@__DIR__, "..", "fast_fixtures", source_id)
         cfg0 = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-        scene = ArchimedLight.read_scene(cfg0.scene)
-        meteo = ArchimedLight.read_meteo(cfg0.meteo)
+        scene = ArchimedLight.read_scene(cfg0.source_files.scene)
+        meteo = ArchimedLight.read_meteo(cfg0.source_files.meteo)
         (case_root=case_root, cfg0=cfg0, scene=scene, meteo=meteo)
     end
 end
@@ -189,13 +189,13 @@ function regression_cases(; profile::String=_regression_profile())
 
     _push_case!(cases, "strict_single_plate", single_plate, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01); strict=true)
     _push_case!(cases, "strict_partial_overlap", partial_overlap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01); strict=true)
-    _push_case!(cases, "strict_toricity_off", toricity_wrap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01, "toricity" => false); strict=true)
-    _push_case!(cases, "strict_toricity_on", toricity_wrap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01, "toricity" => true); strict=true)
-    _push_case!(cases, "strict_stacked_scattering_off", stacked_scattering, OrderedDict("sky_mode" => "1_direct", "scattering" => false, "pixel_size_m" => 0.01); strict=true)
-    _push_case!(cases, "strict_stacked_scattering_on", stacked_scattering, OrderedDict("sky_mode" => "1_direct", "scattering" => true, "pixel_size_m" => 0.01); strict=true)
-    _push_case!(cases, "strict_cached_series", cached_series, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.01); strict=true)
-    _push_case!(cases, "strict_simpleplant", simpleplant, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.40, "area_ratio" => true, "toricity" => false); strict=true, visual=true)
-    _push_case!(cases, "strict_sky_fixture", sky_fixture, OrderedDict("sky_mode" => "46_direct"); strict=true)
+    _push_case!(cases, "strict_toricity_off", toricity_wrap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01, "toricity" => false))
+    _push_case!(cases, "strict_toricity_on", toricity_wrap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01, "toricity" => true))
+    _push_case!(cases, "strict_stacked_scattering_off", stacked_scattering, OrderedDict("sky_mode" => "1_direct", "scattering" => false, "pixel_size_m" => 0.01))
+    _push_case!(cases, "strict_stacked_scattering_on", stacked_scattering, OrderedDict("sky_mode" => "1_direct", "scattering" => true, "pixel_size_m" => 0.01))
+    _push_case!(cases, "strict_cached_series", cached_series, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.01))
+    _push_case!(cases, "strict_simpleplant", simpleplant, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.40, "area_ratio" => true, "toricity" => false); visual=true)
+    _push_case!(cases, "strict_sky_fixture", sky_fixture, OrderedDict("sky_mode" => "46_direct"))
 
     for opts in _core_matrix_option_sets()
         _push_case!(cases, "matrix_partial_overlap", partial_overlap, opts)
@@ -273,16 +273,16 @@ end
 function _synthetic_scene_for_source(source_id::String)
     if source_id == "single_plate_direct"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
         ])
     elseif source_id == "partial_overlap_direct"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", item_id=1),
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", item_id=2),
+            (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", object_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", object_id=2),
         ])
     elseif source_id == "toricity_wraparound"
         scene = _synthetic_horizontal_scene([
-            (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", item_id=1),
+            (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
         ])
         return ArchimedLight.SceneGeometry(
             scene.mtg,
@@ -290,21 +290,21 @@ function _synthetic_scene_for_source(source_id::String)
             scene.face2node,
             scene.total_area_per_node,
             scene.barycenter_per_node,
+            scene.source_topology_id_per_node,
+            scene.object_id_per_node,
             scene.node_group,
             scene.node_type,
-            scene.java_item_id_per_node,
-            scene.java_component_id_per_node,
             scene.source_path,
             (0.0, 0.0, 1.0, 1.0),
         )
     elseif source_id == "stacked_scattering"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", item_id=1),
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
         ])
     elseif source_id == "cached_series_parity"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
         ])
     end
     error("Unsupported synthetic source $(repr(source_id))")
@@ -333,19 +333,19 @@ function _compute_synthetic_case(case::RegressionCase)
     if case.scenario.source_id == "cached_series_parity"
         meteo = _synthetic_meteo_for_source(case.scenario.source_id)
         cfg_uncached = deepcopy(cfg)
-        cfg_uncached.raw["cache_radiation"] = false
+        cfg_uncached.general["cache_radiation"] = false
         ArchimedLight.refresh_light_config!(cfg_uncached)
         cfg_cached = deepcopy(cfg)
-        cfg_cached.raw["cache_radiation"] = true
+        cfg_cached.general["cache_radiation"] = true
         ArchimedLight.refresh_light_config!(cfg_cached)
         series_uncached = ArchimedLight.run_light_series(scene, meteo, cfg_uncached; scattering_mode=scattering_mode)
         series_cached = ArchimedLight.run_light_series(scene, meteo, cfg_cached; scattering_mode=scattering_mode)
         diffs = OrderedDict{String,Float64}()
         for i in eachindex(series_uncached)
-            diffs["step$(i)_ri_par_f"] = _max_abs_float_dict_diff(series_uncached[i].budget.ri_par_f_per_node, series_cached[i].budget.ri_par_f_per_node)
-            diffs["step$(i)_ri_nir_f"] = _max_abs_float_dict_diff(series_uncached[i].budget.ri_nir_f_per_node, series_cached[i].budget.ri_nir_f_per_node)
-            diffs["step$(i)_ri_par_q"] = _max_abs_float_dict_diff(series_uncached[i].budget.ri_par_q_per_node, series_cached[i].budget.ri_par_q_per_node)
-            diffs["step$(i)_ri_nir_q"] = _max_abs_float_dict_diff(series_uncached[i].budget.ri_nir_q_per_node, series_cached[i].budget.ri_nir_q_per_node)
+            diffs["step$(i)_ri_par_f"] = _max_abs_float_dict_diff(series_uncached[i].budget.incident.par.flux_per_node, series_cached[i].budget.incident.par.flux_per_node)
+            diffs["step$(i)_ri_nir_f"] = _max_abs_float_dict_diff(series_uncached[i].budget.incident.nir.flux_per_node, series_cached[i].budget.incident.nir.flux_per_node)
+            diffs["step$(i)_ri_par_q"] = _max_abs_float_dict_diff(series_uncached[i].budget.incident.par.energy_per_node, series_cached[i].budget.incident.par.energy_per_node)
+            diffs["step$(i)_ri_nir_q"] = _max_abs_float_dict_diff(series_uncached[i].budget.incident.nir.energy_per_node, series_cached[i].budget.incident.nir.energy_per_node)
         end
         strict_result = _synthetic_exact_check(case.scenario.source_id, (diffs=diffs,))
         return (
