@@ -669,16 +669,16 @@ end
                     step_duration_seconds=2.0,
                     columns=["node_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
                 ).rows
-                row_by_node = Dict(Int(r["node_id"]) => r for r in rows)
+                row_by_node = Dict(Int(r.node_id) => r for r in rows)
 
-                @test isapprox(Float64(row_by_node[1]["Ri_PAR_0_q"]), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ri_NIR_0_q"]), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ra_PAR_0_q"]), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1]["Ra_NIR_0_q"]), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[2]["Ri_PAR_0_q"]), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ri_NIR_0_q"]), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ra_PAR_0_q"]), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2]["Ra_NIR_0_q"]), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[1].Ri_PAR_0_q), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ri_NIR_0_q), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ra_PAR_0_q), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1].Ra_NIR_0_q), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[2].Ri_PAR_0_q), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ri_NIR_0_q), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ra_PAR_0_q), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2].Ra_NIR_0_q), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
             end
         end
     end

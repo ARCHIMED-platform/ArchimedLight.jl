@@ -129,60 +129,29 @@ const _OUT_OF_SCOPE_COMPONENT_VARIABLES = union(
     _ENERGY_BALANCE_REQUIRED_COMPONENT_VARIABLES,
 )
 
-function _canonical_component_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_COMPONENT_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+function _canonical_order(names::Vector{String}, reference_order::Vector{String})
+    idx = Dict{String,Int}(name => i for (i, name) in enumerate(reference_order))
+    sort(unique(names); by=name -> (get(idx, name, typemax(Int)), name))
 end
 
-function _canonical_scene_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCENE_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+_canonical_component_variable_order(names::Vector{String}) = _canonical_order(names, _COMPONENT_VARIABLE_ORDER)
+_canonical_scene_variable_order(names::Vector{String}) = _canonical_order(names, _SCENE_VARIABLE_ORDER)
+_canonical_sun_position_log_order(names::Vector{String}) = _canonical_order(names, _SUN_POSITION_LOG_ORDER)
+_canonical_scattering_iteration_log_order(names::Vector{String}) = _canonical_order(names, _SCATTERING_ITERATION_LOG_ORDER)
+_canonical_summary_variable_order(names::Vector{String}) = _canonical_order(names, _SUMMARY_VARIABLE_ORDER)
+_canonical_node_links_stats_order(names::Vector{String}) = _canonical_order(names, _NODE_LINKS_STATS_ALLDIRS_ORDER)
+_canonical_node_links_dir_order(names::Vector{String}) = _canonical_order(names, _NODE_LINKS_DIR_ORDER)
+
+function _named_row(value_for_column, columns::AbstractVector{String})
+    pairs = Pair{Symbol,Any}[Symbol(column) => value_for_column(column) for column in columns]
+    return (; pairs...)
 end
 
-function _canonical_sun_position_log_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUN_POSITION_LOG_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_scattering_iteration_log_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SCATTERING_ITERATION_LOG_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_summary_variable_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_SUMMARY_VARIABLE_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_node_links_stats_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_STATS_ALLDIRS_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
-end
-
-function _canonical_node_links_dir_order(names::Vector{String})
-    idx = Dict{String,Int}(n => i for (i, n) in enumerate(_NODE_LINKS_DIR_ORDER))
-    sort(
-        unique(names);
-        by=n -> (get(idx, n, typemax(Int)), n),
-    )
+function _table_row_value(row, column::AbstractString, default="NA")
+    sym = Symbol(column)
+    sym in propertynames(row) || return default
+    value = getproperty(row, sym)
+    return value === missing ? default : value
 end
 
 function _default_light_component_variables(cfg::LightConfig)
@@ -348,7 +317,7 @@ function _write_export_ops_outputs(
             unavailable="NA",
         )
         value_maps = Dict{Symbol,Dict{Int,Any}}(
-            Symbol(var) => Dict{Int,Any}(nid => table.rows[i][var] for (i, nid) in enumerate(meta.node_ids)) for var in vars
+            Symbol(var) => Dict{Int,Any}(nid => _table_row_value(table.rows[i], var, "NA") for (i, nid) in enumerate(meta.node_ids)) for var in vars
         )
 
         scene_copy = deepcopy(scene.mtg)
@@ -752,8 +721,8 @@ end
 """
     component_values_table(scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
-Build a Java-like component values table represented as `(columns, rows)`.
-`rows` is a vector of dictionaries keyed by column name.
+Build a component values table represented as `(columns, rows)`.
+`rows` is a vector of named tuples keyed by column name.
 """
 function component_values_table(
     scene::SceneGeometry,
@@ -777,16 +746,14 @@ function component_values_table(
     object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
-    rows = Vector{Dict{String,Any}}(undef, length(node_ids))
     absorptance_cache = Dict{String,Dict{Int,Float64}}()
     group_type_hints = _group_type_hints(cfg)
     sky_fraction_per_node =
         ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg, area_per_node, node_ids) : nothing
 
-    for (i, nid) in enumerate(node_ids)
-        row = Dict{String,Any}()
-        for var in cols
-            row[var] = _component_variable_value(
+    rows = [
+        _named_row(cols) do var
+            _component_variable_value(
                 scene,
                 step,
                 cfg,
@@ -806,9 +773,8 @@ function component_values_table(
                 unavailable=unavailable,
                 strict=strict,
             )
-        end
-        rows[i] = row
-    end
+        end for nid in node_ids
+    ]
 
     return (columns=cols, rows=rows)
 end
@@ -822,18 +788,25 @@ function _csv_cell_local(v)
     return string(v)
 end
 
-function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::Vector{<:AbstractDict}; append::Bool=false)
+function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows; append::Bool=false)
     mkpath(dirname(path))
-    mode = append && isfile(path) && filesize(path) > 0 ? "a" : "w"
-    open(path, mode) do io
-        if mode == "w"
-            println(io, join(columns, ';'))
+    has_existing_rows = append && isfile(path) && filesize(path) > 0
+    if isempty(rows)
+        if !has_existing_rows
+            open(path, "w") do io
+                println(io, join(columns, ';'))
+            end
         end
-        for row in rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in columns]
-            println(io, join(vals, ';'))
-        end
+        return path
     end
+
+    CSV.write(
+        path,
+        rows;
+        delim=';',
+        append=has_existing_rows,
+        writeheader=!has_existing_rows,
+    )
     return path
 end
 
@@ -994,8 +967,8 @@ end
 """
     scene_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
-Build a Java-like scene values table represented as `(columns, rows)`.
-`rows` is a vector of dictionaries keyed by column name.
+Build a scene values table represented as `(columns, rows)`.
+`rows` is a vector of named tuples keyed by column name.
 """
 function scene_values_table(
     scene::SceneGeometry,
@@ -1011,38 +984,36 @@ function scene_values_table(
     rows_in = meteo_rows === nothing ? fill(nothing, n) : collect(meteo_rows)
     length(rows_in) == n || error("scene_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? scene_variable_names(cfg) : String.(columns)
-    rows = Vector{Dict{String,Any}}(undef, n)
     plot_area = _scene_plot_area(scene, cfg)
-
-    for i in 1:n
-        step = steps[i]
-        row = rows_in[i]
-        step_no = start_step_number + i - 1
-        dt = _step_duration_output_local(row, nothing)
-        out = Dict{String,Any}()
-        for var in cols
-            out[var] = _scene_variable_value(
-                scene,
-                step,
-                cfg,
-                var,
-                step_no,
-                row,
-                plot_area,
-                dt;
-                unavailable=unavailable,
-                strict=strict,
-            )
-        end
-        rows[i] = out
-    end
+    rows = [
+        let
+            step = steps[i]
+            row = rows_in[i]
+            step_no = start_step_number + i - 1
+            dt = _step_duration_output_local(row, nothing)
+            _named_row(cols) do var
+                _scene_variable_value(
+                    scene,
+                    step,
+                    cfg,
+                    var,
+                    step_no,
+                    row,
+                    plot_area,
+                    dt;
+                    unavailable=unavailable,
+                    strict=strict,
+                )
+            end
+        end for i in 1:n
+    ]
     return (columns=cols, rows=rows)
 end
 
 """
     write_scene_values_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA", strict=false)
 
-Write Java-like `scene_values.csv` output for one or many simulation steps.
+Write `scene_values.csv` output for one or many simulation steps.
 """
 function write_scene_values_csv(
     path::AbstractString,
@@ -1065,21 +1036,13 @@ function write_scene_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, unavailable)) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
     sun_position_log_table(steps, meteo_rows; start_step_number=0, columns=nothing)
 
-Build a Java-like `log-sun-position.csv` table represented as `(columns, rows)`.
+Build a `log-sun-position.csv` table represented as `(columns, rows)`.
 Angles are in radians, matching Java logs.
 """
 function sun_position_log_table(
@@ -1091,38 +1054,37 @@ function sun_position_log_table(
     rows_in = collect(meteo_rows)
     length(rows_in) == length(steps) || error("sun_position_log_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUN_POSITION_LOG_ORDER) : _canonical_sun_position_log_order(String.(columns))
-    rows = Vector{Dict{String,Any}}(undef, length(steps))
-    for i in eachindex(steps)
-        vals = _sun_position_log_values(rows_in[i], steps[i].sky)
-        row = Dict{String,Any}()
-        for c in cols
-            if c == "stepNumber"
-                row[c] = start_step_number + i - 1
-            elseif c == "stepStart"
-                row[c] = vals.stepStart
-            elseif c == "stepEnd"
-                row[c] = vals.stepEnd
-            elseif c == "azimuthHalf"
-                row[c] = vals.azimuthHalf
-            elseif c == "elevationHalf"
-                row[c] = vals.elevationHalf
-            elseif c == "azimuthWeighted"
-                row[c] = vals.azimuthWeighted
-            elseif c == "elevationWeighted"
-                row[c] = vals.elevationWeighted
-            else
-                row[c] = "NA"
+    rows = [
+        let
+            vals = _sun_position_log_values(rows_in[i], steps[i].sky)
+            _named_row(cols) do c
+                if c == "stepNumber"
+                    start_step_number + i - 1
+                elseif c == "stepStart"
+                    vals.stepStart
+                elseif c == "stepEnd"
+                    vals.stepEnd
+                elseif c == "azimuthHalf"
+                    vals.azimuthHalf
+                elseif c == "elevationHalf"
+                    vals.elevationHalf
+                elseif c == "azimuthWeighted"
+                    vals.azimuthWeighted
+                elseif c == "elevationWeighted"
+                    vals.elevationWeighted
+                else
+                    "NA"
+                end
             end
-        end
-        rows[i] = row
-    end
+        end for i in eachindex(steps)
+    ]
     return (columns=cols, rows=rows)
 end
 
 """
     write_sun_position_log_csv(path, steps, meteo_rows; start_step_number=0, columns=nothing)
 
-Write Java-like `log-sun-position.csv`.
+Write `log-sun-position.csv`.
 """
 function write_sun_position_log_csv(
     path::AbstractString,
@@ -1132,15 +1094,7 @@ function write_sun_position_log_csv(
     columns::Union{Nothing,AbstractVector}=nothing,
 )
     table = sun_position_log_table(steps, meteo_rows; start_step_number=start_step_number, columns=columns)
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 function _scattering_iteration_history_one_band(
@@ -1190,7 +1144,7 @@ end
 """
     scattering_iteration_log_table(scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
 
-Build a Java-like `log-iteration-scat-<band>.csv` table represented as `(columns, rows)`.
+Build a `log-iteration-scat-<band>.csv` table represented as `(columns, rows)`.
 """
 function scattering_iteration_log_table(
     scene::SceneGeometry,
@@ -1225,28 +1179,26 @@ function scattering_iteration_log_table(
             (object_id, source_topology_id, nid)
         end,
     )
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for (it, vals) in enumerate(per_iter)
         iter_idx = it - 1
         for nid in node_ids
-            row = Dict{String,Any}()
             object_id, source_topology_id = key_by_node[nid]
-            for c in cols
+            push!(rows, _named_row(cols) do c
                 if c == "step"
-                    row[c] = step_number
+                    step_number
                 elseif c == "plantid"
-                    row[c] = object_id
+                    object_id
                 elseif c == "nodeid"
-                    row[c] = source_topology_id
+                    source_topology_id
                 elseif c == "iter"
-                    row[c] = iter_idx
+                    iter_idx
                 elseif c == "scat"
-                    row[c] = get(vals, nid, 0.0) * w_to_mj
+                    get(vals, nid, 0.0) * w_to_mj
                 else
-                    row[c] = "NA"
+                    "NA"
                 end
-            end
-            push!(rows, row)
+            end)
         end
     end
     return (columns=cols, rows=rows)
@@ -1255,7 +1207,7 @@ end
 """
     write_scattering_iteration_log_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, band="PAR", mode=:raycast, backend=nothing, columns=nothing)
 
-Write Java-like `log-iteration-scat-<band>.csv`.
+Write `log-iteration-scat-<band>.csv`.
 """
 function write_scattering_iteration_log_csv(
     path::AbstractString,
@@ -1280,21 +1232,13 @@ function write_scattering_iteration_log_csv(
         backend=backend,
         columns=columns,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, "NA")) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
     node_links_stats_alldirs_table(scene, turtle, cfg; columns=nothing)
 
-Build Java-like `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
+Build a `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
 """
 function node_links_stats_alldirs_table(
     scene::SceneGeometry,
@@ -1326,23 +1270,21 @@ function node_links_stats_alldirs_table(
     end
 
     node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(object_id_per_node, nid, -1), get(source_topology_id_per_node, nid, nid), nid))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for nid in node_ids
-        row = Dict{String,Any}()
-        for c in cols
+        push!(rows, _named_row(cols) do c
             if c == "plantid"
-                row[c] = get(object_id_per_node, nid, -1)
+                get(object_id_per_node, nid, -1)
             elseif c == "nodeid"
-                row[c] = get(source_topology_id_per_node, nid, nid)
+                get(source_topology_id_per_node, nid, nid)
             elseif c == "links"
-                row[c] = length(get(neighbours_by_node, nid, Set{Int}()))
+                length(get(neighbours_by_node, nid, Set{Int}()))
             elseif c == "hits"
-                row[c] = get(hits_by_node, nid, 0)
+                get(hits_by_node, nid, 0)
             else
-                row[c] = "NA"
+                "NA"
             end
-        end
-        push!(rows, row)
+        end)
     end
     return (columns=cols, rows=rows)
 end
@@ -1350,7 +1292,7 @@ end
 """
     write_node_links_stats_alldirs_csv(path, scene, turtle, cfg; columns=nothing)
 
-Write Java-like `log-nodelinks-stats-alldirs.csv`.
+Write `log-nodelinks-stats-alldirs.csv`.
 """
 function write_node_links_stats_alldirs_csv(
     path::AbstractString,
@@ -1366,7 +1308,7 @@ end
 """
     node_links_dir_table(scene, turtle, cfg; direction_index=0, columns=nothing)
 
-Build Java-like `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
+Build a `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
 """
 function node_links_dir_table(
     scene::SceneGeometry,
@@ -1403,27 +1345,25 @@ function node_links_dir_table(
         get(object_id_per_node, k[2], -1),
         get(source_topology_id_per_node, k[2], k[2]),
     ))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     for (n1, n2) in keys_sorted
-        row = Dict{String,Any}()
-        for c in cols
+        push!(rows, _named_row(cols) do c
             if c == "dir"
-                row[c] = direction_index
+                direction_index
             elseif c == "plantid1"
-                row[c] = get(object_id_per_node, n1, -1)
+                get(object_id_per_node, n1, -1)
             elseif c == "id1"
-                row[c] = get(source_topology_id_per_node, n1, n1)
+                get(source_topology_id_per_node, n1, n1)
             elseif c == "plantid2"
-                row[c] = get(object_id_per_node, n2, -1)
+                get(object_id_per_node, n2, -1)
             elseif c == "id2"
-                row[c] = get(source_topology_id_per_node, n2, n2)
+                get(source_topology_id_per_node, n2, n2)
             elseif c == "n"
-                row[c] = get(counts, (n1, n2), 0)
+                get(counts, (n1, n2), 0)
             else
-                row[c] = "NA"
+                "NA"
             end
-        end
-        push!(rows, row)
+        end)
     end
     return (columns=cols, rows=rows)
 end
@@ -1431,7 +1371,7 @@ end
 """
     write_node_links_dir_csv(path, scene, turtle, cfg; direction_index=0, columns=nothing)
 
-Write Java-like `log-nodelinks-dirXX.csv` for one direction.
+Write `log-nodelinks-dirXX.csv` for one direction.
 """
 function write_node_links_dir_csv(
     path::AbstractString,
@@ -1463,7 +1403,7 @@ function summary_values_table(
     rows_in = meteo_rows === nothing ? fill(nothing, length(steps)) : collect(meteo_rows)
     length(rows_in) == length(steps) || error("summary_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUMMARY_VARIABLE_ORDER) : _canonical_summary_variable_order(String.(columns))
-    rows = Dict{String,Any}[]
+    rows = NamedTuple[]
     meta = _output_node_metadata(scene, cfg)
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
@@ -1490,27 +1430,25 @@ function summary_values_table(
         keys_sorted = sort(collect(keys(acc)); by=k -> (k[1], k[2], k[3]))
         for k in keys_sorted
             area, ri_q = acc[k]
-            row = Dict{String,Any}()
-            for c in cols
+            push!(rows, _named_row(cols) do c
                 if c == "step_number"
-                    row[c] = step_no
+                    step_no
                 elseif c == "step_duration"
-                    row[c] = dt
+                    dt
                 elseif c == "group"
-                    row[c] = k[2]
+                    k[2]
                 elseif c == "type"
-                    row[c] = k[3]
+                    k[3]
                 elseif c == "object_id"
-                    row[c] = k[1]
+                    k[1]
                 elseif c == "area"
-                    row[c] = area
+                    area
                 elseif c == "Ri_q"
-                    row[c] = ri_q
+                    ri_q
                 else
-                    row[c] = unavailable
+                    unavailable
                 end
-            end
-            push!(rows, row)
+            end)
         end
     end
     return (columns=cols, rows=rows)
@@ -1519,7 +1457,7 @@ end
 """
     write_summary_csv(path, scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
 
-Write Java-like `summary.csv`.
+Write `summary.csv`.
 """
 function write_summary_csv(
     path::AbstractString,
@@ -1546,7 +1484,7 @@ end
 """
     write_light_outputs(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, outdir=nothing, write_component=nothing, write_scene=nothing, write_summary=nothing, write_sun_position_log=nothing, write_scattering_log=nothing, scattering_log_bands=["PAR"])
 
-High-level Java-style output writer driven by config defaults and optional debug-log toggles.
+High-level output writer driven by config defaults and optional debug-log toggles.
 Returns a dictionary mapping output kind to written path.
 """
 function write_light_outputs(
@@ -1683,7 +1621,7 @@ end
 """
     write_component_values_csv(path, scene, step, cfg; meteo_row=nothing, step_number=0, step_duration_seconds=nothing, columns=nothing, unavailable="NA", strict=false)
 
-Write Java-like `component_values.csv` output for one simulation step.
+Write `component_values.csv` output for one simulation step.
 """
 function write_component_values_csv(
     path::AbstractString,
@@ -1708,13 +1646,5 @@ function write_component_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    mkpath(dirname(path))
-    open(path, "w") do io
-        println(io, join(table.columns, ';'))
-        for row in table.rows
-            vals = [_csv_cell_local(get(row, c, unavailable)) for c in table.columns]
-            println(io, join(vals, ';'))
-        end
-    end
-    return path
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
