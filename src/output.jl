@@ -57,7 +57,8 @@ const _SUN_POSITION_LOG_ORDER = [
 
 const _SCATTERING_ITERATION_LOG_ORDER = [
     "step",
-    "node_id",
+    "plantid",
+    "nodeid",
     "iter",
     "scat",
 ]
@@ -65,23 +66,26 @@ const _SCATTERING_ITERATION_LOG_ORDER = [
 const _SUMMARY_VARIABLE_ORDER = [
     "step_number",
     "step_duration",
-    "object_id",
     "group",
     "type",
+    "object_id",
     "area",
     "Ri_q",
 ]
 
 const _NODE_LINKS_STATS_ALLDIRS_ORDER = [
-    "node_id",
+    "plantid",
+    "nodeid",
     "links",
     "hits",
 ]
 
 const _NODE_LINKS_DIR_ORDER = [
     "dir",
-    "node_id1",
-    "node_id2",
+    "plantid1",
+    "id1",
+    "plantid2",
+    "id2",
     "n",
 ]
 
@@ -125,41 +129,34 @@ const _OUT_OF_SCOPE_COMPONENT_VARIABLES = union(
     _ENERGY_BALANCE_REQUIRED_COMPONENT_VARIABLES,
 )
 
-function _canonical_order(names::AbstractVector{String}, reference_order::AbstractVector{String})
-    order_index = Dict(name => index for (index, name) in enumerate(reference_order))
-    sort(unique(names); by=name -> (get(order_index, name, typemax(Int)), name))
+function _canonical_order(names::Vector{String}, reference_order::Vector{String})
+    idx = Dict{String,Int}(name => i for (i, name) in enumerate(reference_order))
+    sort(unique(names); by=name -> (get(idx, name, typemax(Int)), name))
 end
 
-_canonical_component_variable_order(names::AbstractVector{String}) = _canonical_order(names, _COMPONENT_VARIABLE_ORDER)
-_canonical_scene_variable_order(names::AbstractVector{String}) = _canonical_order(names, _SCENE_VARIABLE_ORDER)
-_canonical_sun_position_log_order(names::AbstractVector{String}) = _canonical_order(names, _SUN_POSITION_LOG_ORDER)
-_canonical_scattering_iteration_log_order(names::AbstractVector{String}) = _canonical_order(names, _SCATTERING_ITERATION_LOG_ORDER)
-_canonical_summary_variable_order(names::AbstractVector{String}) = _canonical_order(names, _SUMMARY_VARIABLE_ORDER)
-_canonical_node_links_stats_order(names::AbstractVector{String}) = _canonical_order(names, _NODE_LINKS_STATS_ALLDIRS_ORDER)
-_canonical_node_links_dir_order(names::AbstractVector{String}) = _canonical_order(names, _NODE_LINKS_DIR_ORDER)
+_canonical_component_variable_order(names::Vector{String}) = _canonical_order(names, _COMPONENT_VARIABLE_ORDER)
+_canonical_scene_variable_order(names::Vector{String}) = _canonical_order(names, _SCENE_VARIABLE_ORDER)
+_canonical_sun_position_log_order(names::Vector{String}) = _canonical_order(names, _SUN_POSITION_LOG_ORDER)
+_canonical_scattering_iteration_log_order(names::Vector{String}) = _canonical_order(names, _SCATTERING_ITERATION_LOG_ORDER)
+_canonical_summary_variable_order(names::Vector{String}) = _canonical_order(names, _SUMMARY_VARIABLE_ORDER)
+_canonical_node_links_stats_order(names::Vector{String}) = _canonical_order(names, _NODE_LINKS_STATS_ALLDIRS_ORDER)
+_canonical_node_links_dir_order(names::Vector{String}) = _canonical_order(names, _NODE_LINKS_DIR_ORDER)
 
-_selected_flag_names(flags) = [string(name) for (name, enabled) in flags if _as_bool(enabled, false)]
-
-function _row_namedtuple(columns, values)
-    names = Tuple(Symbol.(collect(columns)))
-    NamedTuple{names}(Tuple(values))
+function _named_row(value_for_column, columns::AbstractVector{String})
+    pairs = Pair{Symbol,Any}[Symbol(column) => value_for_column(column) for column in columns]
+    return (; pairs...)
 end
 
-_table_row(columns::AbstractVector{String}, value_fn) = _row_namedtuple(columns, (value_fn(column) for column in columns))
-_table_row(value_fn, columns::AbstractVector{String}) = _table_row(columns, value_fn)
-
-function _row_get(row::NamedTuple, column::AbstractString, default="NA")
-    name = Symbol(column)
-    hasproperty(row, name) ? getproperty(row, name) : default
-end
-
-function _row_get(row::AbstractDict, column::AbstractString, default="NA")
-    get(row, column, default)
+function _table_row_value(row, column::AbstractString, default="NA")
+    sym = Symbol(column)
+    sym in propertynames(row) || return default
+    value = getproperty(row, sym)
+    return value === missing ? default : value
 end
 
 function _default_light_component_variables(cfg::LightConfig)
     cols = [c for c in _COMPONENT_VARIABLE_ORDER if !(c in _OUT_OF_SCOPE_COMPONENT_VARIABLES)]
-    if !get(cfg.general, "scattering", true)
+    if !cfg.general.scattering
         cols = [c for c in cols if !(c in _SCATTERING_REQUIRED_COMPONENT_VARIABLES)]
     end
     return cols
@@ -167,8 +164,7 @@ end
 
 function _require_supported_output_configuration(cfg::LightConfig, cols::Vector{String})
     requested = Set(cols)
-    bad_scattering =
-        !get(cfg.general, "scattering", true) ? sort!(collect(intersect(requested, _SCATTERING_REQUIRED_COMPONENT_VARIABLES))) : String[]
+    bad_scattering = !cfg.general.scattering ? sort!(collect(intersect(requested, _SCATTERING_REQUIRED_COMPONENT_VARIABLES))) : String[]
     bad_scope = sort!(collect(intersect(requested, _OUT_OF_SCOPE_COMPONENT_VARIABLES)))
 
     isempty(bad_scattering) && isempty(bad_scope) && return nothing
@@ -187,14 +183,18 @@ end
 """
     component_variable_names(cfg)::Vector{String}
 
-Resolve component output variable names from `cfg.outputs.variables.component` when available.
+Resolve component output variable names from `cfg.outputs.component_variables` when available.
 Only variables with truthy values are kept.
 """
 function component_variable_names(cfg::LightConfig)
-    d = output_variable_flags(cfg, :component)
+    d = cfg.outputs.component_variables
     isempty(d) && return _default_light_component_variables(cfg)
 
-    vars = _selected_flag_names(d)
+    vars = String[]
+    for (k, v) in d
+        _as_bool(v, false) || continue
+        push!(vars, string(k))
+    end
     cols = isempty(vars) ? _default_light_component_variables(cfg) : _canonical_component_variable_order(vars)
     _require_supported_output_configuration(cfg, cols)
     cols
@@ -203,28 +203,31 @@ end
 """
     scene_variable_names(cfg)::Vector{String}
 
-Resolve scene output variable names from `cfg.outputs.variables.scene` when available.
-Only variables with truthy values are kept. Defaults match the package scene output schema.
+Resolve scene output variable names from `cfg.outputs.scene_variables` when available.
+Only variables with truthy values are kept. Defaults match Java `scene_values.csv`.
 """
 function scene_variable_names(cfg::LightConfig)
-    d = output_variable_flags(cfg, :scene)
+    d = cfg.outputs.scene_variables
     isempty(d) && return copy(_SCENE_VARIABLE_ORDER)
 
-    vars = _selected_flag_names(d)
+    vars = String[]
+    for (k, v) in d
+        _as_bool(v, false) || continue
+        push!(vars, string(k))
+    end
     isempty(vars) ? copy(_SCENE_VARIABLE_ORDER) : _canonical_scene_variable_order(vars)
 end
 
 function _config_wants_component_outputs(cfg::LightConfig)
-    d = output_variable_flags(cfg, :component)
-    any(_as_bool(v, false) for v in values(d))
+    d = cfg.outputs.component_variables
+    for (_, v) in d
+        _as_bool(v, false) && return true
+    end
+    return false
 end
 
 function _config_debug_enabled(cfg::LightConfig)
-    for key in ("log_debug", "debug")
-        haskey(cfg.general, key) || continue
-        _as_bool(cfg.general[key], false) && return true
-    end
-    return false
+    cfg.general.log_debug || cfg.general.debug
 end
 
 function _export_ops_raw_value(cfg::LightConfig)
@@ -262,7 +265,7 @@ function _ops_export_step_numbers(cfg::LightConfig, start_step_number::Int, nste
 end
 
 function _ops_export_variables(cfg::LightConfig)
-    d = output_variable_flags(cfg, :opf)
+    d = cfg.outputs.opf_variables
     isempty(d) && return ["Ri_PAR_0_f", "Ri_NIR_0_f"]
     vars = String[]
     valid = Set(_COMPONENT_VARIABLE_ORDER)
@@ -276,7 +279,7 @@ function _ops_export_variables(cfg::LightConfig)
 end
 
 function _opf_overwrite_variables(cfg::LightConfig)
-    return _as_bool(cfg.outputs.opf_overwrite_variables, true)
+    cfg.outputs.opf_overwrite_variables
 end
 
 function _write_export_ops_outputs(
@@ -314,7 +317,7 @@ function _write_export_ops_outputs(
             unavailable="NA",
         )
         value_maps = Dict{Symbol,Dict{Int,Any}}(
-            Symbol(var) => Dict{Int,Any}(nid => _row_get(table.rows[i], var, "NA") for (i, nid) in enumerate(meta.node_ids)) for var in vars
+            Symbol(var) => Dict{Int,Any}(nid => _table_row_value(table.rows[i], var, "NA") for (i, nid) in enumerate(meta.node_ids)) for var in vars
         )
 
         scene_copy = deepcopy(scene.mtg)
@@ -346,8 +349,8 @@ end
 Resolve absolute output directory from config (`output_directory`, default `"output"`).
 """
 function output_directory(cfg::LightConfig)
-    out_rel = isempty(strip(cfg.outputs.directory)) ? "output" : cfg.outputs.directory
-    base = _config_base_dir(cfg)
+    out_rel = cfg.outputs.output_directory
+    base = cfg.paths.base_dir
     isabspath(out_rel) ? normpath(out_rel) : normpath(joinpath(base, out_rel))
 end
 
@@ -373,12 +376,12 @@ end
 """
     simulation_output_directory(cfg; base_output=nothing, counter_digits=6, create=true, clean_existing=true)::String
 
-Resolve the simulation output directory:
+Resolve Java-style simulation output directory:
 - `<output_directory>/<simulation_directory>` when `simulation_directory` is set in config;
 - otherwise `<output_directory>/<counter>` with zero-padded numeric counter (default 6 digits).
 
 When `create=true`, directories are created. If `simulation_directory` is set and the target exists,
-`clean_existing=true` removes it first.
+`clean_existing=true` removes it first (Java behavior).
 """
 function simulation_output_directory(
     cfg::LightConfig;
@@ -390,13 +393,13 @@ function simulation_output_directory(
     out_base = base_output === nothing ? output_directory(cfg) : normpath(String(base_output))
     create && mkpath(out_base)
 
-    sim_name = strip(cfg.outputs.simulation_directory)
+    sim_name = cfg.outputs.simulation_directory
     if isempty(sim_name)
         sim_name = _next_simulation_counter_dirname(out_base; counter_digits=counter_digits)
     end
 
     out = normpath(joinpath(out_base, sim_name))
-    if create && clean_existing && !isempty(strip(cfg.outputs.simulation_directory)) && isdir(out)
+    if create && clean_existing && !isempty(cfg.outputs.simulation_directory) && isdir(out)
         rm(out; recursive=true, force=true)
     end
     create && mkpath(out)
@@ -411,21 +414,28 @@ function _step_duration_output_local(meteo_row, step_duration_seconds)
     return _step_duration_seconds_local(meteo_row)
 end
 
-function _output_identity_metadata(scene::SceneGeometry, cfg::LightConfig)
-    vertices, faces, face2node, _, _, _ = _scene_geometry_for_interception(scene, cfg)
-    node_ids = sort!(unique(face2node))
-    return (node_ids=node_ids,)
+function _node_ids_for_output(scene::SceneGeometry)
+    ids = collect(keys(scene.nodes))
+    sort!(
+        ids;
+        by=nid -> (
+            _scene_object_id(scene, nid, 0),
+            _scene_source_topology_id(scene, nid, nid),
+            nid,
+        ),
+    )
+    ids
 end
 
 function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
-    vertices, faces, face2node, _, _, node_group_geom = _scene_geometry_for_interception(scene, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
     area_per_node = Dict{Int,Float64}()
     bary_sum_per_node = Dict{Int,NTuple{3,Float64}}()
-    for (i, f) in enumerate(faces)
-        nid = face2node[i]
-        p1 = vertices[f[1]]
-        p2 = vertices[f[2]]
-        p3 = vertices[f[3]]
+    for (i, f) in enumerate(geometry.faces)
+        nid = geometry.face2node[i]
+        p1 = geometry.vertices[f[1]]
+        p2 = geometry.vertices[f[2]]
+        p3 = geometry.vertices[f[3]]
         a = _triangle_area3d(p1, p2, p3)
         area_per_node[nid] = get(area_per_node, nid, 0.0) + a
         cx = (p1[1] + p2[1] + p3[1]) / 3.0
@@ -444,15 +454,28 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         end
     end
 
-    id_meta = _output_identity_metadata(scene, cfg)
-    node_ids = id_meta.node_ids
+    key_by_node = _interception_output_keys(scene, cfg)
+    node_ids = collect(keys(key_by_node))
+    sort!(
+        node_ids;
+        by=nid -> begin
+            object_id, source_topology_id = key_by_node[nid]
+            (object_id, source_topology_id, nid)
+        end,
+    )
+
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
     group_per_node = Dict{Int,String}()
     type_per_node = Dict{Int,String}()
     group_type_hints = _group_type_hints(cfg)
     for nid in node_ids
-        g = haskey(node_group_geom, nid) ? node_group_geom[nid] : get(scene.node_group, nid, "")
+        object_id, source_topology_id = key_by_node[nid]
+        source_topology_id_per_node[nid] = source_topology_id
+        object_id_per_node[nid] = object_id
+        g = haskey(geometry.node_group, nid) ? geometry.node_group[nid] : _scene_group(scene, nid, "")
         group_per_node[nid] = g
-        t = strip(get(scene.node_type, nid, ""))
+        t = strip(_scene_type(scene, nid, ""))
         if isempty(t)
             if g == "pavement"
                 t = "Cobblestone"
@@ -471,24 +494,35 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         node_ids=node_ids,
         area_per_node=area_per_node,
         barycenter_per_node=barycenter_per_node,
-        source_topology_id_per_node=scene.source_topology_id_per_node,
-        object_id_per_node=scene.object_id_per_node,
+        source_topology_id_per_node=source_topology_id_per_node,
+        object_id_per_node=object_id_per_node,
         group_per_node=group_per_node,
         type_per_node=type_per_node,
     )
 end
 
+function _output_identity_maps(scene::SceneGeometry, cfg::LightConfig)
+    keys_by_node = _interception_output_keys(scene, cfg)
+    object_id_per_node = Dict{Int,Int}()
+    source_topology_id_per_node = Dict{Int,Int}()
+    for (nid, key) in keys_by_node
+        object_id_per_node[nid] = key[1]
+        source_topology_id_per_node[nid] = key[2]
+    end
+    return object_id_per_node, source_topology_id_per_node
+end
+
 function _group_type_hints(cfg::LightConfig)
     out = Dict{String,Vector{String}}()
-    for spec in model_type_configs(cfg)
-        group = strip(string(spec.group))
+    for group_model in values(cfg.models)
+        group = strip(group_model.group)
         isempty(group) && continue
-        names = get!(out, group, String[])
-        s = strip(string(spec.type))
-        isempty(s) || push!(names, s)
-    end
-    for (group, names) in out
-        out[group] = sort(unique(names))
+        names = String[]
+        for type_name in keys(group_model.types)
+            s = strip(type_name)
+            isempty(s) || push!(names, s)
+        end
+        isempty(names) || (out[group] = sort(unique(names)))
     end
     out
 end
@@ -500,13 +534,13 @@ function _sky_fraction_per_node(
     area_per_node::Dict{Int,Float64},
     node_ids::Vector{Int},
 )
-    pa_by_sector, _, _, _, _, _ = _build_sector_responses(scene, turtle, cfg)
+    responses = _build_sector_responses(scene, turtle, cfg)
     sky_count = 0
     visible_sum = Dict{Int,Float64}()
     for (i, sector) in enumerate(turtle.sectors)
         sector.source == :sun && continue
         sky_count += 1
-        for (nid, a) in pa_by_sector[i]
+        for (nid, a) in responses.projected_area_per_sector[i]
             visible_sum[nid] = get(visible_sum, nid, 0.0) + a
         end
     end
@@ -533,24 +567,20 @@ function _ri_value(
     step_duration::Float64,
 )
     b = uppercase(band)
-    incident = step.budget.incident
     if b == "PAR"
         if interception_only
-            return quantity ? get(incident.par.initial_energy_per_node, nid, 0.0) : get(incident.par.initial_flux_per_node, nid, 0.0)
+            return quantity ? get(step.budget.incident_energy.initial.par, nid, 0.0) : get(step.budget.incident_flux.initial.par, nid, 0.0)
         end
-        return quantity ? get(incident.par.energy_per_node, nid, 0.0) : get(incident.par.flux_per_node, nid, 0.0)
+        return quantity ? get(step.budget.incident_energy.total.par, nid, 0.0) : get(step.budget.incident_flux.total.par, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(incident.nir.initial_energy_per_node, nid, 0.0) : get(incident.nir.initial_flux_per_node, nid, 0.0)
+            return quantity ? get(step.budget.incident_energy.initial.nir, nid, 0.0) : get(step.budget.incident_flux.initial.nir, nid, 0.0)
         end
-        return quantity ? get(incident.nir.energy_per_node, nid, 0.0) : get(incident.nir.flux_per_node, nid, 0.0)
+        return quantity ? get(step.budget.incident_energy.total.nir, nid, 0.0) : get(step.budget.incident_flux.total.nir, nid, 0.0)
     end
 
-    qdict =
-        interception_only ?
-        get(step.budget.extra_initial_energy_per_band, Symbol(b), nothing) :
-        get(step.budget.extra_energy_per_band, Symbol(b), nothing)
-    q = isnothing(qdict) ? 0.0 : get(qdict, nid, 0.0)
+    qdict = interception_only ? get(step.budget.extra_initial_energy_per_band, b, Dict{Int,Float64}()) : get(step.budget.extra_energy_per_band, b, Dict{Int,Float64}())
+    q = get(qdict, nid, 0.0)
     if quantity
         return q
     end
@@ -570,17 +600,16 @@ function _ra_value(
     absorptance_cache::Dict{String,Dict{Int,Float64}},
 )
     b = uppercase(band)
-    absorbed = step.budget.absorbed
     if b == "PAR"
         if interception_only
-            return quantity ? get(absorbed.par.initial_energy_per_node, nid, 0.0) : get(absorbed.par.initial_flux_per_node, nid, 0.0)
+            return quantity ? get(step.budget.absorbed_energy.initial.par, nid, 0.0) : get(step.budget.absorbed_flux.initial.par, nid, 0.0)
         end
-        return quantity ? get(absorbed.par.energy_per_node, nid, 0.0) : get(absorbed.par.flux_per_node, nid, 0.0)
+        return quantity ? get(step.budget.absorbed_energy.total.par, nid, 0.0) : get(step.budget.absorbed_flux.total.par, nid, 0.0)
     elseif b == "NIR"
         if interception_only
-            return quantity ? get(absorbed.nir.initial_energy_per_node, nid, 0.0) : get(absorbed.nir.initial_flux_per_node, nid, 0.0)
+            return quantity ? get(step.budget.absorbed_energy.initial.nir, nid, 0.0) : get(step.budget.absorbed_flux.initial.nir, nid, 0.0)
         end
-        return quantity ? get(absorbed.nir.energy_per_node, nid, 0.0) : get(absorbed.nir.flux_per_node, nid, 0.0)
+        return quantity ? get(step.budget.absorbed_energy.total.nir, nid, 0.0) : get(step.budget.absorbed_flux.total.nir, nid, 0.0)
     end
 
     abs_band = get!(absorptance_cache, b) do
@@ -622,7 +651,7 @@ function _component_variable_value(
     elseif variable == "source_topology_id"
         return get(source_topology_id_per_node, nid, nid)
     elseif variable == "object_id"
-        return get(object_id_per_node, nid, nid)
+        return get(object_id_per_node, nid, -1)
     elseif variable == "group"
         return get(group_per_node, nid, "")
     elseif variable == "type"
@@ -717,14 +746,13 @@ function component_values_table(
     object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
-    rows = Vector{NamedTuple}(undef, length(node_ids))
     absorptance_cache = Dict{String,Dict{Int,Float64}}()
     group_type_hints = _group_type_hints(cfg)
     sky_fraction_per_node =
         ("sky_fraction" in cols) ? _sky_fraction_per_node(scene, step.turtle, cfg, area_per_node, node_ids) : nothing
 
-    for (i, nid) in enumerate(node_ids)
-        rows[i] = _table_row(cols) do var
+    rows = [
+        _named_row(cols) do var
             _component_variable_value(
                 scene,
                 step,
@@ -745,8 +773,8 @@ function component_values_table(
                 unavailable=unavailable,
                 strict=strict,
             )
-        end
-    end
+        end for nid in node_ids
+    ]
 
     return (columns=cols, rows=rows)
 end
@@ -757,28 +785,27 @@ function _csv_cell_local(v)
     elseif v isa AbstractString
         return replace(v, ';' => ",")
     end
-    return v
+    return string(v)
 end
 
-function _csv_row_for_write(row::NamedTuple)
-    _row_namedtuple(String.(keys(row)), (_csv_cell_local(value) for value in values(row)))
-end
-
-function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows::AbstractVector; append::Bool=false)
+function _write_csv_rows(path::AbstractString, columns::Vector{String}, rows; append::Bool=false)
     mkpath(dirname(path))
-    write_header = !(append && isfile(path) && filesize(path) > 0)
+    has_existing_rows = append && isfile(path) && filesize(path) > 0
     if isempty(rows)
-        open(path, write_header ? "w" : "a") do io
-            write_header && println(io, join(columns, ';'))
+        if !has_existing_rows
+            open(path, "w") do io
+                println(io, join(columns, ';'))
+            end
         end
         return path
     end
+
     CSV.write(
         path,
-        _csv_row_for_write.(rows);
+        rows;
         delim=';',
-        append=!write_header,
-        writeheader=write_header,
+        append=has_existing_rows,
+        writeheader=!has_existing_rows,
     )
     return path
 end
@@ -851,7 +878,7 @@ end
 
 function _row_field_string_local(row, sym::Symbol, default::String="NA")
     row === nothing && return default
-    hasproperty(row, sym) || return default
+    sym in propertynames(row) || return default
     v = getproperty(row, sym)
     v === missing && return default
     s = strip(string(v))
@@ -859,8 +886,8 @@ function _row_field_string_local(row, sym::Symbol, default::String="NA")
 end
 
 function _scene_plot_area(scene::SceneGeometry, cfg::LightConfig)
-    _, _, _, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
-    return plotbox.xdim * plotbox.ydim
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    return geometry.plotbox.xdim * geometry.plotbox.ydim
 end
 
 function _scene_variable_value(
@@ -907,7 +934,7 @@ function _decimal_hour_to_hm_local(x::Float64)
     return h, m
 end
 
-function _step_datetime_strings(row)
+function _java_like_step_datetime_strings(row)
     date = _row_date(row)
     start_h, end_h = _row_step_hours(row)
     start_day = floor(Int, start_h / 24.0)
@@ -926,7 +953,7 @@ function _sun_position_log_values(row, sky::SkyState)
     start_h, end_h = _row_step_hours(row)
     lat_deg = _row_value(row, [:latitude, :lat], 0.0)
     az_half_deg, el_half_deg = _midpoint_sun_position_deg(date, start_h, end_h, deg2rad(lat_deg))
-    step_start, step_end = _step_datetime_strings(row)
+    step_start, step_end = _java_like_step_datetime_strings(row)
     return (
         stepStart=step_start,
         stepEnd=step_end,
@@ -957,29 +984,29 @@ function scene_values_table(
     rows_in = meteo_rows === nothing ? fill(nothing, n) : collect(meteo_rows)
     length(rows_in) == n || error("scene_values_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? scene_variable_names(cfg) : String.(columns)
-    rows = Vector{NamedTuple}(undef, n)
     plot_area = _scene_plot_area(scene, cfg)
-
-    for i in 1:n
-        step = steps[i]
-        row = rows_in[i]
-        step_no = start_step_number + i - 1
-        dt = _step_duration_output_local(row, nothing)
-        rows[i] = _table_row(cols) do var
-            _scene_variable_value(
-                scene,
-                step,
-                cfg,
-                var,
-                step_no,
-                row,
-                plot_area,
-                dt;
-                unavailable=unavailable,
-                strict=strict,
-            )
-        end
-    end
+    rows = [
+        let
+            step = steps[i]
+            row = rows_in[i]
+            step_no = start_step_number + i - 1
+            dt = _step_duration_output_local(row, nothing)
+            _named_row(cols) do var
+                _scene_variable_value(
+                    scene,
+                    step,
+                    cfg,
+                    var,
+                    step_no,
+                    row,
+                    plot_area,
+                    dt;
+                    unavailable=unavailable,
+                    strict=strict,
+                )
+            end
+        end for i in 1:n
+    ]
     return (columns=cols, rows=rows)
 end
 
@@ -1009,14 +1036,14 @@ function write_scene_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    _write_csv_rows(path, table.columns, table.rows; append=false)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
     sun_position_log_table(steps, meteo_rows; start_step_number=0, columns=nothing)
 
 Build a `log-sun-position.csv` table represented as `(columns, rows)`.
-Angles are written in radians.
+Angles are in radians, matching Java logs.
 """
 function sun_position_log_table(
     steps::AbstractVector{<:LightStepResult},
@@ -1027,29 +1054,30 @@ function sun_position_log_table(
     rows_in = collect(meteo_rows)
     length(rows_in) == length(steps) || error("sun_position_log_table: `meteo_rows` length must match `steps` length.")
     cols = columns === nothing ? copy(_SUN_POSITION_LOG_ORDER) : _canonical_sun_position_log_order(String.(columns))
-    rows = Vector{NamedTuple}(undef, length(steps))
-    for i in eachindex(steps)
-        vals = _sun_position_log_values(rows_in[i], steps[i].sky)
-        rows[i] = _table_row(cols) do c
-            if c == "stepNumber"
-                start_step_number + i - 1
-            elseif c == "stepStart"
-                vals.stepStart
-            elseif c == "stepEnd"
-                vals.stepEnd
-            elseif c == "azimuthHalf"
-                vals.azimuthHalf
-            elseif c == "elevationHalf"
-                vals.elevationHalf
-            elseif c == "azimuthWeighted"
-                vals.azimuthWeighted
-            elseif c == "elevationWeighted"
-                vals.elevationWeighted
-            else
-                "NA"
+    rows = [
+        let
+            vals = _sun_position_log_values(rows_in[i], steps[i].sky)
+            _named_row(cols) do c
+                if c == "stepNumber"
+                    start_step_number + i - 1
+                elseif c == "stepStart"
+                    vals.stepStart
+                elseif c == "stepEnd"
+                    vals.stepEnd
+                elseif c == "azimuthHalf"
+                    vals.azimuthHalf
+                elseif c == "elevationHalf"
+                    vals.elevationHalf
+                elseif c == "azimuthWeighted"
+                    vals.azimuthWeighted
+                elseif c == "elevationWeighted"
+                    vals.elevationWeighted
+                else
+                    "NA"
+                end
             end
-        end
-    end
+        end for i in eachindex(steps)
+    ]
     return (columns=cols, rows=rows)
 end
 
@@ -1066,28 +1094,28 @@ function write_sun_position_log_csv(
     columns::Union{Nothing,AbstractVector}=nothing,
 )
     table = sun_position_log_table(steps, meteo_rows; start_step_number=start_step_number, columns=columns)
-    _write_csv_rows(path, table.columns, table.rows; append=false)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 function _scattering_iteration_history_one_band(
     graph::ScatteringTransferGraph,
     initial_power_per_node::Dict{Int,Float64},
     cfg::LightConfig,
-    band,
+    band_key::String,
     default_coeff::Float64,
 )
     node_ids = graph.node_ids
     pair_counts = graph.pair_counts
     all_hits = graph.all_hits
-    coeff_by_node = _coeff_by_node(graph, band, default_coeff)
+    coeff_by_node = _coeff_by_node(graph, band_key, default_coeff)
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     ref = _sum_dict_values(current)
-    thr = get(cfg.general, "scattering_stop_ratio", 0.01) * max(ref, eps(Float64))
+    thr = cfg.general.scattering_stop_ratio * max(ref, eps(Float64))
     per_iter = Vector{Dict{Int,Float64}}()
     iterations = 0
     converged = false
 
-    for it in 1:get(cfg.general, "scattering_max_iter", 20)
+    for it in 1:cfg.general.scattering_max_iter
         iterations = it
         hit_energy = _dict_zero(node_ids)
         for nid in node_ids
@@ -1130,29 +1158,39 @@ function scattering_iteration_log_table(
     columns::Union{Nothing,AbstractVector}=nothing,
 )
     cols = columns === nothing ? copy(_SCATTERING_ITERATION_LOG_ORDER) : _canonical_scattering_iteration_log_order(String.(columns))
-    b = _band_symbol(band)
+    b = uppercase(String(band))
     graph = build_scattering_transfer_graph(scene, step.turtle, step.first_order, cfg; mode=mode, backend=backend)
     initial =
-        if b === :NIR
-            Dict{Int,Float64}(nid => get(step.first_order.incident_nir_power_per_node, nid, 0.0) for nid in graph.node_ids)
+        if b == "NIR"
+            Dict{Int,Float64}(nid => get(step.first_order.incident_power.nir, nid, 0.0) for nid in graph.node_ids)
         else
-            Dict{Int,Float64}(nid => get(step.first_order.incident_par_power_per_node, nid, 0.0) for nid in graph.node_ids)
+            Dict{Int,Float64}(nid => get(step.first_order.incident_power.par, nid, 0.0) for nid in graph.node_ids)
         end
     dflt = _default_band_coeff(cfg, b)
     per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
     dt = _step_duration_output_local(meteo_row, nothing)
     w_to_mj = dt / 1e6
-    id_meta = _output_identity_metadata(scene, cfg)
-    node_ids = id_meta.node_ids
+    key_by_node = _interception_output_keys(scene, cfg)
+    node_ids = collect(keys(key_by_node))
+    sort!(
+        node_ids;
+        by=nid -> begin
+            object_id, source_topology_id = key_by_node[nid]
+            (object_id, source_topology_id, nid)
+        end,
+    )
     rows = NamedTuple[]
     for (it, vals) in enumerate(per_iter)
         iter_idx = it - 1
         for nid in node_ids
-            push!(rows, _table_row(cols) do c
+            object_id, source_topology_id = key_by_node[nid]
+            push!(rows, _named_row(cols) do c
                 if c == "step"
                     step_number
-                elseif c == "node_id"
-                    nid
+                elseif c == "plantid"
+                    object_id
+                elseif c == "nodeid"
+                    source_topology_id
                 elseif c == "iter"
                     iter_idx
                 elseif c == "scat"
@@ -1194,13 +1232,13 @@ function write_scattering_iteration_log_csv(
         backend=backend,
         columns=columns,
     )
-    _write_csv_rows(path, table.columns, table.rows; append=false)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end
 
 """
     node_links_stats_alldirs_table(scene, turtle, cfg; columns=nothing)
 
-Build `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
+Build a `log-nodelinks-stats-alldirs.csv` table represented as `(columns, rows)`.
 """
 function node_links_stats_alldirs_table(
     scene::SceneGeometry,
@@ -1210,8 +1248,7 @@ function node_links_stats_alldirs_table(
 )
     cols = columns === nothing ? copy(_NODE_LINKS_STATS_ALLDIRS_ORDER) : _canonical_node_links_stats_order(String.(columns))
     pair_counts, _, _, _ = _pair_counts_for_scattering(scene, turtle, cfg)
-    id_meta = _output_identity_metadata(scene, cfg)
-    node_ids = id_meta.node_ids
+    object_id_per_node, source_topology_id_per_node = _output_identity_maps(scene, cfg)
 
     neighbours_by_node = Dict{Int,Set{Int}}()
     hits_by_node = Dict{Int,Int}()
@@ -1232,12 +1269,14 @@ function node_links_stats_alldirs_table(
         hits_by_node[to] = get(hits_by_node, to, 0) + c
     end
 
-    node_ids = sort(collect(keys(neighbours_by_node)))
+    node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(object_id_per_node, nid, -1), get(source_topology_id_per_node, nid, nid), nid))
     rows = NamedTuple[]
     for nid in node_ids
-        push!(rows, _table_row(cols) do c
-            if c == "node_id"
-                nid
+        push!(rows, _named_row(cols) do c
+            if c == "plantid"
+                get(object_id_per_node, nid, -1)
+            elseif c == "nodeid"
+                get(source_topology_id_per_node, nid, nid)
             elseif c == "links"
                 length(get(neighbours_by_node, nid, Set{Int}()))
             elseif c == "hits"
@@ -1269,7 +1308,7 @@ end
 """
     node_links_dir_table(scene, turtle, cfg; direction_index=0, columns=nothing)
 
-Build `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
+Build a `log-nodelinks-dirXX.csv` table represented as `(columns, rows)` for one direction.
 """
 function node_links_dir_table(
     scene::SceneGeometry,
@@ -1280,33 +1319,45 @@ function node_links_dir_table(
 )
     0 <= direction_index < length(turtle.sectors) || error("direction_index out of bounds")
     cols = columns === nothing ? copy(_NODE_LINKS_DIR_ORDER) : _canonical_node_links_dir_order(String.(columns))
-    vertices, faces, face2node, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    object_id_per_node, source_topology_id_per_node = _output_identity_maps(scene, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
     sector = turtle.sectors[direction_index + 1]
-    pixel_hits, _, _, _ = _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+    projection = _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, cfg, geometry.plotbox, cache_ctx)
 
     counts = Dict{Tuple{Int,Int},Int}()
-    for stack in values(pixel_hits)
+    for stack in values(projection.pixel_hits)
         length(stack) <= 1 && continue
         sort!(stack, by=x -> x[1], rev=true)
         for h in 1:(length(stack) - 1)
             n1 = stack[h][2]
             n2 = stack[h + 1][2]
-            a, b = n1 <= n2 ? (n1, n2) : (n2, n1)
+            k1 = (get(object_id_per_node, n1, -1), get(source_topology_id_per_node, n1, n1))
+            k2 = (get(object_id_per_node, n2, -1), get(source_topology_id_per_node, n2, n2))
+            a, b = k1 <= k2 ? (n1, n2) : (n2, n1)
             counts[(a, b)] = get(counts, (a, b), 0) + 1
         end
     end
 
-    keys_sorted = sort(collect(keys(counts)))
+    keys_sorted = sort(collect(keys(counts)); by=k -> (
+        get(object_id_per_node, k[1], -1),
+        get(source_topology_id_per_node, k[1], k[1]),
+        get(object_id_per_node, k[2], -1),
+        get(source_topology_id_per_node, k[2], k[2]),
+    ))
     rows = NamedTuple[]
     for (n1, n2) in keys_sorted
-        push!(rows, _table_row(cols) do c
+        push!(rows, _named_row(cols) do c
             if c == "dir"
                 direction_index
-            elseif c == "node_id1"
-                n1
-            elseif c == "node_id2"
-                n2
+            elseif c == "plantid1"
+                get(object_id_per_node, n1, -1)
+            elseif c == "id1"
+                get(source_topology_id_per_node, n1, n1)
+            elseif c == "plantid2"
+                get(object_id_per_node, n2, -1)
+            elseif c == "id2"
+                get(source_topology_id_per_node, n2, n2)
             elseif c == "n"
                 get(counts, (n1, n2), 0)
             else
@@ -1366,11 +1417,11 @@ function summary_values_table(
         step_no = start_step_number + i - 1
         acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
         for nid in node_ids
-            object_id = get(object_id_per_node, nid, nid)
+            object_id = get(object_id_per_node, nid, -1)
             group = get(group_per_node, nid, "")
             type = get(type_per_node, nid, unavailable)
             area = get(area_per_node, nid, 0.0)
-            ri_q = get(step.budget.incident.par.energy_per_node, nid, 0.0) + get(step.budget.incident.nir.energy_per_node, nid, 0.0)
+            ri_q = get(step.budget.incident_energy.total.par, nid, 0.0) + get(step.budget.incident_energy.total.nir, nid, 0.0)
             k = (object_id, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))
             acc[k] = (a0 + area, r0 + ri_q)
@@ -1379,17 +1430,17 @@ function summary_values_table(
         keys_sorted = sort(collect(keys(acc)); by=k -> (k[1], k[2], k[3]))
         for k in keys_sorted
             area, ri_q = acc[k]
-            push!(rows, _table_row(cols) do c
+            push!(rows, _named_row(cols) do c
                 if c == "step_number"
                     step_no
                 elseif c == "step_duration"
                     dt
-                elseif c == "object_id"
-                    k[1]
                 elseif c == "group"
                     k[2]
                 elseif c == "type"
                     k[3]
+                elseif c == "object_id"
+                    k[1]
                 elseif c == "area"
                     area
                 elseif c == "Ri_q"
@@ -1461,10 +1512,10 @@ function write_light_outputs(
 
     do_component = isnothing(write_component) ? _config_wants_component_outputs(cfg) : Bool(write_component)
     do_scene = isnothing(write_scene) ? true : Bool(write_scene)
-    do_summary = isnothing(write_summary) ? _as_bool(cfg.outputs.write_summary, false) : Bool(write_summary)
+    do_summary = isnothing(write_summary) ? cfg.outputs.write_summary : Bool(write_summary)
     debug_default = _config_debug_enabled(cfg)
     do_sun_log = isnothing(write_sun_position_log) ? debug_default : Bool(write_sun_position_log)
-    do_scat_log = isnothing(write_scattering_log) ? (debug_default && get(cfg.general, "scattering", true)) : Bool(write_scattering_log)
+    do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.general.scattering) : Bool(write_scattering_log)
     do_export_ops = isnothing(write_export_ops) ? (_export_ops_raw_value(cfg) !== nothing) : Bool(write_export_ops)
     do_inputs = isnothing(write_inputs) ? do_export_ops : Bool(write_inputs)
 
@@ -1505,7 +1556,7 @@ function write_light_outputs(
         out["log_sun_position"] = path
     end
 
-    if do_scat_log && get(cfg.general, "scattering", true)
+    if do_scat_log && cfg.general.scattering
         for b in scattering_log_bands
             band = uppercase(String(b))
             path = joinpath(outroot, "log-iteration-scat-$(lowercase(band)).csv")
@@ -1595,5 +1646,5 @@ function write_component_values_csv(
         unavailable=unavailable,
         strict=strict,
     )
-    _write_csv_rows(path, table.columns, table.rows; append=false)
+    return _write_csv_rows(path, table.columns, table.rows; append=false)
 end

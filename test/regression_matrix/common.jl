@@ -90,11 +90,15 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "node_id"]]
+            [
+                ["step_number", "source_topology_id"],
+                ["step_number", "object_id", "source_topology_id"],
+                ["step_number", "node_id"],
+            ]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"
-            [["step_number", "object_id", "group", "type"], ["step_number", "group", "type"], ["step_number", "group"]]
+            [["step_number", "group", "type", "object_id"], ["step_number", "object_id"], ["step_number", "group", "type"]]
         elseif name == "meteo.csv"
             [["step_number"], ["stepNumber"], ["date", "hour_start", "hour_end"]]
         elseif name == "log-sun-position.csv"
@@ -103,7 +107,7 @@ function _key_columns_for_file(name::String, cols::Vector{String})
             [
                 ["step_number", "iteration"],
                 ["stepNumber", "iteration"],
-                ["step", "iter", "node_id"],
+                ["step", "iter", "plantid", "nodeid"],
                 ["step", "iter"],
             ]
         elseif name == "sky_summary.csv"
@@ -123,7 +127,6 @@ function _stable_value_columns(name::String, cols::Vector{String})
     wanted =
         if name == "component_values.csv"
             [
-                "node_id",
                 "area",
                 "barycentre_z",
                 "sky_fraction",
@@ -298,7 +301,7 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
         "Ra_PAR_0_q",
         "Ra_NIR_0_q",
     ]
-    if get(cfg.general, "scattering", true)
+    if cfg.general.scattering
         append!(cols, ["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"])
     end
     for i in eachindex(series)
@@ -321,8 +324,8 @@ function _write_sky_summary_csv(path::AbstractString, sky, turtle, fluxes, cfg; 
     row = OrderedDict{String,Any}(
         "step_number" => step_number,
         "sky_mode" => String(sky_mode),
-        "turtle_sectors" => get(cfg.general, "sky_sectors", 46),
-        "all_in_turtle" => get(cfg.general, "all_in_turtle", false),
+        "turtle_sectors" => cfg.general.turtle_sectors,
+        "all_in_turtle" => cfg.general.all_in_turtle,
         "sun_sector_count" => count(s -> s.source == :sun, turtle.sectors),
         "ri_par_f" => sky.ri_par_f,
         "ri_nir_f" => sky.ri_nir_f,
@@ -355,21 +358,21 @@ function _write_sector_flux_csv(path::AbstractString, turtle, fluxes; step_numbe
 end
 
 function _render_ri_par_f_figure(scene, step, cfg; title::String)
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
-    metric = step.budget.incident.par.flux_per_node
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+    metric = step.budget.incident_flux.total.par
 
-    v_sum = zeros(Float64, length(vertices))
-    v_count = zeros(Int, length(vertices))
-    for i in eachindex(faces)
-        f = faces[i]
-        v = get(metric, face2node[i], NaN)
+    v_sum = zeros(Float64, length(geometry.vertices))
+    v_count = zeros(Int, length(geometry.vertices))
+    for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        v = get(metric, geometry.face2node[i], NaN)
         isfinite(v) || continue
         for vid in (Int(f[1]), Int(f[2]), Int(f[3]))
             v_sum[vid] += v
             v_count[vid] += 1
         end
     end
-    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(vertices)]
+    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(geometry.vertices)]
 
     colorrange = (0.0, max(step.sky.ri_par_f, eps(Float64)))
     fig = Figure(size=(960, 720))
@@ -383,8 +386,8 @@ function _render_ri_par_f_figure(scene, step, cfg; title::String)
     )
     p = mesh!(
         ax,
-        vertices,
-        faces;
+        geometry.vertices,
+        geometry.faces;
         color=vertex_values,
         colormap=:viridis,
         colorrange=colorrange,

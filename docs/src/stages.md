@@ -7,8 +7,8 @@
 using ArchimedLight
 
 cfg = read_light_config("config.yml")
-scene = read_scene(cfg.source_files.scene)
-meteo = read_meteo(cfg.source_files.meteo)
+scene = read_scene(cfg.paths.scene)
+meteo = read_meteo(cfg.paths.meteo)
 row = first(meteo.rows)
 ```
 
@@ -22,7 +22,13 @@ graph = build_scattering_transfer_graph(scene, turtle, first, cfg)
 scat = compute_scattering(graph, first, cfg)
 step_seconds = 1800.0 # use your meteo timestep duration in seconds
 budget = integrate_light(first, scat, cfg; step_duration_seconds=step_seconds, component_area_per_node=scene.total_area_per_node)
+
+budget.incident_flux.total.par
+budget.incident_energy.total.par
+budget.absorbed_flux.total.par
 ```
+
+In Julia code, light results are accessed through these grouped `LightBudget` fields. CSV exports and visualization attributes keep the ARCHIMED names such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.
 
 ## Single-Call Pipeline
 ```julia
@@ -31,10 +37,10 @@ series = run_light_series(scene, meteo, cfg)
 # Optional backend kwargs:
 step = run_light_step(scene, row, cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
 
-# Optional component output export:
+# Optional component export with ARCHIMED column names:
 write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=row, step_number=0)
 
-# Optional scene output export (for a series):
+# Optional scene export with ARCHIMED column names:
 write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
 
 # Optional logs:
@@ -52,8 +58,7 @@ sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
 
 ## Caching Options
 - `cache_radiation: true` in config reuses directional responses across meteo rows in `run_light_series`.
-- `cache_pixel_table: true` stores per-direction projection tables under
-  `<output_directory>/pixel_tables_cache`.
+- `cache_pixel_table: true` stores per-direction projection tables under `<output_directory>/pixel_tables_cache`.
 
 ## Backends and Modes
 - `compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).

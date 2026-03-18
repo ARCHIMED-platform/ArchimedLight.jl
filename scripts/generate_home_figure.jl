@@ -17,23 +17,25 @@ const HOME_FIGURE_GROUND_SPAN = 45.0
 
 sim_dir = joinpath(REPO_ROOT, "example_2", "config.yml")
 cfg = read_light_config(sim_dir)
-cfg.models["pavement"]["Cobblestone"]["plot_paving"] = HOME_FIGURE_PLOT_PAVING
-scene = read_scene(cfg.source_files.scene)
-meteo = read_meteo(cfg.source_files.meteo)
+cfg.models["pavement"].types["Cobblestone"].plot_paving = HOME_FIGURE_PLOT_PAVING
+scene = read_scene(cfg.paths.scene)
+meteo = read_meteo(cfg.paths.meteo)
 step = run_light_step(scene, first(meteo.rows), cfg)
 
 viz_mtg = visual_scene_mtg(
     scene,
     cfg,
     step;
-    fields=[:incident_par_flux]
+    fields=[:incident_par_flux],
+    xy_bounds=scene.scene_xy_bounds,
 )
 
 CairoMakie.activate!()
 fig, ax, p = plantviz(
     viz_mtg;
     color=:Ri_PAR_f,
-    colormap=:thermal,
+    colormap=:thermal,#, :batlow, :thermal, :cividis
+    # colorrange=colorrange,
     colorrange=(0.0, 450.0),
     figure=(size=(980, 700), backgroundcolor=BG),
 )

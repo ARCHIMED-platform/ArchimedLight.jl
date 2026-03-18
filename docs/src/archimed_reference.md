@@ -88,7 +88,7 @@ That ratio is then used as a correction factor when visible projected area is ac
 
 when at least one projected pixel exists. During the visibility pass, intercepted visible area expressed in pixel units is multiplied by this ratio before being stored as the component's visible area for the direction. This is one of the characteristic features of the original algorithm. It is also one of the reasons why a component's visible area can exceed the naive count of top-hit pixels times pixel area.
 
-The Julia port implements the same correction when `cfg.general["area_ratio"]` is enabled. This is not a cosmetic option. It has a strong effect on quantitative parity, especially when projected triangles are small or oblique relative to the pixel grid. During recent debugging, one of the clear parity clues was that a Julia area-ratio result was almost exactly half of Java's value for a fixture, which strongly suggested a border or projection-counting discrepancy rather than a completely wrong physical model.
+The Julia port implements the same correction when `cfg.general.area_ratio` is enabled. This is not a cosmetic option. It has a strong effect on quantitative parity, especially when projected triangles are small or oblique relative to the pixel grid. During recent debugging, one of the clear parity clues was that a Julia area-ratio result was almost exactly half of Java's value for a fixture, which strongly suggested a border or projection-counting discrepancy rather than a completely wrong physical model.
 
 ![Projection and area-ratio correction](assets/archimed_projection_area_ratio.svg)
 

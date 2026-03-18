@@ -100,18 +100,18 @@ function fixture_runtime_data(fx::JuliaFixture)
     cfg = deepcopy(cfg0)
     if fx.scene_override !== nothing
         scene_path = normpath(joinpath(dirname(fx.config_path), fx.scene_override))
-        cfg.source_files.scene = scene_path
+        cfg.paths.scene = scene_path
     end
     if fx.meteo_override !== nothing
         meteo_path = normpath(joinpath(dirname(fx.config_path), fx.meteo_override))
-        cfg.source_files.meteo = meteo_path
+        cfg.paths.meteo = meteo_path
     end
-    scattering = fx.force_scattering === nothing ? get(cfg.general, "scattering", true) : Bool(fx.force_scattering)
-    cfg.general["scattering"] = scattering
+    scattering = fx.force_scattering === nothing ? cfg.general.scattering : Bool(fx.force_scattering)
+    cfg.general.scattering = scattering
     ArchimedLight.refresh_light_config!(cfg)
 
-    scene = ArchimedLight.read_scene(cfg.source_files.scene)
-    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
+    scene = ArchimedLight.read_scene(cfg.paths.scene)
+    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
     selected = ArchimedLight.prepare_meteo(meteo, cfg)
     series = ArchimedLight.run_light_series(scene, meteo, cfg)
     length(series) == length(selected.rows) || error("fixture $(fx.id): meteo/series length mismatch")
@@ -145,7 +145,7 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
         "Ra_PAR_0_q",
         "Ra_NIR_0_q",
     ]
-    if get(cfg.general, "scattering", true)
+    if cfg.general.scattering
         append!(cols, ["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"])
     end
     for i in eachindex(series)
@@ -223,9 +223,9 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
                 "date",
                 "hour_start",
                 "hour_end",
-                "object_id",
                 "group",
                 "type",
+                "object_id",
                 "area",
                 "Ri_q",
                 "Ra_q",
@@ -240,7 +240,7 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
     ArchimedLight.write_sun_position_log_csv(sun_path, data.series, data.meteo.rows; start_step_number=0)
     files["log-sun-position.csv"] = sun_path
 
-    if get(data.cfg.general, "scattering", true)
+    if data.cfg.general.scattering
         scat_path = joinpath(out_root, "log-iteration-scat-par.csv")
         first_write = true
         for i in eachindex(data.series)
@@ -288,21 +288,21 @@ end
 function _budget_metric_map(step::ArchimedLight.LightStepResult, metric::String)
     b = step.budget
     if metric == "Ri_PAR_f"
-        return b.incident.par.flux_per_node
+        return b.incident_flux.total.par
     elseif metric == "Ri_PAR_0_f"
-        return b.incident.par.initial_flux_per_node
+        return b.incident_flux.initial.par
     elseif metric == "Ri_NIR_f"
-        return b.incident.nir.flux_per_node
+        return b.incident_flux.total.nir
     elseif metric == "Ri_NIR_0_f"
-        return b.incident.nir.initial_flux_per_node
+        return b.incident_flux.initial.nir
     elseif metric == "Ri_PAR_q"
-        return b.incident.par.energy_per_node
+        return b.incident_energy.total.par
     elseif metric == "Ri_PAR_0_q"
-        return b.incident.par.initial_energy_per_node
+        return b.incident_energy.initial.par
     elseif metric == "Ri_NIR_q"
-        return b.incident.nir.energy_per_node
+        return b.incident_energy.total.nir
     elseif metric == "Ri_NIR_0_q"
-        return b.incident.nir.initial_energy_per_node
+        return b.incident_energy.initial.nir
     end
     error("unsupported visual metric $(repr(metric))")
 end
@@ -329,13 +329,13 @@ end
 
 function render_fixture_montage(fx::JuliaFixture; data=nothing)
     data === nothing && (data = fixture_runtime_data(fx))
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(data.scene, data.cfg)
+    geometry = ArchimedLight._scene_geometry_for_interception(data.scene, data.cfg)
 
     step_values = Vector{Vector{Float64}}(undef, length(data.series))
     allvals = Float64[]
     for i in eachindex(data.series)
         metric_map = _budget_metric_map(data.series[i], fx.visual_metric)
-        vals = _vertex_values_for_step(vertices, faces, face2node, metric_map)
+        vals = _vertex_values_for_step(geometry.vertices, geometry.faces, geometry.face2node, metric_map)
         step_values[i] = vals
         for v in vals
             isfinite(v) && push!(allvals, v)
@@ -369,8 +369,8 @@ function render_fixture_montage(fx::JuliaFixture; data=nothing)
         )
         p = mesh!(
             ax,
-            vertices,
-            faces;
+            geometry.vertices,
+            geometry.faces;
             color=step_values[i],
             colormap=:viridis,
             colorrange=colorrange,
@@ -419,11 +419,11 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "node_id"]]
+            [["step_number", "source_topology_id"], ["step_number", "object_id", "source_topology_id"], ["step_number", "node_id"]]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"
-            [["step_number", "object_id", "group", "type"], ["step_number", "group", "type"], ["step_number", "group"]]
+            [["step_number", "group", "type", "object_id"], ["step_number", "object_id"]]
         elseif name == "meteo.csv"
             [["step_number"], ["stepNumber"], ["date", "hour_start", "hour_end"]]
         elseif name == "log-sun-position.csv"
@@ -432,7 +432,7 @@ function _key_columns_for_file(name::String, cols::Vector{String})
             [
                 ["step_number", "iteration"],
                 ["stepNumber", "iteration"],
-                ["step", "iter", "node_id"],
+                ["step", "iter", "plantid", "nodeid"],
                 ["step", "iter"],
             ]
         else

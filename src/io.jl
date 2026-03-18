@@ -11,8 +11,6 @@ import OrderedCollections: OrderedDict
 
 const _NEXT_SCENE_NODE_ID = Ref(1)
 
-_parse_or_default(::Type{T}, x, default) where {T} = something(tryparse(T, strip(string(x))), default)
-
 function _as_bool(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -25,14 +23,14 @@ function _as_int(x, default::Int)
     x === nothing && return default
     x isa Integer && return Int(x)
     x isa Number && return round(Int, x)
-    x isa String && return _parse_or_default(Int, x, default)
+    x isa String && return parse(Int, x)
     return default
 end
 
-function _as_float(x, default::Real)
+function _as_float(x, default::Float64)
     x === nothing && return default
-    x isa Number && return float(x)
-    x isa String && return _parse_or_default(Float64, x, default)
+    x isa Number && return Float64(x)
+    x isa String && return parse(Float64, x)
     return default
 end
 
@@ -44,34 +42,271 @@ function _load_yaml_ordered(path::AbstractString)
     YAML.load_file(path; dicttype=OrderedDict{String,Any})
 end
 
-const _GENERAL_BOOL_KEYS = Set([
+function _model_paths_from_raw(d::AbstractDict{String,Any}, scene::AbstractString)
+    models = get(d, "models", nothing)
+    models isa AbstractVector || return String[]
+    base = get(d, "__base_dir", dirname(scene))
+    [_join_if_relative(base, string(m)) for m in models]
+end
+
+_ordered_dict_copy(v::AbstractDict) = OrderedDict{String,Any}(string(k) => val for (k, val) in v)
+_ordered_dict_copy(::Any) = OrderedDict{String,Any}()
+
+function _ordered_string_dict(v)
+    out = OrderedDict{String,Any}()
+    v isa AbstractDict || return out
+    for (k, val) in v
+        out[string(k)] = val
+    end
+    out
+end
+
+function _parse_optical_properties(raw)
+    raw isa AbstractDict || return nothing
+    values = _ordered_string_dict(raw)
+    par = _as_float(get(values, "PAR", 0.0), 0.0)
+    nir = _as_float(get(values, "NIR", 0.0), 0.0)
+    delete!(values, "PAR")
+    delete!(values, "NIR")
+    OpticalProperties(par, nir, values)
+end
+
+function _serialize_optical_properties(props::OpticalProperties)
+    out = copy(props.extras)
+    out["PAR"] = props.par
+    out["NIR"] = props.nir
+    out
+end
+
+function _selected_interception_block(raw::OrderedDict{String,Any})
+    use_name = get(raw, "use", nothing)
+    if use_name !== nothing
+        key = string(use_name)
+        if haskey(raw, key) && raw[key] isa AbstractDict
+            return key, _ordered_string_dict(raw[key])
+        end
+    end
+    return nothing, raw
+end
+
+function _parse_interception_model(raw)
+    raw isa AbstractDict || return nothing
+    raw_dict = _ordered_string_dict(raw)
+    use_name, selected = _selected_interception_block(raw_dict)
+
+    variants = OrderedDict{String,OrderedDict{String,Any}}()
+    for (k, v) in raw_dict
+        v isa AbstractDict || continue
+        variants[k] = _ordered_string_dict(v)
+    end
+
+    extras = copy(raw_dict)
+    delete!(extras, "use")
+    for key in keys(variants)
+        delete!(extras, key)
+    end
+    delete!(extras, "model")
+    delete!(extras, "transparency")
+    delete!(extras, "optical_properties")
+
+    InterceptionModelConfig(
+        use_name,
+        string(get(selected, "model", "")),
+        _as_float(get(selected, "transparency", 0.0), 0.0),
+        _parse_optical_properties(get(selected, "optical_properties", nothing)),
+        variants,
+        extras,
+    )
+end
+
+function _serialize_interception_model(model::InterceptionModelConfig)
+    out = copy(model.extras)
+    if model.use !== nothing
+        out["use"] = model.use
+    end
+    for (name, variant) in model.variants
+        out[name] = copy(variant)
+    end
+    target =
+        if model.use !== nothing
+            get!(out, model.use) do
+                OrderedDict{String,Any}()
+            end
+        else
+            out
+        end
+    target["model"] = model.model
+    target["transparency"] = model.transparency
+    model.optical_properties === nothing || (target["optical_properties"] = _serialize_optical_properties(model.optical_properties))
+    out
+end
+
+function _parse_light_emitter(raw)
+    raw isa AbstractDict || return nothing
+    values = _ordered_string_dict(raw)
+    extras = copy(values)
+    delete!(extras, "model")
+    delete!(extras, "radiance")
+    delete!(extras, "gamma")
+    gamma = _parse_optical_properties(get(values, "gamma", nothing))
+    gamma === nothing && (gamma = OpticalProperties(0.48, 0.52, OrderedDict{String,Any}()))
+    LightEmitterConfig(
+        string(get(values, "model", "")),
+        _as_float(get(values, "radiance", 0.0), 0.0),
+        gamma,
+        extras,
+    )
+end
+
+function _serialize_light_emitter(model::LightEmitterConfig)
+    out = copy(model.extras)
+    out["model"] = model.model
+    out["radiance"] = model.radiance
+    out["gamma"] = _serialize_optical_properties(model.gamma)
+    out
+end
+
+function _parse_type_model(raw)
+    values = _ordered_string_dict(raw)
+    extras = copy(values)
+    interception = _parse_interception_model(get(values, "Interception", nothing))
+    light_emitter = _parse_light_emitter(get(values, "LightEmitter", nothing))
+    plot_paving = _as_int(get(values, "plot_paving", 0), 0)
+    delete!(extras, "Interception")
+    delete!(extras, "LightEmitter")
+    delete!(extras, "plot_paving")
+    TypeModelConfig(interception, light_emitter, plot_paving, extras)
+end
+
+function _serialize_type_model(model::TypeModelConfig)
+    out = copy(model.extras)
+    model.interception === nothing || (out["Interception"] = _serialize_interception_model(model.interception))
+    model.light_emitter === nothing || (out["LightEmitter"] = _serialize_light_emitter(model.light_emitter))
+    model.plot_paving > 0 && (out["plot_paving"] = model.plot_paving)
+    out
+end
+
+function _parse_group_model(path::AbstractString)
+    raw = _load_yaml_ordered(path)
+    group = haskey(raw, "Group") ? strip(string(raw["Group"])) : ""
+    isempty(group) && error("Model file $(path) is missing `Group`.")
+    types_raw = get(raw, "Type", nothing)
+    types_raw isa AbstractDict || error("Model file $(path) is missing `Type` definitions.")
+    types = OrderedDict{String,TypeModelConfig}()
+    for (type_name, spec) in types_raw
+        types[string(type_name)] = _parse_type_model(spec)
+    end
+    extras = copy(raw)
+    delete!(extras, "Group")
+    delete!(extras, "Type")
+    return GroupModelConfig(group, types, extras)
+end
+
+function _serialize_group_model(model::GroupModelConfig)
+    out = copy(model.extras)
+    out["Group"] = model.group
+    types = OrderedDict{String,Any}()
+    for (type_name, spec) in model.types
+        types[type_name] = _serialize_type_model(spec)
+    end
+    out["Type"] = types
+    out
+end
+
+function _model_configs_from_paths(paths::Vector{String})
+    model_paths = OrderedDict{String,String}()
+    models = OrderedDict{String,GroupModelConfig}()
+    for path in paths
+        model = _parse_group_model(path)
+        haskey(models, model.group) && error("Duplicate model group `$(model.group)` in config.")
+        model_paths[model.group] = path
+        models[model.group] = model
+    end
+    return model_paths, models
+end
+
+function _ordered_bool_dict(v)
+    out = OrderedDict{String,Bool}()
+    v isa AbstractDict || return out
+    for (k, enabled) in v
+        out[string(k)] = _as_bool(enabled, false)
+    end
+    out
+end
+
+function _parse_debug_drop_leading_hit(v)
+    v isa AbstractDict || return nothing
+    node_id = _as_int(get(v, "node_id", nothing), 0)
+    x = _as_int(get(v, "x", nothing), -1)
+    y = _as_int(get(v, "y", nothing), -1)
+    node_id > 0 || return nothing
+    x >= 0 || return nothing
+    y >= 0 || return nothing
+    return (node_id=node_id, x=x, y=y)
+end
+
+function _default_general_config()
+    LightGeneralConfig(
+        false,
+        46,
+        0.25 / 100.0,
+        true,
+        true,
+        20,
+        0.01,
+        0.15,
+        0.30,
+        false,
+        false,
+        true,
+        15.0,
+        true,
+        true,
+        false,
+        nothing,
+        false,
+        false,
+        nothing,
+    )
+end
+
+function _default_outputs_config()
+    LightOutputsConfig(
+        "output",
+        "",
+        false,
+        nothing,
+        OrderedDict{String,Bool}(),
+        OrderedDict{String,Bool}(),
+        OrderedDict{String,Bool}(),
+        true,
+    )
+end
+
+const _CONFIG_KNOWN_TOP_LEVEL_KEYS = Set([
+    "scene",
+    "models",
+    "meteo",
     "all_in_turtle",
-    "photosynthesis",
-    "scattering",
-    "cache_pixel_table",
-    "toricity",
-    "cache_radiation",
-    "area_ratio",
-    "nir_interception",
-    "nir_scattering",
-    "log_debug",
-    "debug",
-])
-
-const _GENERAL_INT_KEYS = Set([
     "sky_sectors",
-    "radiation_timestep",
+    "pixel_size",
+    "area_ratio",
+    "scattering",
     "scattering_max_iter",
-])
-
-const _GENERAL_FLOAT_KEYS = Set([
-    "scene_rotation",
     "scattering_stop_ratio",
     "scattering_coeff_par",
     "scattering_coeff_nir",
-])
-
-const _OUTPUT_CONFIG_ORDER = [
+    "cache_radiation",
+    "cache_pixel_table",
+    "toricity",
+    "radiation_timestep",
+    "nir_interception",
+    "nir_scattering",
+    "java_logged_turtle_dirs",
+    "meteo_range",
+    "debug",
+    "log_debug",
+    "debug_drop_leading_hit",
     "output_directory",
     "simulation_directory",
     "write_summary",
@@ -80,194 +315,28 @@ const _OUTPUT_CONFIG_ORDER = [
     "scene_variables",
     "opf_variables",
     "opf_overwrite_variables",
-]
+])
 
-function _normalize_group_name(x)
-    s = strip(string(x))
-    isempty(s) && return s
-    replace(s, r"^#\[[^\]]+\]\s*" => "")
-end
-
-function _normalize_ordered_dict(x)
-    x isa AbstractDict || return OrderedDict{String,Any}()
-    out = OrderedDict{String,Any}()
-    for (k, v) in x
-        key = string(k)
-        out[key] =
-            if v isa AbstractDict
-                _normalize_ordered_dict(v)
-            elseif v isa AbstractVector
-                Any[
-                    item isa AbstractDict ? _normalize_ordered_dict(item) : item for item in v
-                ]
-            else
-                v
-            end
-    end
-    return out
-end
-
-function _normalize_general_value(key::String, value; from_yaml::Bool=false)
-    if key == "pixel_size"
-        v = _as_float(value, 0.25)
-        return from_yaml ? (v / 100.0) : v
-    elseif key in _GENERAL_BOOL_KEYS
-        return _as_bool(value, false)
-    elseif key in _GENERAL_INT_KEYS
-        return _as_int(value, 0)
-    elseif key in _GENERAL_FLOAT_KEYS
-        return _as_float(value, 0.0)
-    elseif key == "meteo_range"
-        value === nothing && return nothing
-        s = strip(string(value))
-        return isempty(s) ? nothing : s
-    end
-    return value isa AbstractDict ? _normalize_ordered_dict(value) : value
-end
-
-function _parse_general_config(raw::AbstractDict{String,Any}; from_yaml::Bool=false)
-    out = OrderedDict{String,Any}()
+function _config_extras(raw::OrderedDict{String,Any})
+    extras = OrderedDict{String,Any}()
     for (k, v) in raw
-        key = string(k)
-        key in ("scene", "models", "meteo") && continue
-        key in _OUTPUT_CONFIG_ORDER && continue
-        out[key] = _normalize_general_value(key, v; from_yaml=from_yaml)
+        k == "__base_dir" && continue
+        k in _CONFIG_KNOWN_TOP_LEVEL_KEYS && continue
+        extras[k] = v
     end
-    return out
-end
-
-function _bool_flags_dict(x)
-    x isa AbstractDict || return OrderedDict{String,Bool}()
-    OrderedDict(string(k) => _as_bool(v, false) for (k, v) in x)
-end
-
-_normalize_model_types(types) = _normalize_ordered_dict(get(types, "Type", OrderedDict{String,Any}()))
-
-function _parse_outputs(raw::AbstractDict{String,Any})
-    vars = LightOutputVariables(
-        _bool_flags_dict(get(raw, "component_variables", OrderedDict{String,Any}())),
-        _bool_flags_dict(get(raw, "scene_variables", OrderedDict{String,Any}())),
-        _bool_flags_dict(get(raw, "opf_variables", OrderedDict{String,Any}())),
-    )
-    return LightOutputsConfig(
-        string(get(raw, "output_directory", "output")),
-        strip(string(get(raw, "simulation_directory", ""))),
-        _as_bool(get(raw, "write_summary", false), false),
-        get(raw, "export_ops", nothing),
-        _as_bool(get(raw, "opf_overwrite_variables", true), true),
-        vars,
-    )
-end
-
-function _normalize_outputs!(cfg::LightConfig)
-    out = cfg.outputs
-    out.directory = string(out.directory)
-    out.simulation_directory = strip(string(out.simulation_directory))
-    out.write_summary = _as_bool(out.write_summary, false)
-    out.opf_overwrite_variables = _as_bool(out.opf_overwrite_variables, true)
-    out.variables.component = _bool_flags_dict(out.variables.component)
-    out.variables.scene = _bool_flags_dict(out.variables.scene)
-    out.variables.opf = _bool_flags_dict(out.variables.opf)
-    return cfg
-end
-
-function _model_group_from_file(path::AbstractString)
-    raw = _load_yaml_ordered(path)
-    group = haskey(raw, "Group") ? _normalize_group_name(raw["Group"]) : ""
-    isempty(group) && error("Model file $(path) is missing a non-empty `Group` entry.")
-    return group
-end
-
-function _source_files_from_yaml(path::AbstractString, raw::AbstractDict{String,Any})
-    base = dirname(path)
-    haskey(raw, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
-    haskey(raw, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
-    scene = _join_if_relative(base, string(raw["scene"]))
-    meteo = _join_if_relative(base, string(raw["meteo"]))
-
-    model_paths = OrderedDict{String,String}()
-    models = get(raw, "models", nothing)
-    if models isa AbstractVector
-        for entry in models
-            abs_path = _join_if_relative(base, string(entry))
-            group = _model_group_from_file(abs_path)
-            haskey(model_paths, group) && error("Duplicate model group $(repr(group)) in config models list.")
-            model_paths[group] = abs_path
-        end
-    end
-
-    const_path = joinpath(base, "const.yml")
-    return LightConfigSourceFiles(
-        String(path),
-        scene,
-        meteo,
-        model_paths,
-        isfile(const_path) ? const_path : nothing,
-        base,
-    )
-end
-
-function _load_models_from_paths(model_paths::OrderedDict{String,String})
-    OrderedDict(group => _normalize_model_types(_load_yaml_ordered(path)) for (group, path) in model_paths)
-end
-
-function _load_constants(const_path::Union{Nothing,String})
-    const_path === nothing && return OrderedDict{String,Any}()
-    isfile(const_path) || return OrderedDict{String,Any}()
-    return _normalize_ordered_dict(_load_yaml_ordered(const_path))
-end
-
-function _config_base_dir(cfg::LightConfig)
-    cfg.source_files.base_dir
-end
-
-function config_value(cfg::LightConfig, key::String, default=nothing)
-    get(cfg.general, key, default)
-end
-
-function output_variable_flags(cfg::LightConfig, kind::Symbol)
-    vars = cfg.outputs.variables
-    if kind === :component
-        return vars.component
-    elseif kind === :scene
-        return vars.scene
-    elseif kind === :opf
-        return vars.opf
-    end
-    error("Unsupported output variable kind: $(kind)")
-end
-
-function model_type_configs(cfg::LightConfig)
-    out = NamedTuple[]
-    for (group, types) in cfg.models
-        for (type_name, params) in types
-            push!(out, (group=group, type=type_name, params=params))
-        end
-    end
-    return out
+    extras
 end
 
 function refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
-    src = cfg.source_files
-    src.base_dir = isempty(src.base_dir) ? dirname(src.config) : src.base_dir
-    src.scene = _join_if_relative(src.base_dir, string(src.scene))
-    src.meteo = _join_if_relative(src.base_dir, string(src.meteo))
-
-    src.models = OrderedDict(string(group) => _join_if_relative(src.base_dir, string(path)) for (group, path) in src.models)
-    cfg.general = OrderedDict(
-        string(k) => _normalize_general_value(string(k), v; from_yaml=false) for (k, v) in cfg.general
-    )
-    _normalize_outputs!(cfg)
-
-    if reload_models
-        cfg.models = _load_models_from_paths(src.models)
-    else
-        cfg.models = OrderedDict(string(group) => _normalize_ordered_dict(types) for (group, types) in cfg.models)
+    base = cfg.paths.base_dir
+    cfg.paths.scene = _join_if_relative(base, cfg.paths.scene)
+    cfg.paths.meteo = _join_if_relative(base, cfg.paths.meteo)
+    for (group, path) in cfg.paths.models
+        cfg.paths.models[group] = _join_if_relative(base, path)
     end
-
-    cfg.constants = _normalize_ordered_dict(cfg.constants)
-    if isempty(cfg.constants)
-        cfg.constants = _load_constants(src.constants)
+    if reload_models
+        paths = [path for path in values(cfg.paths.models)]
+        cfg.paths.models, cfg.models = _model_configs_from_paths(paths)
     end
     return cfg
 end
@@ -288,25 +357,68 @@ end
 
 Read a YAML configuration file and normalize ARCHIMED light options into a `LightConfig`.
 
-`pixel_size` is interpreted in centimeters in config files and converted to meters.
+`pixel_size` is interpreted like Java input files (centimeters) and converted to meters.
 """
 function read_light_config(path::AbstractString)
-    d = _load_yaml_ordered(path)
+    raw = _load_yaml_ordered(path)
+    raw["__base_dir"] = dirname(path)
+
+    haskey(raw, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
+    haskey(raw, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
+
+    base = String(raw["__base_dir"])
+    model_paths, models = _model_configs_from_paths(_model_paths_from_raw(raw, path))
+    paths = LightConfigPaths(String(path), string(raw["scene"]), string(raw["meteo"]), model_paths, base)
+
+    general = _default_general_config()
+    general.all_in_turtle = _as_bool(get(raw, "all_in_turtle", general.all_in_turtle), general.all_in_turtle)
+    general.turtle_sectors = _as_int(get(raw, "sky_sectors", general.turtle_sectors), general.turtle_sectors)
+    general.pixel_size = _as_float(get(raw, "pixel_size", general.pixel_size * 100.0), general.pixel_size * 100.0) / 100.0
+    general.area_ratio = _as_bool(get(raw, "area_ratio", general.area_ratio), general.area_ratio)
+    general.scattering = _as_bool(get(raw, "scattering", general.scattering), general.scattering)
+    general.scattering_max_iter = _as_int(get(raw, "scattering_max_iter", general.scattering_max_iter), general.scattering_max_iter)
+    general.scattering_stop_ratio = _as_float(get(raw, "scattering_stop_ratio", general.scattering_stop_ratio), general.scattering_stop_ratio)
+    general.scattering_coeff_par = _as_float(get(raw, "scattering_coeff_par", general.scattering_coeff_par), general.scattering_coeff_par)
+    general.scattering_coeff_nir = _as_float(get(raw, "scattering_coeff_nir", general.scattering_coeff_nir), general.scattering_coeff_nir)
+    general.cache_radiation = _as_bool(get(raw, "cache_radiation", general.cache_radiation), general.cache_radiation)
+    general.cache_pixel_table = _as_bool(get(raw, "cache_pixel_table", general.cache_pixel_table), general.cache_pixel_table)
+    general.toricity = _as_bool(get(raw, "toricity", general.toricity), general.toricity)
+    general.radiation_timestep_minutes = _as_float(get(raw, "radiation_timestep", general.radiation_timestep_minutes), general.radiation_timestep_minutes)
+    general.nir_interception = _as_bool(get(raw, "nir_interception", general.nir_interception), general.nir_interception)
+    general.nir_scattering = _as_bool(get(raw, "nir_scattering", general.nir_scattering), general.nir_scattering)
+    general.java_logged_turtle_dirs = _as_bool(get(raw, "java_logged_turtle_dirs", general.java_logged_turtle_dirs), general.java_logged_turtle_dirs)
+    meteo_range = get(raw, "meteo_range", nothing)
+    general.meteo_range = meteo_range === nothing ? nothing : strip(string(meteo_range))
+    general.debug = _as_bool(get(raw, "debug", general.debug), general.debug)
+    general.log_debug = _as_bool(get(raw, "log_debug", general.log_debug), general.log_debug)
+    general.debug_drop_leading_hit = _parse_debug_drop_leading_hit(get(raw, "debug_drop_leading_hit", nothing))
+
+    outputs = _default_outputs_config()
+    outputs.output_directory = string(get(raw, "output_directory", outputs.output_directory))
+    simdir = get(raw, "simulation_directory", outputs.simulation_directory)
+    outputs.simulation_directory = simdir === nothing ? "" : strip(string(simdir))
+    outputs.write_summary = _as_bool(get(raw, "write_summary", outputs.write_summary), outputs.write_summary)
+    outputs.export_ops = get(raw, "export_ops", outputs.export_ops)
+    outputs.component_variables = _ordered_bool_dict(get(raw, "component_variables", nothing))
+    outputs.scene_variables = _ordered_bool_dict(get(raw, "scene_variables", nothing))
+    outputs.opf_variables = _ordered_bool_dict(get(raw, "opf_variables", nothing))
+    outputs.opf_overwrite_variables = _as_bool(get(raw, "opf_overwrite_variables", outputs.opf_overwrite_variables), outputs.opf_overwrite_variables)
+
     cfg = LightConfig(
         String(path),
-        _source_files_from_yaml(path, d),
-        _parse_general_config(d; from_yaml=true),
-        OrderedDict{String,OrderedDict{String,Any}}(),
-        _parse_outputs(d),
-        OrderedDict{String,Any}(),
+        paths,
+        general,
+        outputs,
+        models,
+        _config_extras(raw),
     )
-    return refresh_light_config!(cfg; reload_models=true)
+    refresh_light_config!(cfg)
 end
 
 """
     write_light_inputs(outdir, cfg; scene_rel, config_name="config.yml")::String
 
-Write the ordered YAML inputs back to disk, preserving parameter order from import.
+Write the parsed light inputs back to disk.
 `scene_rel` should point to the scene file to reference from the written config.
 """
 function write_light_inputs(
@@ -321,62 +433,98 @@ function write_light_inputs(
     raw = OrderedDict{String,Any}()
     raw["scene"] = _safe_output_relpath(scene_rel)
 
-    model_rels = String[]
-    for (group, types) in cfg.models
-        src_path = get(cfg.source_files.models, group, joinpath("models", "$(group).yml"))
-        rel0 = if isabspath(src_path)
-            try
-                relpath(src_path, _config_base_dir(cfg))
-            catch
-                basename(src_path)
-            end
-        else
-            src_path
+    if !isempty(cfg.paths.models)
+        model_rels = String[]
+        for (group, model) in cfg.models
+            original = get(cfg.paths.models, group, "$(group).yml")
+            rel = joinpath("models", basename(original))
+            path = joinpath(outroot, rel)
+            mkpath(dirname(path))
+            YAML.write_file(path, _serialize_group_model(model))
+            push!(model_rels, rel)
         end
-        rel = _safe_output_relpath(rel0)
-        path = joinpath(outroot, rel)
-        mkpath(dirname(path))
-        YAML.write_file(path, OrderedDict{String,Any}("Group" => group, "Type" => _normalize_ordered_dict(types)))
-        push!(model_rels, rel)
+        raw["models"] = model_rels
     end
-    !isempty(model_rels) && (raw["models"] = model_rels)
 
-    meteo_rel = basename(cfg.source_files.meteo)
-    if isfile(cfg.source_files.meteo)
-        cp(cfg.source_files.meteo, joinpath(outroot, meteo_rel); force=true)
+    meteo_rel = basename(cfg.paths.meteo)
+    if isfile(cfg.paths.meteo)
+        cp(cfg.paths.meteo, joinpath(outroot, meteo_rel); force=true)
     end
     raw["meteo"] = meteo_rel
 
-    for (k, v) in cfg.general
-        raw[k] = k == "pixel_size" ? (100 * v) : v
+    for (k, v) in cfg.extras
+        raw[k] = v
     end
 
-    raw["output_directory"] = cfg.outputs.directory
-    !isempty(cfg.outputs.simulation_directory) && (raw["simulation_directory"] = cfg.outputs.simulation_directory)
+    raw["sky_sectors"] = cfg.general.turtle_sectors
+    raw["all_in_turtle"] = cfg.general.all_in_turtle
+    raw["radiation_timestep"] = cfg.general.radiation_timestep_minutes
+    raw["scattering"] = cfg.general.scattering
+    raw["pixel_size"] = cfg.general.pixel_size * 100.0
+    raw["cache_pixel_table"] = cfg.general.cache_pixel_table
+    raw["toricity"] = cfg.general.toricity
+    raw["cache_radiation"] = cfg.general.cache_radiation
+    raw["area_ratio"] = cfg.general.area_ratio
+    raw["scattering_max_iter"] = cfg.general.scattering_max_iter
+    raw["scattering_stop_ratio"] = cfg.general.scattering_stop_ratio
+    raw["scattering_coeff_par"] = cfg.general.scattering_coeff_par
+    raw["scattering_coeff_nir"] = cfg.general.scattering_coeff_nir
+    cfg.general.nir_interception && !haskey(cfg.extras, "nir_interception") || (raw["nir_interception"] = cfg.general.nir_interception)
+    cfg.general.nir_scattering && !haskey(cfg.extras, "nir_scattering") || (raw["nir_scattering"] = cfg.general.nir_scattering)
+    cfg.general.java_logged_turtle_dirs && (raw["java_logged_turtle_dirs"] = cfg.general.java_logged_turtle_dirs)
+    cfg.general.meteo_range === nothing || (raw["meteo_range"] = cfg.general.meteo_range)
+    cfg.general.debug && (raw["debug"] = cfg.general.debug)
+    cfg.general.log_debug && (raw["log_debug"] = cfg.general.log_debug)
+    cfg.general.debug_drop_leading_hit === nothing || (raw["debug_drop_leading_hit"] = OrderedDict(
+        "node_id" => cfg.general.debug_drop_leading_hit.node_id,
+        "x" => cfg.general.debug_drop_leading_hit.x,
+        "y" => cfg.general.debug_drop_leading_hit.y,
+    ))
+
+    raw["output_directory"] = cfg.outputs.output_directory
+    isempty(cfg.outputs.simulation_directory) || (raw["simulation_directory"] = cfg.outputs.simulation_directory)
     raw["write_summary"] = cfg.outputs.write_summary
-    cfg.outputs.export_ops !== nothing && (raw["export_ops"] = cfg.outputs.export_ops)
-    !isempty(cfg.outputs.variables.component) && (raw["component_variables"] = cfg.outputs.variables.component)
-    !isempty(cfg.outputs.variables.scene) && (raw["scene_variables"] = cfg.outputs.variables.scene)
-    !isempty(cfg.outputs.variables.opf) && (raw["opf_variables"] = cfg.outputs.variables.opf)
+    cfg.outputs.export_ops === nothing || (raw["export_ops"] = cfg.outputs.export_ops)
+    isempty(cfg.outputs.component_variables) || (raw["component_variables"] = cfg.outputs.component_variables)
+    isempty(cfg.outputs.scene_variables) || (raw["scene_variables"] = cfg.outputs.scene_variables)
+    isempty(cfg.outputs.opf_variables) || (raw["opf_variables"] = cfg.outputs.opf_variables)
     raw["opf_overwrite_variables"] = cfg.outputs.opf_overwrite_variables
 
     cfg_path = joinpath(outroot, config_name)
     YAML.write_file(cfg_path, raw)
-
-    if !isempty(cfg.constants)
-        const_name = cfg.source_files.constants === nothing ? "const.yml" : basename(cfg.source_files.constants)
-        YAML.write_file(joinpath(outroot, const_name), cfg.constants)
-    end
     return cfg_path
 end
 
 function _triangle_area3d(p1, p2, p3)
-    v1 = StaticArrays.SVector(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
-    v2 = StaticArrays.SVector(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
-    norm(cross(v1, v2)) / 2
+    v1 = StaticArrays.SVector{3,Float64}(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
+    v2 = StaticArrays.SVector{3,Float64}(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
+    0.5 * norm(cross(v1, v2))
 end
 
 @inline _node_attr(node, key::Symbol) = haskey(node, key) ? node[key] : nothing
+
+function _as_int_or(x, default::Int)
+    x === nothing && return default
+    x isa Integer && return Int(x)
+    x isa Number && return round(Int, x)
+    if x isa String
+        try
+            return parse(Int, strip(x))
+        catch
+            return default
+        end
+    end
+    return default
+end
+
+function _node_object_id(node, default::Int)
+    for key in (:plantID, :plant_id, :item_id, :itemID)
+        v = _node_attr(node, key)
+        v === nothing && continue
+        return _as_int_or(v, default)
+    end
+    return default
+end
 
 function _node_type_name(node, default::String="")
     for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
@@ -401,21 +549,43 @@ const _OPS_RELAXED_KWARGS = (
     !haskey(node, :scene_dimensions)
 end
 
+function _source_topology_id(node)
+    sid = _node_attr(node, :source_topology_id)
+    sid === nothing && return nothing
+    cid = _as_int_or(sid, 0)
+    cid > 0 ? cid : nothing
+end
+
 function _collect_scene_node_metadata!(
     node,
-    node_group,
-    node_type,
+    nodes,
+    per_object_component_counter,
     current_group::String="",
+    current_object_id::Int=1,
 )
     group = current_group
+    object_id = _node_object_id(node, current_object_id)
     type_name = _node_type_name(node, "")
     fg = _node_attr(node, :functional_group)
     fg !== nothing && (group = string(fg))
 
     if _is_scene_geometry_node(node)
         nid = Int(MultiScaleTreeGraph.node_id(node))
-        node_group[nid] = group
-        node_type[nid] = type_name
+
+        sid = _source_topology_id(node)
+        if sid !== nothing
+            source_topology_id = Int(sid)
+        else
+            k = get(per_object_component_counter, object_id, 0) + 1
+            per_object_component_counter[object_id] = k
+            source_topology_id = k + 1
+        end
+        nodes[nid] = (
+            group=group,
+            type=type_name,
+            source_topology_id=source_topology_id,
+            object_id=object_id,
+        )
     end
 
     children = MultiScaleTreeGraph.children(node)
@@ -423,9 +593,10 @@ function _collect_scene_node_metadata!(
         for ch in children
             _collect_scene_node_metadata!(
                 ch,
-                node_group,
-                node_type,
+                nodes,
+                per_object_component_counter,
                 group,
+                object_id,
             )
         end
     end
@@ -435,68 +606,54 @@ function _build_scene_geometry(mtg, source_path::AbstractString)
     _build_scene_geometry(mtg, source_path, nothing)
 end
 
-function _build_scene_geometry(
-    mtg,
-    source_path::AbstractString,
-    scene_xy_bounds::Union{Nothing,NTuple{4,<:Real}},
-    source_topology_id_per_node::Dict{Int,Int},
-    object_id_per_node::Dict{Int,Int},
-)
+function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
     merged_mesh, face2node = PlantGeom.build_merged_mesh_with_map(mtg; filter_fun=_is_scene_geometry_node)
 
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
+    node_meta = Dict{Int,NamedTuple{(:group, :type, :source_topology_id, :object_id),Tuple{String,String,Int,Int}}}()
+    per_object_component_counter = Dict{Int,Int}()
     _collect_scene_node_metadata!(
         mtg,
-        node_group,
-        node_type,
+        node_meta,
+        per_object_component_counter,
     )
 
     verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
-    faces = GeometryBasics.decompose(GeometryBasics.TriangleFace{Int}, merged_mesh)
-    T = isempty(verts) ? Float64 : typeof(first(verts)[1])
-    zero_t = zero(T)
-    node_area = Dict{Int,T}()
-    bary_acc = Dict{Int,NTuple{3,T}}()
+    faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
+    node_area = Dict{Int,Float64}()
+    bary_acc = Dict{Int,NTuple{3,Float64}}()
     for (i, f) in enumerate(faces)
         n = face2node[i]
         p1 = verts[f[1]]
         p2 = verts[f[2]]
         p3 = verts[f[3]]
         area = _triangle_area3d(p1, p2, p3)
-        node_area[n] = get(node_area, n, zero_t) + area
-        cx = (p1[1] + p2[1] + p3[1]) / 3
-        cy = (p1[2] + p2[2] + p3[2]) / 3
-        cz = (p1[3] + p2[3] + p3[3]) / 3
-        sx, sy, sz = get(bary_acc, n, (zero_t, zero_t, zero_t))
+        node_area[n] = get(node_area, n, 0.0) + area
+        cx = (p1[1] + p2[1] + p3[1]) / 3.0
+        cy = (p1[2] + p2[2] + p3[2]) / 3.0
+        cz = (p1[3] + p2[3] + p3[3]) / 3.0
+        sx, sy, sz = get(bary_acc, n, (0.0, 0.0, 0.0))
         bary_acc[n] = (sx + area * cx, sy + area * cy, sz + area * cz)
     end
-    barycenter_per_node = Dict{Int,NTuple{3,T}}()
+    nodes = Dict{Int,SceneNodeData{Float64}}()
     for (nid, area) in node_area
-        if area > 0
-            sx, sy, sz = get(bary_acc, nid, (zero_t, zero_t, zero_t))
-            barycenter_per_node[nid] = (sx / area, sy / area, sz / area)
-        else
-            barycenter_per_node[nid] = (T(NaN), T(NaN), T(NaN))
-        end
+        barycenter =
+            if area > 0
+                sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
+                (sx / area, sy / area, sz / area)
+            else
+                (NaN, NaN, NaN)
+            end
+        meta = get(node_meta, nid, (group="", type="", source_topology_id=nid, object_id=-1))
+        nodes[nid] = SceneNodeData(area, barycenter, meta.group, meta.type, meta.source_topology_id, meta.object_id)
     end
     SceneGeometry(
         mtg,
         merged_mesh,
         face2node,
-        node_area,
-        barycenter_per_node,
-        source_topology_id_per_node,
-        object_id_per_node,
-        node_group,
-        node_type,
+        nodes,
         String(source_path),
         scene_xy_bounds,
     )
-end
-
-function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,<:Real}})
-    _build_scene_geometry(mtg, source_path, scene_xy_bounds, Dict{Int,Int}(), Dict{Int,Int}())
 end
 
 function _read_ops_relaxed(path::AbstractString)
@@ -511,51 +668,6 @@ function _relabel_scene_node_ids!(root)
     return root
 end
 
-function _node_source_topology_id(node)
-    raw = _node_attr(node, :source_topology_id)
-    if raw isa Integer
-        return Int(raw)
-    elseif raw isa Number
-        return round(Int, raw)
-    elseif raw !== nothing
-        parsed = tryparse(Int, strip(string(raw)))
-        parsed !== nothing && return parsed
-    end
-    return Int(MultiScaleTreeGraph.node_id(node))
-end
-
-function _node_object_id(node)
-    object_node = node
-    while true
-        parent = try
-            MultiScaleTreeGraph.parent(object_node)
-        catch
-            nothing
-        end
-        parent === nothing && break
-        MultiScaleTreeGraph.scale(parent) <= 0 && break
-        object_node = parent
-    end
-    object_id = _node_source_topology_id(object_node)
-    MultiScaleTreeGraph.scale(object_node) <= 0 ? -abs(object_id) : object_id
-end
-
-function _scene_identity_maps!(root)
-    _relabel_scene_node_ids!(root)
-
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
-    MultiScaleTreeGraph.traverse!(root) do node
-        if _is_scene_geometry_node(node)
-            nid = Int(MultiScaleTreeGraph.node_id(node))
-            source_topology_id_per_node[nid] = _node_source_topology_id(node)
-            object_id_per_node[nid] = _node_object_id(node)
-        end
-        return true
-    end
-    return source_topology_id_per_node, object_id_per_node
-end
-
 function _scene_xy_bounds_from_mtg(mtg)
     haskey(mtg, :scene_dimensions) || return nothing
     dims = mtg[:scene_dimensions]
@@ -563,10 +675,10 @@ function _scene_xy_bounds_from_mtg(mtg)
     p0 = dims[1]
     p1 = dims[2]
     return (
-        min(p0[1], p1[1]),
-        min(p0[2], p1[2]),
-        max(p0[1], p1[1]),
-        max(p0[2], p1[2]),
+        min(Float64(p0[1]), Float64(p1[1])),
+        min(Float64(p0[2]), Float64(p1[2])),
+        max(Float64(p0[1]), Float64(p1[1])),
+        max(Float64(p0[2]), Float64(p1[2])),
     )
 end
 
@@ -587,8 +699,8 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     else
         error("Unsupported scene extension: $ext")
     end
-    source_topology_id_per_node, object_id_per_node = _scene_identity_maps!(mtg)
-    _build_scene_geometry(mtg, path, _scene_xy_bounds_from_mtg(mtg), source_topology_id_per_node, object_id_per_node)
+    _relabel_scene_node_ids!(mtg)
+    _build_scene_geometry(mtg, path, _scene_xy_bounds_from_mtg(mtg))
 end
 
 function _rows_to_namedtuples(table)

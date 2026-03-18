@@ -1,42 +1,73 @@
-function _dict_zero(node_ids, ::Type{T}=Float64) where {T<:Real}
-    Dict{Int,T}(nid => zero(T) for nid in node_ids)
+function _dict_zero(node_ids)
+    Dict{Int,Float64}(nid => 0.0 for nid in node_ids)
 end
 
-_band_symbol(band) = Symbol(uppercase(string(band)))
+function _copy_node_values(source::Dict{Int,Float64}, node_ids)
+    Dict{Int,Float64}(nid => get(source, nid, 0.0) for nid in node_ids)
+end
 
-_band_coeff(coeffs::OpticalCoefficients, band::Symbol) = band === :NIR ? coeffs.nir : coeffs.par
-
-_optical_coefficients(par::T, nir::T) where {T<:Real} = OpticalCoefficients(par, nir)
-
-function _sum_dict_values(d::AbstractDict{Int,T}) where {T<:Real}
-    s = zero(T)
+function _sum_dict_values(d::Dict{Int,Float64})
+    s = 0.0
     for v in values(d)
         s += v
     end
     s
 end
 
+function _add_pair_count!(pair_counts::Dict{Tuple{Int,Int},Int}, to::Int, from::Int)
+    pair_counts[(to, from)] = get(pair_counts, (to, from), 0) + 1
+    return nothing
+end
+
+function _accept_scattering_link(node_group::Dict{Int,String}, to::Int, from::Int)
+    !(get(node_group, to, "") == "pavement" && get(node_group, from, "") == "pavement")
+end
+
+function _stack_transfer_pairs!(
+    pair_counts::Dict{Tuple{Int,Int},Int},
+    node_ids_stack::Vector{Int},
+    scatt_up::Vector{Int},
+    scatt_down::Vector{Int},
+    node_group::Dict{Int,String},
+)
+    n_hits = length(node_ids_stack)
+    @inbounds for h in (n_hits - 1):-1:1
+        to_above = node_ids_stack[h]
+        from_below = scatt_up[h + 1]
+        if from_below != 0 && _accept_scattering_link(node_group, to_above, from_below)
+            _add_pair_count!(pair_counts, to_above, from_below)
+        end
+
+        to_below = node_ids_stack[h + 1]
+        from_above = scatt_down[h]
+        if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
+            _add_pair_count!(pair_counts, to_below, from_above)
+        end
+    end
+    return nothing
+end
+
 function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, cfg::LightConfig)
-    vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
-    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
 
     for sector in turtle.sectors
-        pixel_hits, node_hits, _, _ =
-            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx)
+        projection =
+            _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, cfg, geometry.plotbox, cache_ctx)
 
         if sector.source == :sun
-            for (nid, h) in node_hits
+            for (nid, h) in projection.node_hits
                 sun_hits[nid] = get(sun_hits, nid, 0) + h
             end
             continue
         end
 
-        for stack in values(pixel_hits)
+        for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
-            # Keep a stable height sort.
+            # Java PixelTable uses a stable height sort (Collections.sort on comparator).
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
             n_hits = length(stack)
@@ -67,30 +98,16 @@ function _pair_counts_for_scattering(scene::SceneGeometry, turtle::TurtleGrid, c
                 scatt_down[h] = down
             end
 
-            @inbounds for h in (n_hits-1):-1:1
-                to_above = node_ids_stack[h]
-                from_below = scatt_up[h+1]
-                if from_below != 0 &&
-                   !(get(node_group, to_above, "") == "pavement" && get(node_group, from_below, "") == "pavement")
-                    pair_counts[(to_above, from_below)] = get(pair_counts, (to_above, from_below), 0) + 1
-                end
-
-                to_below = node_ids_stack[h+1]
-                from_above = scatt_down[h]
-                if from_above != 0 &&
-                   !(get(node_group, to_below, "") == "pavement" && get(node_group, from_above, "") == "pavement")
-                    pair_counts[(to_below, from_above)] = get(pair_counts, (to_below, from_above), 0) + 1
-                end
-            end
+            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, geometry.node_group)
         end
     end
 
-    return pair_counts, sun_hits, node_ids, node_group
+    return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
 end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, cfg::LightConfig, node_ids)
     all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
-    if !get(cfg.general, "all_in_turtle", false)
+    if !cfg.general.all_in_turtle
         for (nid, hsun) in sun_hits
             all_hits[nid] = max(0, get(all_hits, nid, 0) - hsun)
         end
@@ -99,45 +116,45 @@ function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{In
 end
 
 function _group_optical_coeffs(cfg::LightConfig)
-    coeffs = Dict{Tuple{String,String},OpticalCoefficients{Float64}}()
+    coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
-    for spec in model_type_configs(cfg)
-        group = string(spec.group)
+    for group_model in values(cfg.models)
+        group = group_model.group
         isempty(group) && continue
-        inter = get(spec.params, "Interception", nothing)
-        inter isa AbstractDict || continue
-        iuse = get(inter, "use", nothing)
-        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-        iconf isa AbstractDict || continue
 
-        model = lowercase(strip(string(get(iconf, "model", ""))))
-        c =
-            if model == "virtualsensor"
-                _optical_coefficients(0.0, 0.0)
-            else
-                op = get(iconf, "optical_properties", nothing)
-                op isa AbstractDict || continue
-                par = 0.0
-                nir = 0.0
-                for (k, v) in op
-                    try
-                        band = _band_symbol(k)
-                        band === :PAR && (par = float(v))
-                        band === :NIR && (nir = float(v))
-                    catch
-                    end
+        isempty(group_model.types) && continue
+
+        for (type_name, type_model) in group_model.types
+            interception = type_model.interception
+            interception === nothing && continue
+
+            coeff =
+                if lowercase(strip(interception.model)) == "virtualsensor"
+                    Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                else
+                    props = interception.optical_properties
+                    props === nothing && continue
+                    Dict{String,Float64}("PAR" => props.par, "NIR" => props.nir)
                 end
-                _optical_coefficients(par, nir)
-            end
 
-        tname = string(spec.type)
-        coeffs[(group, tname)] = c
-        if !haskey(coeffs, (group, "*"))
-            coeffs[(group, "*")] = c
+            coeffs[(group, type_name)] = coeff
+            # Group-level fallback for nodes without explicit type metadata.
+            if !haskey(coeffs, (group, "*"))
+                coeffs[(group, "*")] = coeff
+            end
         end
     end
 
     coeffs
+end
+
+struct ScatteringSceneContext
+    pair_counts::Dict{Tuple{Int,Int},Int}
+    all_hits::Dict{Int,Int}
+    node_ids::Vector{Int}
+    node_group::Dict{Int,String}
+    node_type::Dict{Int,String}
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
 end
 
 function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::FirstOrderResult, cfg::LightConfig)
@@ -148,21 +165,21 @@ function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::Fi
     for nid in geom_node_ids
         push!(node_set, nid)
     end
-    for nid in keys(first.incident_par_power_per_node)
+    for nid in keys(first.incident_power.par)
         push!(node_set, nid)
     end
-    for nid in keys(first.incident_nir_power_per_node)
+    for nid in keys(first.incident_power.nir)
         push!(node_set, nid)
     end
     node_ids = collect(node_set)
     all_hits = _all_dir_hits_for_scattering(first, sun_hits, cfg, node_ids)
     node_type = Dict{Int,String}()
     for nid in node_ids
-        g = get(node_group, nid, get(scene.node_group, nid, ""))
+        g = get(node_group, nid, _scene_group(scene, nid, ""))
         default_type = g == "pavement" ? "Cobblestone" : ""
-        node_type[nid] = get(scene.node_type, nid, default_type)
+        node_type[nid] = _scene_type(scene, nid, default_type)
     end
-    return pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs
+    return ScatteringSceneContext(pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs)
 end
 
 function _scattering_backend_from_mode(mode::Symbol)
@@ -212,9 +229,15 @@ function build_scattering_transfer_graph(
     cfg::LightConfig,
     ::RaycastScatteringBackend,
 )
-    pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs =
-        _scattering_context(scene, turtle, first, cfg)
-    return ScatteringTransferGraph(pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs)
+    context = _scattering_context(scene, turtle, first, cfg)
+    return ScatteringTransferGraph(
+        context.pair_counts,
+        context.all_hits,
+        context.node_ids,
+        context.node_group,
+        context.node_type,
+        context.group_type_coeffs,
+    )
 end
 
 function build_scattering_transfer_graph(
@@ -228,69 +251,82 @@ function build_scattering_transfer_graph(
     return build_scattering_transfer_graph(scene, turtle, first, cfg, RaycastScatteringBackend())
 end
 
-function _default_band_coeff(cfg::LightConfig, band)
-    _band_symbol(band) === :NIR && return get(cfg.general, "scattering_coeff_nir", 0.30)
-    return get(cfg.general, "scattering_coeff_par", 0.15)
+function _default_band_coeff(cfg::LightConfig, band_key::String)
+    bk = uppercase(band_key)
+    bk == "NIR" && return cfg.general.scattering_coeff_nir
+    return cfg.general.scattering_coeff_par
 end
 
 function _coeff_by_node(
-    graph::ScatteringTransferGraph{T},
-    band,
-    default_coeff::T,
-) where {T<:Real}
-    coeff_by_node = Dict{Int,T}()
-    band_key = _band_symbol(band)
-    default_coeffs = OpticalCoefficients(default_coeff, default_coeff)
+    graph::ScatteringTransferGraph,
+    band_key::String,
+    default_coeff::Float64,
+)
+    coeff_by_node = Dict{Int,Float64}()
+    band = uppercase(band_key)
     for nid in graph.node_ids
         g = get(graph.node_group, nid, "")
         t = get(graph.node_type, nid, "")
-        coeffs = get(
+        c = get(
             graph.group_type_coeffs,
             (g, t),
-            get(graph.group_type_coeffs, (g, "*"), default_coeffs),
+            get(graph.group_type_coeffs, (g, "*"), Dict{String,Float64}()),
         )
-        coeff_by_node[nid] = _band_coeff(coeffs, band_key)
+        coeff_by_node[nid] = get(c, band, default_coeff)
     end
     coeff_by_node
 end
 
-function _propagate_scattering_one_band(
-    initial_power_per_node::AbstractDict{Int,T},
+function _initial_scattering_power(
     graph::ScatteringTransferGraph,
-    coeff_by_node::AbstractDict{Int,T},
+    first::FirstOrderResult,
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}},
+    band::AbstractString,
+)
+    if initial_power_per_node !== nothing
+        return _copy_node_values(initial_power_per_node, graph.node_ids)
+    end
+    source = uppercase(String(band)) == "NIR" ? first.incident_power.nir : first.incident_power.par
+    return _copy_node_values(source, graph.node_ids)
+end
+
+function _propagate_scattering_one_band(
+    initial_power_per_node::Dict{Int,Float64},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
     cfg::LightConfig,
-    default_coeff::T,
-) where {T<:Real}
+    default_coeff::Float64,
+)
     node_ids = graph.node_ids
     pair_counts = graph.pair_counts
     all_hits = graph.all_hits
-    zero_t = zero(T)
-    current = Dict{Int,T}(nid => get(initial_power_per_node, nid, zero_t) for nid in node_ids)
-    added = _dict_zero(node_ids, T)
-    thr = T(get(cfg.general, "scattering_stop_ratio", 0.01)) * max(_sum_dict_values(current), eps(T))
+    current = _copy_node_values(initial_power_per_node, node_ids)
+    added = _dict_zero(node_ids)
+    ref = _sum_dict_values(current)
+    thr = cfg.general.scattering_stop_ratio * max(ref, eps(Float64))
     iterations = 0
 
     converged = false
-    for it in 1:get(cfg.general, "scattering_max_iter", 20)
+    for it in 1:cfg.general.scattering_max_iter
         iterations = it
 
-        hit_energy = _dict_zero(node_ids, T)
+        hit_energy = _dict_zero(node_ids)
         for nid in node_ids
             nh = get(all_hits, nid, 0)
             if nh > 0
-                hit_energy[nid] = get(current, nid, zero_t) * get(coeff_by_node, nid, default_coeff) / nh / 2
+                hit_energy[nid] = get(current, nid, 0.0) * get(coeff_by_node, nid, default_coeff) / nh / 2.0
             end
         end
 
-        next = _dict_zero(node_ids, T)
+        next = _dict_zero(node_ids)
         for ((to, from), cnt) in pair_counts
-            next[to] = get(next, to, zero_t) + cnt * get(hit_energy, from, zero_t)
+            next[to] = get(next, to, 0.0) + cnt * get(hit_energy, from, 0.0)
         end
 
         total_next = _sum_dict_values(next)
 
         for nid in node_ids
-            added[nid] = get(added, nid, zero_t) + get(next, nid, zero_t)
+            added[nid] = get(added, nid, 0.0) + get(next, nid, 0.0)
         end
 
         current = next
@@ -304,13 +340,13 @@ function _propagate_scattering_one_band(
 end
 
 function _scattering_one_band(
-    initial_power_per_node::AbstractDict{Int,<:Real},
+    initial_power_per_node::Dict{Int,Float64},
     graph::ScatteringTransferGraph,
     cfg::LightConfig,
-    band,
-    default_coeff::Real,
+    band_key::String,
+    default_coeff::Float64,
 )
-    coeffs = _coeff_by_node(graph, band, default_coeff)
+    coeffs = _coeff_by_node(graph, band_key, default_coeff)
     return _propagate_scattering_one_band(initial_power_per_node, graph, coeffs, cfg, default_coeff)
 end
 
@@ -325,9 +361,9 @@ function compute_scattering_band(
     cfg::LightConfig;
     mode=:raycast,
     backend=nothing,
-    band="PAR",
-    initial_power_per_node=nothing,
-    default_coeff=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
 )
     b = _resolve_scattering_backend(mode, backend)
     return compute_scattering_band(
@@ -346,24 +382,17 @@ function compute_scattering_band(
     first::FirstOrderResult,
     cfg::LightConfig,
     ::RaycastScatteringBackend;
-    band="PAR",
-    initial_power_per_node=nothing,
-    default_coeff=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
 )
-    T = initial_power_per_node === nothing ? valtype(first.incident_par_power_per_node) : valtype(initial_power_per_node)
-    zero_t = zero(T)
-    initial =
-        if initial_power_per_node === nothing
-            Dict{Int,T}(nid => get(first.incident_par_power_per_node, nid, zero_t) for nid in graph.node_ids)
-        else
-            Dict{Int,T}(nid => get(initial_power_per_node, nid, zero_t) for nid in graph.node_ids)
-        end
-    dflt = isnothing(default_coeff) ? T(_default_band_coeff(cfg, band)) : T(default_coeff)
+    initial = _initial_scattering_power(graph, first, initial_power_per_node, band)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(cfg, String(band)) : default_coeff
     added, iterations, converged = _scattering_one_band(
         initial,
         graph,
         cfg,
-        band,
+        String(band),
         dflt,
     )
     return (added_power_per_node=added, iterations=iterations, converged=converged)
@@ -374,9 +403,9 @@ function compute_scattering_band(
     first::FirstOrderResult,
     cfg::LightConfig,
     ::LinksScatteringBackend;
-    band="PAR",
-    initial_power_per_node=nothing,
-    default_coeff=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
 )
     # CPU reference currently shares the same iterative propagation path.
     return compute_scattering_band(
@@ -397,9 +426,9 @@ function compute_scattering_band(
     cfg::LightConfig;
     mode=:raycast,
     backend=nothing,
-    band="PAR",
-    initial_power_per_node=nothing,
-    default_coeff=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
 )
     b = _resolve_scattering_backend(mode, backend)
     graph = build_scattering_transfer_graph(scene, turtle, first, cfg, b)
@@ -439,27 +468,25 @@ function compute_scattering(
     cfg::LightConfig,
     ::RaycastScatteringBackend,
 )
-    T = valtype(first.incident_par_power_per_node)
-    zero_t = zero(T)
-    initial_par = Dict{Int,T}(nid => get(first.incident_par_power_per_node, nid, zero_t) for nid in graph.node_ids)
-    initial_nir = Dict{Int,T}(nid => get(first.incident_nir_power_per_node, nid, zero_t) for nid in graph.node_ids)
+    initial_par = _initial_scattering_power(graph, first, nothing, "PAR")
+    initial_nir = _initial_scattering_power(graph, first, nothing, "NIR")
 
     added_par, it_par, conv_par = _scattering_one_band(
         initial_par,
         graph,
         cfg,
-        :PAR,
-        T(get(cfg.general, "scattering_coeff_par", 0.15)),
+        "PAR",
+        cfg.general.scattering_coeff_par,
     )
     added_nir, it_nir, conv_nir = _scattering_one_band(
         initial_nir,
         graph,
         cfg,
-        :NIR,
-        T(get(cfg.general, "scattering_coeff_nir", 0.30)),
+        "NIR",
+        cfg.general.scattering_coeff_nir,
     )
 
-    ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)
+    ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
 end
 
 function compute_scattering(

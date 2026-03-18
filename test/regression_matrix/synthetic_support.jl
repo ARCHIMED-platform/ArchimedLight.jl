@@ -3,10 +3,6 @@ using GeometryBasics
 using LinearAlgebra: cross, norm
 using StaticArrays: SVector
 
-_incident_par_initial_flux(budget) = budget.incident.par.initial_flux_per_node
-_incident_par_initial_energy(budget) = budget.incident.par.initial_energy_per_node
-_incident_par_energy(budget) = budget.incident.par.energy_per_node
-
 function _synthetic_cfg(
     cfg::ArchimedLight.LightConfig;
     sectors::Int=1,
@@ -23,19 +19,18 @@ function _synthetic_cfg(
     java_logged_turtle_dirs::Bool=false,
 )
     out = deepcopy(cfg)
-    out.general["all_in_turtle"] = all_in_turtle
-    out.general["sky_sectors"] = sectors
-    out.general["scattering"] = scattering
-    out.general["pixel_size"] = pixel_size_m
-    out.general["toricity"] = toricity
-    out.general["area_ratio"] = area_ratio
-    out.general["cache_radiation"] = cache_radiation
-    out.general["cache_pixel_table"] = cache_pixel_table
-    out.general["radiation_timestep"] = radiation_timestep
-    out.general["nir_interception"] = nir_interception
-    out.general["nir_scattering"] = nir_scattering
-    out.general["java_logged_turtle_dirs"] = java_logged_turtle_dirs
-    ArchimedLight.refresh_light_config!(out)
+    out.general.all_in_turtle = all_in_turtle
+    out.general.turtle_sectors = sectors
+    out.general.scattering = scattering
+    out.general.pixel_size = pixel_size_m
+    out.general.toricity = toricity
+    out.general.area_ratio = area_ratio
+    out.general.cache_radiation = cache_radiation
+    out.general.cache_pixel_table = cache_pixel_table
+    out.general.radiation_timestep_minutes = radiation_timestep
+    out.general.nir_interception = nir_interception
+    out.general.nir_scattering = nir_scattering
+    out.general.java_logged_turtle_dirs = java_logged_turtle_dirs
     return out
 end
 
@@ -46,6 +41,8 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
             p2=(spec.x1, spec.y0, spec.z),
             p3=(spec.x1, spec.y1, spec.z),
             p4=(spec.x0, spec.y1, spec.z),
+            source_topology_id=get(spec, :source_topology_id, 1),
+            object_id=get(spec, :object_id, 1),
             group=get(spec, :group, "plate"),
             type=get(spec, :type, "plate"),
         )
@@ -55,14 +52,9 @@ end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
-    faces = GeometryBasics.TriangleFace{Int}[]
+    faces = PlantGeom.Face3[]
     face2node = Int[]
-    total_area_per_node = Dict{Int,Float64}()
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
+    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
 
     xs = Float64[]
     ys = Float64[]
@@ -84,33 +76,29 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
                 GeometryBasics.Point{3,Float32}(Float32(p4[1]), Float32(p4[2]), Float32(p4[3])),
             ],
         )
-        append!(faces, GeometryBasics.TriangleFace{Int}[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
+        append!(faces, PlantGeom.Face3[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
         append!(face2node, [i, i])
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
         area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
-        total_area_per_node[i] = area1 + area2
-        barycenter_per_node[i] = (
+        area = area1 + area2
+        barycenter = (
             (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
-        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
-        node_group[i] = String(get(spec, :group, "plate"))
-        node_type[i] = String(get(spec, :type, "plate"))
+        group = String(get(spec, :group, "plate"))
+        type_name = String(get(spec, :type, "plate"))
+        source_topology_id = Int(get(spec, :source_topology_id, i))
+        object_id = Int(get(spec, :object_id, source_topology_id))
+        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
     end
 
     ArchimedLight.SceneGeometry(
         nothing,
         GeometryBasics.Mesh(points, faces),
         face2node,
-        total_area_per_node,
-        barycenter_per_node,
-        source_topology_id_per_node,
-        object_id_per_node,
-        node_group,
-        node_type,
+        nodes,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -151,8 +139,8 @@ function _max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
     maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
 end
 
-function _component_row_by_node(rows)
-    Dict(Int(r.node_id) => r for r in rows)
+function _component_row_by_object(rows)
+    Dict(Int(r.object_id) => r for r in rows)
 end
 
 function _synthetic_step_rows(scene, step, cfg, meteo_row)
@@ -165,6 +153,8 @@ function _synthetic_step_rows(scene, step, cfg, meteo_row)
         columns=[
             "step_number",
             "node_id",
+            "source_topology_id",
+            "object_id",
             "area",
             "Ri_PAR_0_q",
             "Ri_NIR_0_q",
@@ -183,41 +173,41 @@ function _synthetic_exact_check(source_id::String, result)::NamedTuple
     if source_id == "single_plate_direct"
         step = result.step
         pa = get(step.first_order.projected_area_per_node, 1, 0.0)
-        q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
-        f = get(_incident_par_initial_flux(step.budget), 1, 0.0)
+        q = get(step.budget.incident_energy.initial.par, 1, 0.0)
+        f = get(step.budget.incident_flux.initial.par, 1, 0.0)
         ok = isapprox(pa, 1.0; atol=1e-12, rtol=1e-12) &&
-             isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
-             isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
+            isapprox(q, 100.0; atol=1e-10, rtol=1e-10) &&
+            isapprox(f, 100.0; atol=1e-10, rtol=1e-10)
         detail = ok ? "" : "single_plate_direct projected=$(pa) q=$(q) f=$(f)"
         return (ok=ok, detail=detail)
     elseif source_id == "partial_overlap_direct"
         step = result.step
         upper_pa = get(step.first_order.projected_area_per_node, 1, 0.0)
         lower_pa = get(step.first_order.projected_area_per_node, 2, 0.0)
-        upper_q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
-        lower_q = get(_incident_par_initial_energy(step.budget), 2, 0.0)
+        upper_q = get(step.budget.incident_energy.initial.par, 1, 0.0)
+        lower_q = get(step.budget.incident_energy.initial.par, 2, 0.0)
         ok = isapprox(upper_pa, 0.5; atol=1e-10, rtol=1e-10) &&
-             isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
-             isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
-             isapprox(lower_q, 50.0; atol=1e-9, rtol=1e-9)
+            isapprox(lower_pa, 0.5; atol=1e-10, rtol=1e-10) &&
+            isapprox(upper_q, 50.0; atol=1e-9, rtol=1e-9) &&
+            isapprox(lower_q, 50.0; atol=1e-9, rtol=1e-9)
         detail = ok ? "" : "partial_overlap_direct upper_pa=$(upper_pa) lower_pa=$(lower_pa) upper_q=$(upper_q) lower_q=$(lower_q)"
         return (ok=ok, detail=detail)
     elseif source_id == "toricity_wraparound"
         step = result.step
         pa = get(step.first_order.projected_area_per_node, 1, 0.0)
-        q = get(_incident_par_initial_energy(step.budget), 1, 0.0)
+        q = get(step.budget.incident_energy.initial.par, 1, 0.0)
         toric = Bool(get(result.meta, "toricity", false))
         target_pa = toric ? 0.4 : 0.19512196866477877
         target_q = toric ? 40.0 : 19.512196866477876
         ok = isapprox(pa, target_pa; atol=1e-5, rtol=1e-9) &&
-             isapprox(q, target_q; atol=1e-5, rtol=1e-9)
+            isapprox(q, target_q; atol=1e-5, rtol=1e-9)
         detail = ok ? "" : "toricity_wraparound toric=$(toric) projected=$(pa) q=$(q)"
         return (ok=ok, detail=detail)
     elseif source_id == "stacked_scattering"
         step = result.step
-        lower_0 = get(_incident_par_initial_energy(step.budget), 2, 0.0)
-        lower_q = get(_incident_par_energy(step.budget), 2, 0.0)
-        scat_q = isnothing(step.scattering) ? 0.0 : get(step.scattering.added_par_power_per_node, 2, 0.0)
+        lower_0 = get(step.budget.incident_energy.initial.par, 2, 0.0)
+        lower_q = get(step.budget.incident_energy.total.par, 2, 0.0)
+        scat_q = isnothing(step.scattering) ? 0.0 : get(step.scattering.added_power.par, 2, 0.0)
         scattering = Bool(get(result.meta, "scattering", false))
         ok =
             if scattering

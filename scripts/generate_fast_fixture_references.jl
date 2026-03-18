@@ -6,21 +6,21 @@ using Tables
 using CairoMakie
 
 function render_ri_par_f_figure(scene, step, cfg; title::String)
-    vertices, faces, face2node, _, _, _ = ArchimedLight._scene_geometry_for_interception(scene, cfg)
-    metric = step.budget.incident.par.flux_per_node
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+    metric = step.budget.incident_flux.total.par
 
-    v_sum = zeros(Float64, length(vertices))
-    v_count = zeros(Int, length(vertices))
-    for i in eachindex(faces)
-        f = faces[i]
-        v = get(metric, face2node[i], NaN)
+    v_sum = zeros(Float64, length(geometry.vertices))
+    v_count = zeros(Int, length(geometry.vertices))
+    for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        v = get(metric, geometry.face2node[i], NaN)
         isfinite(v) || continue
         for vid in (Int(f[1]), Int(f[2]), Int(f[3]))
             v_sum[vid] += v
             v_count[vid] += 1
         end
     end
-    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(vertices)]
+    vertex_values = Float64[v_count[i] > 0 ? (v_sum[i] / v_count[i]) : NaN for i in eachindex(geometry.vertices)]
 
     fig = Figure(size=(960, 720))
     ax = Axis3(
@@ -33,8 +33,8 @@ function render_ri_par_f_figure(scene, step, cfg; title::String)
     )
     p = mesh!(
         ax,
-        vertices,
-        faces;
+        geometry.vertices,
+        geometry.faces;
         color=vertex_values,
         colormap=:viridis,
         colorrange=(0.0, max(step.sky.ri_par_f, eps(Float64))),
@@ -50,8 +50,8 @@ end
 function write_case(case_name::String)
     case_root = joinpath(dirname(@__DIR__), "test", "fast_fixtures", case_name)
     cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-    scene = ArchimedLight.read_scene(cfg.source_files.scene)
-    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
+    scene = ArchimedLight.read_scene(cfg.paths.scene)
+    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
     selected = ArchimedLight.prepare_meteo(meteo, cfg)
     series = ArchimedLight.run_light_series(scene, meteo, cfg)
 
@@ -68,7 +68,7 @@ function write_case(case_name::String)
         cfg;
         meteo_row=meteo_row,
         step_number=0,
-        columns=["step_number", "node_id", "area", "Ri_PAR_0_q"],
+        columns=["step_number", "source_topology_id", "object_id", "area", "Ri_PAR_0_q"],
         strict=false,
     )
 

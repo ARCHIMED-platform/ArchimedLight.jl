@@ -5,6 +5,27 @@ import MultiScaleTreeGraph
 import LinearAlgebra: norm, cross
 import Serialization
 
+struct ProjectionCacheContext
+    cache_dir::String
+    scene_key::UInt64
+end
+
+struct DirectionProjectionResult
+    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}}
+    node_hits::Dict{Int,Int}
+    projected_mesh_area::Dict{Int,Float64}
+    projected_pixels_area::Dict{Int,Float64}
+end
+
+struct InterceptionSceneData
+    vertices
+    faces::Vector{PlantGeom.Face3}
+    face2node::Vector{Int}
+    node_ids::Vector{Int}
+    plotbox
+    node_group::Dict{Int,String}
+end
+
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -21,31 +42,11 @@ function _normalize_group_name_local(x)
 end
 
 function _cfg_toricity(cfg::LightConfig)
-    _as_bool_local(config_value(cfg, "toricity", true), true)
+    cfg.general.toricity
 end
 
 function _cfg_debug_drop_leading_hit(cfg::LightConfig)
-    spec = config_value(cfg, "debug_drop_leading_hit", nothing)
-    spec isa AbstractDict || return nothing
-    node_id = try
-        Int(get(spec, "node_id", 0))
-    catch
-        0
-    end
-    x = try
-        Int(get(spec, "x", -1))
-    catch
-        -1
-    end
-    y = try
-        Int(get(spec, "y", -1))
-    catch
-        -1
-    end
-    node_id > 0 || return nothing
-    x >= 0 || return nothing
-    y >= 0 || return nothing
-    return (node_id=node_id, x=x, y=y)
+    cfg.general.debug_drop_leading_hit
 end
 
 function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg::LightConfig)
@@ -72,30 +73,26 @@ end
 
 function _cfg_plot_paving(cfg::LightConfig)
     best = 0
-    for spec in model_type_configs(cfg)
-        v = try
-            Int(get(spec.params, "plot_paving", 0))
-        catch
-            0
+    for group_model in values(cfg.models)
+        for type_model in values(group_model.types)
+            best = max(best, type_model.plot_paving)
         end
-        best = max(best, v)
     end
     return best
 end
 
 function _virtual_sensor_groups(cfg::LightConfig)
     out = Set{String}()
-    for spec in model_type_configs(cfg)
-        group = _normalize_group_name_local(spec.group)
+    for group_model in values(cfg.models)
+        group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
-        inter = get(spec.params, "Interception", nothing)
-        inter isa AbstractDict || continue
-        iuse = get(inter, "use", nothing)
-        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-        iconf isa AbstractDict || continue
-        model = lowercase(strip(string(get(iconf, "model", ""))))
-        if model == "virtualsensor"
-            push!(out, group)
+        for type_model in values(group_model.types)
+            interception = type_model.interception
+            interception === nothing && continue
+            if lowercase(strip(interception.model)) == "virtualsensor"
+                push!(out, group)
+                break
+            end
         end
     end
     out
@@ -113,22 +110,20 @@ end
 
 function _ignored_group_types(cfg::LightConfig)
     out = Dict{String,Set{String}}()
-    for spec in model_type_configs(cfg)
-        group = _normalize_group_name_local(spec.group)
+    for group_model in values(cfg.models)
+        group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
-        inter = get(spec.params, "Interception", nothing)
-        inter isa AbstractDict || continue
-        iuse = get(inter, "use", nothing)
-        iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-        iconf isa AbstractDict || continue
-        model = lowercase(strip(string(get(iconf, "model", ""))))
-        model == "ignore" || continue
-        tname = strip(string(spec.type))
-        isempty(tname) && continue
-        s = get!(out, group) do
-            Set{String}()
+        for (type_name, type_model) in group_model.types
+            interception = type_model.interception
+            interception === nothing && continue
+            lowercase(strip(interception.model)) == "ignore" || continue
+            tname = strip(type_name)
+            isempty(tname) && continue
+            s = get!(out, group) do
+                Set{String}()
+            end
+            push!(s, tname)
         end
-        push!(s, tname)
     end
     out
 end
@@ -139,71 +134,50 @@ function _is_ignored_node(
     ignored::Dict{String,Set{String}},
 )
     isempty(ignored) && return false
-    g = _normalize_group_name_local(get(scene.node_group, node_id, ""))
-    t = strip(get(scene.node_type, node_id, ""))
+    g = _normalize_group_name_local(_scene_group(scene, node_id, ""))
+    t = strip(_scene_type(scene, node_id, ""))
     return haskey(ignored, g) && (t in ignored[g])
 end
 
 function _group_light_emitters(cfg::LightConfig)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for spec in model_type_configs(cfg)
-        group = strip(string(spec.group))
+    for group_model in values(cfg.models)
+        group = strip(group_model.group)
         isempty(group) && continue
-        type_name = strip(string(spec.type))
-        em0 = get(spec.params, "LightEmitter", nothing)
-        em0 isa AbstractDict || continue
-        em = em0
-        model = lowercase(strip(string(get(em, "model", ""))))
-        model == "lambertianemitter" || continue
+        for (type_name0, type_model) in group_model.types
+            emitter = type_model.light_emitter
+            emitter === nothing && continue
+            type_name = strip(type_name0)
+            lowercase(strip(emitter.model)) == "lambertianemitter" || continue
 
-        radiance = try
-            Float64(em["radiance"])
-        catch
-            try
-                parse(Float64, string(get(em, "radiance", "0")))
-            catch
-                0.0
-            end
-        end
-        radiance > 0.0 || continue
+            radiance = emitter.radiance
+            radiance > 0.0 || continue
 
-        gpar = 0.48
-        gnir = 0.52
-        g0 = get(em, "gamma", nothing)
-        if g0 isa AbstractDict
-            gpar = try
-                Float64(get(g0, "PAR", gpar))
-            catch
-                gpar
+            gpar = emitter.gamma.par
+            gnir = emitter.gamma.nir
+            gpar = max(gpar, 0.0)
+            gnir = max(gnir, 0.0)
+            gsum = gpar + gnir
+            if gsum > 0.0
+                gpar /= gsum
+                gnir /= gsum
+            else
+                gpar = 0.48
+                gnir = 0.52
             end
-            gnir = try
-                Float64(get(g0, "NIR", gnir))
-            catch
-                gnir
-            end
-        end
-        gpar = max(gpar, 0.0)
-        gnir = max(gnir, 0.0)
-        gsum = gpar + gnir
-        if gsum > 0.0
-            gpar /= gsum
-            gnir /= gsum
-        else
-            gpar = 0.48
-            gnir = 0.52
-        end
 
-        key = (group, type_name)
-        cur = get(out, key, (par=0.0, nir=0.0))
-        out[key] = (par=cur.par + radiance * gpar, nir=cur.nir + radiance * gnir)
+            key = (group, type_name)
+            cur = get(out, key, (par=0.0, nir=0.0))
+            out[key] = (par=cur.par + radiance * gpar, nir=cur.nir + radiance * gnir)
+        end
     end
     out
 end
 
 function _use_upper_hit_pixel_table(cfg::LightConfig)
-    # Default to upper-hit pixel tables unless scattering, virtual sensors,
+    # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
     # or explicit light emitters require complete interception stacks.
-    if get(cfg.general, "scattering", true)
+    if cfg.general.scattering
         return false
     end
     isempty(_virtual_sensor_groups(cfg)) || return false
@@ -219,18 +193,18 @@ function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
     nir = Dict{Int,Float64}()
     for ((group, type_name), pwr) in by_group_type
         nids = Int[
-            nid for (nid, g) in scene.node_group if g == group && get(scene.node_type, nid, "") == type_name
+            nid for (nid, node) in scene.nodes if node.group == group && node.type == type_name
         ]
         if isempty(nids)
             # Fallback for scenes where type labels are unavailable.
-            nids = Int[nid for (nid, g) in scene.node_group if g == group]
+            nids = Int[nid for (nid, node) in scene.nodes if node.group == group]
         end
         isempty(nids) && continue
 
-        atot = sum(get(scene.total_area_per_node, nid, 0.0) for nid in nids)
+        atot = sum(_scene_area(scene, nid, 0.0) for nid in nids)
         if atot > 0.0
             for nid in nids
-                w = get(scene.total_area_per_node, nid, 0.0) / atot
+                w = _scene_area(scene, nid, 0.0) / atot
                 par[nid] = get(par, nid, 0.0) + pwr.par * w
                 nir[nid] = get(nir, nid, 0.0) + pwr.nir * w
             end
@@ -262,12 +236,12 @@ function _emitter_transfer_weights(
 
     for sector in turtle.sectors
         sector.source == :sun && continue
-        pixel_hits, _, _, _ =
+        projection =
             _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx, upper_hit=false)
 
-        for stack in values(pixel_hits)
+        for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
-            # Preserve insertion order on height ties.
+            # Java uses a stable sort for hit heights; preserve insertion order on ties.
             sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
 
             for i in eachindex(stack)
@@ -299,16 +273,12 @@ function _emitter_transfer_weights(
 end
 
 function _cfg_cache_pixel_table(cfg::LightConfig)
-    if haskey(cfg.general, "cache_pixel_table")
-        return _as_bool_local(cfg.general["cache_pixel_table"], false)
-    end
-    false
+    cfg.general.cache_pixel_table
 end
 
 function _projection_cache_dir(cfg::LightConfig)
-    base = _config_base_dir(cfg)
-    out_rel = cfg.outputs.directory
-    isempty(strip(out_rel)) && (out_rel = ".archimedlight_cache")
+    base = cfg.paths.base_dir
+    out_rel = cfg.outputs.output_directory
     out_dir = isabspath(out_rel) ? out_rel : normpath(joinpath(base, out_rel))
     joinpath(out_dir, "pixel_tables_cache")
 end
@@ -372,16 +342,16 @@ end
 
 function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::LightConfig)
     _cfg_cache_pixel_table(cfg) || return nothing
-    return (
-        cache_dir=_projection_cache_dir(cfg),
-        scene_key=_projection_scene_key(vertices, faces, face2node, plotbox, cfg),
+    return ProjectionCacheContext(
+        _projection_cache_dir(cfg),
+        _projection_scene_key(vertices, faces, face2node, plotbox, cfg),
     )
 end
 
-function _projection_cache_path(cache_ctx, direction, upper_hit::Bool=false)
+function _projection_cache_path(cache_ctx::ProjectionCacheContext, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
-    mode = upper_hit ? "u1" : "u0"
+    mode = (upper_hit ? "u1" : "u0") * (strict_java_float ? "_sf1" : "_sf0")
     joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * "_" * mode * ".jls")
 end
 
@@ -393,7 +363,7 @@ function _read_projection_cache(path::AbstractString)
             (:version in propertynames(payload) && getproperty(payload, :version) == 1) || return nothing
             req = (:pixel_hits, :node_hits, :projected_mesh_area, :projected_pixels_area)
             all(n -> n in propertynames(payload), req) || return nothing
-            return (
+            return DirectionProjectionResult(
                 getproperty(payload, :pixel_hits),
                 getproperty(payload, :node_hits),
                 getproperty(payload, :projected_mesh_area),
@@ -405,15 +375,15 @@ function _read_projection_cache(path::AbstractString)
     end
 end
 
-function _write_projection_cache(path::AbstractString, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
+function _write_projection_cache(path::AbstractString, result::DirectionProjectionResult)
     mkpath(dirname(path))
     tmp = path * ".tmp-" * string(getpid()) * "-" * string(time_ns())
     payload = (
         version=1,
-        pixel_hits=pixel_hits,
-        node_hits=node_hits,
-        projected_mesh_area=projected_mesh_area,
-        projected_pixels_area=projected_pixels_area,
+        pixel_hits=result.pixel_hits,
+        node_hits=result.node_hits,
+        projected_mesh_area=result.projected_mesh_area,
+        projected_pixels_area=result.projected_pixels_area,
     )
     open(tmp, "w") do io
         Serialization.serialize(io, payload)
@@ -431,42 +401,47 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
         dims = getproperty(attrs, :scene_dimensions)
         p0 = dims[1]
         p1 = dims[2]
-        x0 = p0[1]
-        y0 = p0[2]
-        x1 = p1[1]
-        y1 = p1[2]
+        x0 = Float64(p0[1])
+        y0 = Float64(p0[2])
+        x1 = Float64(p1[1])
+        y1 = Float64(p1[2])
         return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
     end
 
-    xs = [p[1] for p in vertices]
-    ys = [p[2] for p in vertices]
+    xs = Float64[p[1] for p in vertices]
+    ys = Float64[p[2] for p in vertices]
     (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
 end
 
-function _plotbox(scene::SceneGeometry, vertices, pixel_size::Real)
-    pixel_size > zero(pixel_size) || error("pixel_size must be > 0 m")
+function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
+    pixel_size > 0.0 || error("pixel_size must be > 0 m")
+    # Java fixtures enforce a strict upper bound at 50 cm.
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
 
+    # Match Java PlotBox numeric path:
+    # - scene corners are Point2f (Float32)
+    # - table size uses double division from float-backed plot dimensions
+    # - pixel dimensions are stored as float
     x0_raw, y0_raw, x1_raw, y1_raw = _extract_scene_xy_bounds(scene, vertices)
-    x0 = min(x0_raw, x1_raw)
-    y0 = min(y0_raw, y1_raw)
-    x1 = max(x0_raw, x1_raw)
-    y1 = max(y0_raw, y1_raw)
+    x0 = Float32(min(x0_raw, x1_raw))
+    y0 = Float32(min(y0_raw, y1_raw))
+    x1 = Float32(max(x0_raw, x1_raw))
+    y1 = Float32(max(y0_raw, y1_raw))
 
-    xdim = max(x1 - x0, pixel_size)
-    ydim = max(y1 - y0, pixel_size)
+    xdim = max(Float64(x1 - x0), pixel_size)
+    ydim = max(Float64(y1 - y0), pixel_size)
 
     nx = max(1, floor(Int, xdim / pixel_size))
     ny = max(1, floor(Int, ydim / pixel_size))
 
-    pix_x = xdim / nx
-    pix_y = ydim / ny
-    plot_area = xdim * ydim
+    pix_x = Float64(Float32(xdim / nx))
+    pix_y = Float64(Float32(ydim / ny))
+    plot_area = Float64(Float32(Float32(xdim) * Float32(ydim)))
     pixel_area = plot_area / (nx * ny)
 
     (
-        origin_x=x0,
-        origin_y=y0,
+        origin_x=Float64(x0),
+        origin_y=Float64(y0),
         xdim=xdim,
         ydim=ydim,
         nx=nx,
@@ -478,13 +453,14 @@ function _plotbox(scene::SceneGeometry, vertices, pixel_size::Real)
 end
 
 function _project_point_ground(point, direction)
-    dzden = direction[3]
-    iszero(dzden) && return nothing
-    pz = point[3]
+    dzden = Float32(direction[3])
+    dzden == 0.0f0 && return nothing
+    pz = Float32(point[3])
     dz = -pz / dzden
-    x = point[1] + direction[1] * dz
-    y = point[2] + direction[2] * dz
-    StaticArrays.SVector(x, y, pz)
+    x = Float32(point[1]) + Float32(direction[1]) * dz
+    y = Float32(point[2]) + Float32(direction[2]) * dz
+    # Keep source altitude for stack sorting as in Java.
+    StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(pz))
 end
 
 function _triangle_area_xy(p1, p2, p3)
@@ -493,32 +469,26 @@ end
 
 function _compute_normal(points)
     n = length(points)
-    if n < 3
-        if n == 0
-            return StaticArrays.SVector(0.0, 0.0, 0.0)
-        end
-        z = zero(typeof(points[1][1]))
-        return StaticArrays.SVector(z, z, z)
-    end
+    n < 3 && return StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
     for k in 1:(n-2)
         p0 = points[k]
         p1 = points[k+1]
         p2 = points[k+2]
 
-        v1x = p1[1] - p0[1]
-        v1y = p1[2] - p0[2]
-        v1z = p1[3] - p0[3]
+        v1x = Float32(p1[1] - p0[1])
+        v1y = Float32(p1[2] - p0[2])
+        v1z = Float32(p1[3] - p0[3])
         n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
-        n1 <= 0.0 && continue
+        n1 <= 0.0f0 && continue
         v1x /= n1
         v1y /= n1
         v1z /= n1
 
-        v2x = p2[1] - p1[1]
-        v2y = p2[2] - p1[2]
-        v2z = p2[3] - p1[3]
+        v2x = Float32(p2[1] - p1[1])
+        v2y = Float32(p2[2] - p1[2])
+        v2z = Float32(p2[3] - p1[3])
         n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
-        n2 <= 0.0 && continue
+        n2 <= 0.0f0 && continue
         v2x /= n2
         v2y /= n2
         v2z /= n2
@@ -527,26 +497,60 @@ function _compute_normal(points)
         ny = (v1z * v2x) - (v1x * v2z)
         nz = (v1x * v2y) - (v1y * v2x)
         nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
-        nnorm <= 0.0 && continue
-        return StaticArrays.SVector(nx / nnorm, ny / nnorm, nz / nnorm)
+        nnorm <= 0.0f0 && continue
+        return StaticArrays.SVector{3,Float64}(Float64(nx / nnorm), Float64(ny / nnorm), Float64(nz / nnorm))
     end
-    z = zero(eltype(first(points)))
-    StaticArrays.SVector(z, z, z)
+    StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
+end
+
+function _compute_normal_f32(points)
+    length(points) < 2 && return StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
+    @inbounds for n in 1:(length(points)-2)
+        p0 = points[n]
+        p1 = points[n+1]
+        p2 = points[n+2]
+
+        v1x = Float32(p1[1] - p0[1])
+        v1y = Float32(p1[2] - p0[2])
+        v1z = Float32(p1[3] - p0[3])
+        n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
+        n1 <= 0.0f0 && continue
+        v1x /= n1
+        v1y /= n1
+        v1z /= n1
+
+        v2x = Float32(p2[1] - p1[1])
+        v2y = Float32(p2[2] - p1[2])
+        v2z = Float32(p2[3] - p1[3])
+        n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
+        n2 <= 0.0f0 && continue
+        v2x /= n2
+        v2y /= n2
+        v2z /= n2
+
+        nx = (v1y * v2z) - (v1z * v2y)
+        ny = (v1z * v2x) - (v1x * v2z)
+        nz = (v1x * v2y) - (v1y * v2x)
+        nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
+        nnorm <= 0.0f0 && continue
+        return StaticArrays.SVector{3,Float32}(nx / nnorm, ny / nnorm, nz / nnorm)
+    end
+    StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
 end
 
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
     p_min, p_max = p1[1] < p2[1] ? (p1, p2) : (p2, p1)
-    dx = p_max[1] - p_min[1]
+    dx = Float32(p_max[1] - p_min[1])
     dx < 1e-6 && return
 
-    slope = (p_max[2] - p_min[2]) / dx
-    i_min = ceil(Int, p_min[1])
-    i_max = floor(Int, p_max[1])
+    slope = Float32((Float32(p_max[2]) - Float32(p_min[2])) / dx)
+    i_min = ceil(Int, Float32(p_min[1]))
+    i_max = floor(Int, Float32(p_max[1]))
 
     @inbounds for i in i_min:i_max
         i0 = i - i_origin
-        yi = slope * (i - p_min[1]) + p_min[2]
-        j = round(Int, yi, RoundNearestTiesUp)
+        yi = slope * Float32(i - Float32(p_min[1])) + Float32(p_min[2])
+        j = trunc(Int, floor(Float64(yi)) + 0.5)
         if 0 <= i0 < length(minY)
             idx = i0 + 1
             minY[idx] = min(minY[idx], j)
@@ -567,46 +571,95 @@ function _wrap_index(i::Int, n::Int)
 end
 
 function _project_triangle!(
-    pixel_hits,
+    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
     node_hits::Dict{Int,Int},
-    projected_mesh_area,
-    projected_pixels_area,
+    projected_mesh_area::Dict{Int,Float64},
+    projected_pixels_area::Dict{Int,Float64},
     node_id::Int,
     p1,
     p2,
     p3,
     direction,
-    origin_x::T,
-    origin_y::T,
-    x_pix,
-    y_pix,
-    pixel_area,
+    origin_x::Float64,
+    origin_y::Float64,
+    x_pix::Float64,
+    y_pix::Float64,
+    pixel_area::Float64,
     nx::Int,
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-) where {T}
+    strict_java_float::Bool,
+)
+    _project_triangle!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        node_id,
+        p1,
+        p2,
+        p3,
+        direction,
+        origin_x,
+        origin_y,
+        x_pix,
+        y_pix,
+        pixel_area,
+        nx,
+        ny,
+        toricity,
+        upper_hit,
+        strict_java_float,
+        1.0f0,
+    )
+end
+
+function _project_triangle!(
+    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
+    node_hits::Dict{Int,Int},
+    projected_mesh_area::Dict{Int,Float64},
+    projected_pixels_area::Dict{Int,Float64},
+    node_id::Int,
+    p1,
+    p2,
+    p3,
+    direction,
+    origin_x::Float64,
+    origin_y::Float64,
+    x_pix::Float64,
+    y_pix::Float64,
+    pixel_area::Float64,
+    nx::Int,
+    ny::Int,
+    toricity::Bool,
+    upper_hit::Bool,
+    strict_java_float::Bool,
+    unit_scale::Float32,
+)
     v = (p1, p2, p3)
-    projected = Vector{typeof(StaticArrays.SVector(origin_x, origin_y, zero(T)))}(undef, 3)
-    pix_points = similar(projected)
-    ox = origin_x
-    oy = origin_y
-    pxs = x_pix
-    pys = y_pix
-    dirx = direction[1]
-    diry = direction[2]
-    dirz = direction[3]
+    projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
+    pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
+    u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
+    ox = Float32(origin_x) * u
+    oy = Float32(origin_y) * u
+    pxs = Float32(x_pix) * u
+    pys = Float32(y_pix) * u
+    dirx = Float32(direction[1])
+    diry = Float32(direction[2])
+    dirz = Float32(direction[3])
 
     @inbounds for k in 1:3
-        iszero(dirz) && return
-        pz = v[k][3]
+        dirz == 0.0f0 && return
+        pz = Float32(v[k][3]) * u
         dz = -pz / dirz
-        xw = v[k][1] + dirx * dz
-        yw = v[k][2] + diry * dz
-        projected[k] = StaticArrays.SVector(xw, yw, zero(T))
-        x = (xw - ox) / pxs
-        y = (yw - oy) / pys
-        pix_points[k] = StaticArrays.SVector(x, y, pz)
+        xw = Float32(v[k][1]) * u + dirx * dz
+        yw = Float32(v[k][2]) * u + diry * dz
+        projected[k] = StaticArrays.SVector{3,Float64}(Float64(xw / u), Float64(yw / u), 0.0)
+        x = Float32((xw - ox) / pxs)
+        y = Float32((yw - oy) / pys)
+        z = pz
+        pix_points[k] = StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
     end
 
     iMin = floor(Int, pix_points[1][1])
@@ -637,31 +690,33 @@ function _project_triangle!(
         _get_border_pixels(a, b, iMin, minY, maxY)
     end
 
-    normal = _compute_normal(pix_points)
-    slope_x, slope_y =
+    normal = strict_java_float ? _compute_normal_f32(pix_points) : _compute_normal(pix_points)
+    slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
-            (normal[1] / normal[3], normal[2] / normal[3])
+            (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
         else
-            (direction[3] * normal[1], direction[3] * normal[2])
+            # Java fallback uses signed direction.z when normal.z is almost zero.
+            dz = Float32(direction[3])
+            (dz * Float32(normal[1]), dz * Float32(normal[2]))
         end
 
-    z0 = pix_points[1][3]
-    z0 += slope_x * (pix_points[1][1] - iMin)
-    z0 += slope_y * (pix_points[1][2] - jMin)
+    z0 = Float32(pix_points[1][3])
+    z0 += slopeX_f32 * (Float32(pix_points[1][1]) - Float32(iMin))
+    z0 += slopeY_f32 * (Float32(pix_points[1][2]) - Float32(jMin))
 
     tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
-    buffered_hits = Tuple{Int,T}[]
+    buffered_hits = Tuple{Int,Float64}[]
     nb_hits = 0
     @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
-        zi = z0 - slope_x * ni
+        zi = z0 - slopeX_f32 * Float32(ni)
         ymin_i = minY[ni+1]
         ymax_i = maxY[ni+1]
 
         for j in ymin_i:(ymax_i-1)
             nj = j - jMin
-            zpix = zi - slope_y * nj
-            zpix = clamp(zpix, kMin, kMax)
+            zpix = zi - slopeY_f32 * Float32(nj)
+            zpix = clamp(zpix, Float32(kMin), Float32(kMax))
             nb_hits += 1
 
             ii, jj =
@@ -673,29 +728,30 @@ function _project_triangle!(
 
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
-                push!(buffered_hits, (idx, zpix))
+                zpix_f32 = Float64(zpix / u)
+                push!(buffered_hits, (idx, zpix_f32))
             end
         end
     end
 
-    for (idx, zpix) in buffered_hits
+    for (idx, zpix_f32) in buffered_hits
         h = get!(pixel_hits, idx) do
-            Tuple{T,Int}[]
+            Vector{Tuple{Float64,Int}}()
         end
         if upper_hit
             if isempty(h)
-                push!(h, (zpix, node_id))
-            elseif zpix > h[1][1]
-                h[1] = (zpix, node_id)
+                push!(h, (zpix_f32, node_id))
+            elseif zpix_f32 > h[1][1]
+                h[1] = (zpix_f32, node_id)
             end
         else
-            push!(h, (zpix, node_id))
+            push!(h, (zpix_f32, node_id))
         end
         node_hits[node_id] = get(node_hits, node_id, 0) + 1
     end
 
-    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, zero(T)) + tri_proj_area
-    projected_pixels_area[node_id] = get(projected_pixels_area, node_id, zero(T)) + nb_hits * pixel_area
+    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + tri_proj_area
+    projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
 end
 
 @inline _hit_height(hit) = hit[1]
@@ -712,24 +768,24 @@ function _rasterize_direction_java(
     virtual_nodes=Set{Int}(),
     upper_hit::Bool=false,
 )
-    pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit)
+    strict_java_float = _strict_java_float(cfg)
+    projection =
+        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
 
-    T = isempty(projected_mesh_area) ? typeof(plotbox.pixel_area) : valtype(projected_mesh_area)
-    ratios = Dict{Int,T}()
-    for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
-        if !get(cfg.general, "area_ratio", true)
-            ratios[nid] = one(T)
+    ratios = Dict{Int,Float64}()
+    for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
+        if !cfg.general.area_ratio
+            ratios[nid] = 1.0
         else
-            ppa = get(projected_pixels_area, nid, zero(T))
-            ratios[nid] = ppa > zero(T) ? get(projected_mesh_area, nid, zero(T)) / ppa : one(T)
+            ppa = get(projection.projected_pixels_area, nid, 0.0)
+            ratios[nid] = ppa > 0.0 ? get(projection.projected_mesh_area, nid, 0.0) / ppa : 1.0
         end
     end
 
-    visible_area = Dict{Int,T}()
-    for stack in values(pixel_hits)
+    visible_area = Dict{Int,Float64}()
+    for stack in values(projection.pixel_hits)
         isempty(stack) && continue
-        # Preserve insertion order on height ties.
+        # Java uses a stable sort for hit heights; preserve insertion order on ties.
         sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 
         # VirtualSensor nodes are transparent: they receive without occluding other nodes.
@@ -739,7 +795,7 @@ function _rasterize_direction_java(
             nid = _hit_node(hit)
             if nid in virtual_nodes
                 if !non_virtual_seen
-                    visible_area[nid] = get(visible_area, nid, zero(T)) + plotbox.pixel_area * get(ratios, nid, one(T))
+                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)
                 end
             else
                 first_non_virtual = nid
@@ -748,21 +804,23 @@ function _rasterize_direction_java(
             end
         end
         if first_non_virtual != 0
-            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, zero(T)) + plotbox.pixel_area * get(ratios, first_non_virtual, one(T))
+            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * get(ratios, first_non_virtual, 1.0)
         end
     end
 
-    return visible_area, node_hits
+    return visible_area, projection.node_hits
 end
 
 function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
     toricity = _cfg_toricity(cfg)
     use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
-    T = isempty(vertices) ? typeof(plotbox.pixel_area) : typeof(first(vertices)[1])
-    pixel_hits = Dict{Int,Vector{Tuple{T,Int}}}()
+    strict_java_float = _strict_java_float(cfg)
+    unit_scale = Float32(_projection_unit_scale(cfg))
+
+    pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
-    projected_mesh_area = Dict{Int,T}()
-    projected_pixels_area = Dict{Int,T}()
+    projected_mesh_area = Dict{Int,Float64}()
+    projected_pixels_area = Dict{Int,Float64}()
 
     @inbounds for fi in eachindex(faces)
         f = faces[fi]
@@ -786,96 +844,130 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
             plotbox.ny,
             toricity,
             use_upper_hit,
+            strict_java_float,
+            unit_scale,
         )
     end
 
     _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg)
-
-    return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+    return DirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false)
+function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
     if cache_ctx === nothing
         return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
     end
 
-    path = _projection_cache_path(cache_ctx, direction, upper_hit)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
         rm(path; force=true)
     end
 
-    pixel_hits, node_hits, projected_mesh_area, projected_pixels_area =
-        _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
-    _write_projection_cache(path, pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
-    return pixel_hits, node_hits, projected_mesh_area, projected_pixels_area
+    result = _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
+    _write_projection_cache(path, result)
+    return result
+end
+
+function _strict_java_float(cfg::LightConfig)
+    false
+end
+
+function _projection_unit_scale(cfg::LightConfig)
+    1.0
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
-    T = typeof(plotbox.origin_x)
-    x_min = plotbox.origin_x
-    y_min = plotbox.origin_y
-    x_max = plotbox.origin_x + plotbox.xdim
-    y_max = plotbox.origin_y + plotbox.ydim
+    # Match Java BoxPaving behavior: compute paving in cm with float-based coordinates.
+    x_min_m = Float32(plotbox.origin_x)
+    y_min_m = Float32(plotbox.origin_y)
+    x_max_m = Float32(plotbox.origin_x + plotbox.xdim)
+    y_max_m = Float32(plotbox.origin_y + plotbox.ydim)
 
-    plot_x = plotbox.xdim
-    plot_y = plotbox.ydim
-    plot_area_m2 = plot_x * plot_y
+    plot_x_m = Float64(Float32(x_max_m - x_min_m))
+    plot_y_m = Float64(Float32(y_max_m - y_min_m))
+    plot_area_m2 = plot_x_m * plot_y_m
     cobble_area_m2 = plot_area_m2 / max(cobble_count, 1)
     cobble_edge_m = sqrt(cobble_area_m2)
 
-    nx = max(1, floor(Int, plot_x / cobble_edge_m))
-    ny = max(1, floor(Int, plot_y / cobble_edge_m))
-    cobble_x = plot_x / nx
-    cobble_y = plot_y / ny
+    nx = max(1, floor(Int, plot_x_m / cobble_edge_m))
+    ny = max(1, floor(Int, plot_y_m / cobble_edge_m))
+    cobble_x_cm = (plot_x_m / nx) * 100.0
+    cobble_y_cm = (plot_y_m / ny) * 100.0
 
-    min_size = oftype(x_min, 1e-6)
-    z = oftype(x_min, 0.005)
+    x_min_cm = Float64(Float32(x_min_m * 100.0f0))
+    y_min_cm = Float64(Float32(y_min_m * 100.0f0))
+    x_max_cm = Float64(Float32(x_max_m * 100.0f0))
+    y_max_cm = Float64(Float32(y_max_m * 100.0f0))
 
-    vertices = Vector{typeof(StaticArrays.SVector(x_min, y_min, z))}()
-    faces = GeometryBasics.TriangleFace{Int}[]
+    min_size_cm = 1e-4
+    z_cm = Float32(0.5)
+
+    vertices = StaticArrays.SVector{3,Float64}[]
+    faces = PlantGeom.Face3[]
     face2node = Int[]
-    node_area = Dict{Int,T}()
+    node_area = Dict{Int,Float64}()
 
     node_id = first_node_id
-    x = x_min
-    while x < x_max
-        x_size = min(cobble_x, x_max - x)
-        if x_size > min_size
-            y = y_min
-            while y < y_max
-                y_size = min(cobble_y, y_max - y)
-                if y_size > min_size
-                    p1 = StaticArrays.SVector(x, y, z)
-                    p2 = StaticArrays.SVector(x + x_size, y, z)
-                    p3 = StaticArrays.SVector(x + x_size, y + y_size, z)
-                    p4 = StaticArrays.SVector(x, y + y_size, z)
+    x_cm = x_min_cm
+    while x_cm < x_max_cm
+        x_size_cm = (x_cm + cobble_x_cm > x_max_cm) ? (x_max_cm - x_cm) : cobble_x_cm
+        if x_size_cm > min_size_cm
+            y_cm = y_min_cm
+            while y_cm < y_max_cm
+                y_size_cm = (y_cm + cobble_y_cm > y_max_cm) ? (y_max_cm - y_cm) : cobble_y_cm
+                if y_size_cm > min_size_cm
+                    x_center_cm = x_cm + (x_size_cm / 2.0)
+                    y_center_cm = y_cm + (y_size_cm / 2.0)
+
+                    x0 = Float32(-x_size_cm / 2.0)
+                    x1 = Float32(x_size_cm / 2.0)
+                    y0 = Float32(-y_size_cm / 2.0)
+                    y1 = Float32(y_size_cm / 2.0)
+                    xc = Float32(x_center_cm)
+                    yc = Float32(y_center_cm)
+                    # Match Java cm->m conversion path (float scaling by 0.01f).
+                    p1x = Float32(x0 + xc) * 0.01f0
+                    p2x = Float32(x1 + xc) * 0.01f0
+                    p3x = Float32(x1 + xc) * 0.01f0
+                    p4x = Float32(x0 + xc) * 0.01f0
+                    p1y = Float32(y0 + yc) * 0.01f0
+                    p2y = Float32(y0 + yc) * 0.01f0
+                    p3y = Float32(y1 + yc) * 0.01f0
+                    p4y = Float32(y1 + yc) * 0.01f0
+                    z_m = z_cm * 0.01f0
+
+                    p1 = StaticArrays.SVector{3,Float64}(Float64(p1x), Float64(p1y), Float64(z_m))
+                    p2 = StaticArrays.SVector{3,Float64}(Float64(p2x), Float64(p2y), Float64(z_m))
+                    p3 = StaticArrays.SVector{3,Float64}(Float64(p3x), Float64(p3y), Float64(z_m))
+                    p4 = StaticArrays.SVector{3,Float64}(Float64(p4x), Float64(p4y), Float64(z_m))
+
                     base = length(vertices)
                     push!(vertices, p1, p2, p3, p4)
-                    push!(faces, GeometryBasics.TriangleFace{Int}(base + 1, base + 2, base + 3))
-                    push!(faces, GeometryBasics.TriangleFace{Int}(base + 1, base + 3, base + 4))
+                    push!(faces, PlantGeom.Face3(base + 1, base + 2, base + 3))
+                    push!(faces, PlantGeom.Face3(base + 1, base + 3, base + 4))
                     push!(face2node, node_id, node_id)
-                    node_area[node_id] = x_size * y_size
+                    node_area[node_id] = (x_size_cm * y_size_cm) / 10000.0
                     node_id += 1
                 end
-                y += cobble_y
+                y_cm += cobble_y_cm
             end
         end
-        x += cobble_x
+        x_cm += cobble_x_cm
     end
 
     return vertices, faces, face2node, node_area
 end
 
 function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
-    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point{3,Float64}, scene.merged_mesh)
-    vertices = [StaticArrays.SVector(v[1], v[2], v[3]) for v in raw_vertices]
-    all_faces = collect(GeometryBasics.decompose(GeometryBasics.TriangleFace{Int}, scene.merged_mesh))
+    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
+    vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
+    all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
     all_face2node = collect(scene.face2node)
 
     ignored = _ignored_group_types(cfg)
-    faces = GeometryBasics.TriangleFace{Int}[]
+    faces = PlantGeom.Face3[]
     face2node = Int[]
     for i in eachindex(all_faces)
         node_id = all_face2node[i]
@@ -885,18 +977,18 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
-    plotbox = _plotbox(scene, vertices, get(cfg.general, "pixel_size", 0.0025))
+    plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
 
     node_ids = unique(face2node)
-    node_group = Dict{Int,String}(nid => get(scene.node_group, nid, "") for nid in node_ids)
+    node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
     plot_paving = _cfg_plot_paving(cfg)
     if plot_paving > 0
-        first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
+        first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
         paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
         v_offset = length(vertices)
         append!(vertices, paving_vertices)
         for f in paving_faces
-            push!(faces, GeometryBasics.TriangleFace{Int}(f[1] + v_offset, f[2] + v_offset, f[3] + v_offset))
+            push!(faces, PlantGeom.Face3(f[1] + v_offset, f[2] + v_offset, f[3] + v_offset))
         end
         append!(face2node, paving_face2node)
         append!(node_ids, unique(paving_face2node))
@@ -905,7 +997,25 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
         end
     end
 
-    return vertices, faces, face2node, unique(node_ids), plotbox, node_group
+    return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group)
+end
+
+function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    keys_by_node = Dict{Int,Tuple{Int,Int}}()
+
+    pav_ids = sort(Int[nid for nid in geometry.node_ids if get(geometry.node_group, nid, "") == "pavement"])
+    for (i, nid) in enumerate(pav_ids)
+        keys_by_node[nid] = (-1, i + 1)
+    end
+
+    for nid in geometry.node_ids
+        haskey(keys_by_node, nid) && continue
+        object_id = _scene_object_id(scene, nid, 1)
+        source_topology_id = _scene_source_topology_id(scene, nid, nid + 1)
+        keys_by_node[nid] = (object_id, source_topology_id)
+    end
+    keys_by_node
 end
 
 """
@@ -951,25 +1061,27 @@ function compute_first_order(
     ::RasterCPUBackend,
 )
 
-    vertices, faces, face2node, node_ids, plotbox, node_group = _scene_geometry_for_interception(scene, cfg)
-    virtual_nodes = _virtual_sensor_node_ids(node_group, cfg)
+    geometry = _scene_geometry_for_interception(scene, cfg)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, cfg)
     upper_hit = _use_upper_hit_pixel_table(cfg)
-    cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
 
-    projected_area_per_node = Dict(id => 0.0 for id in node_ids)
-    incident_par_power_per_node = Dict(id => 0.0 for id in node_ids)
-    incident_nir_power_per_node = Dict(id => 0.0 for id in node_ids)
-    hits_per_node = Dict(id => 0 for id in node_ids)
+    projected_area_per_node = Dict(id => 0.0 for id in geometry.node_ids)
+    incident_power = SpectralNodeValues(
+        Dict(id => 0.0 for id in geometry.node_ids),
+        Dict(id => 0.0 for id in geometry.node_ids),
+    )
+    hits_per_node = Dict(id => 0 for id in geometry.node_ids)
 
     for (k, sector) in enumerate(turtle.sectors)
         visible_area, node_hits =
             _rasterize_direction_java(
-                vertices,
-                faces,
-                face2node,
+                geometry.vertices,
+                geometry.faces,
+                geometry.face2node,
                 sector.direction,
                 cfg,
-                plotbox;
+                geometry.plotbox;
                 cache_ctx=cache_ctx,
                 virtual_nodes=virtual_nodes,
                 upper_hit=upper_hit,
@@ -988,25 +1100,33 @@ function compute_first_order(
         for (nid, pa) in visible_area
             pa <= 0.0 && continue
             projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-            incident_par_power_per_node[nid] = get(incident_par_power_per_node, nid, 0.0) + par_flux * pa
-            incident_nir_power_per_node[nid] = get(incident_nir_power_per_node, nid, 0.0) + nir_flux * pa
+            incident_power.par[nid] = get(incident_power.par, nid, 0.0) + par_flux * pa
+            incident_power.nir[nid] = get(incident_power.nir, nid, 0.0) + nir_flux * pa
         end
     end
 
     emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     if !isempty(emitter_nodes)
-        w = _emitter_transfer_weights(vertices, faces, face2node, turtle, cfg, plotbox, emitter_nodes, cache_ctx)
+        w = _emitter_transfer_weights(
+            geometry.vertices,
+            geometry.faces,
+            geometry.face2node,
+            turtle,
+            cfg,
+            geometry.plotbox,
+            emitter_nodes,
+            cache_ctx,
+        )
         for ((to, src), ww) in w
-            incident_par_power_per_node[to] = get(incident_par_power_per_node, to, 0.0) + ww * get(emit_par, src, 0.0)
-            incident_nir_power_per_node[to] = get(incident_nir_power_per_node, to, 0.0) + ww * get(emit_nir, src, 0.0)
+            incident_power.par[to] = get(incident_power.par, to, 0.0) + ww * get(emit_par, src, 0.0)
+            incident_power.nir[to] = get(incident_power.nir, to, 0.0) + ww * get(emit_nir, src, 0.0)
         end
     end
 
     FirstOrderResult(
         projected_area_per_node,
-        incident_par_power_per_node,
-        incident_nir_power_per_node,
+        incident_power,
         hits_per_node,
     )
 end

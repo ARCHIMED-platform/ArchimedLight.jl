@@ -32,8 +32,8 @@ end
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
     cfg = ArchimedLight.read_light_config(paths.config)
-    scene = ArchimedLight.read_scene(cfg.source_files.scene)
-    meteo = ArchimedLight.read_meteo(cfg.source_files.meteo)
+    scene = ArchimedLight.read_scene(cfg.paths.scene)
+    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
     rows = ArchimedLight.prepare_meteo(meteo, cfg).rows
     return (paths=paths, cfg=cfg, scene=scene, meteo=meteo, rows=rows)
 end
@@ -42,13 +42,20 @@ function _override_cfg(cfg0::ArchimedLight.LightConfig; kwargs...)
     cfg = deepcopy(cfg0)
     for (k, v) in kwargs
         if k == :pixel_size_m
-            cfg.general["pixel_size"] = Float64(v)
+            cfg.general.pixel_size = Float64(v)
+        elseif k == :toricity
+            cfg.general.toricity = Bool(v)
+        elseif k == :scattering
+            cfg.general.scattering = Bool(v)
+        elseif k == :cache_radiation
+            cfg.general.cache_radiation = Bool(v)
+        elseif k == :cache_pixel_table
+            cfg.general.cache_pixel_table = Bool(v)
         else
-            cfg.general[String(k)] = v
+            setproperty!(cfg.general, k, v)
         end
     end
-    ArchimedLight.refresh_light_config!(cfg; reload_models=true)
-    cfg.outputs.directory = mktempdir()
+    cfg.outputs.output_directory = mktempdir()
     return cfg
 end
 
@@ -56,12 +63,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float64}[]
     faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
-    total_area_per_node = Dict{Int,Float64}()
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
+    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
     xs = Float64[]
     ys = Float64[]
 
@@ -88,28 +90,24 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
         area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
-        total_area_per_node[i] = area1 + area2
-        barycenter_per_node[i] = (
+        area = area1 + area2
+        barycenter = (
             (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
-        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
-        node_group[i] = String(get(spec, :group, "plate"))
-        node_type[i] = String(get(spec, :type, "plate"))
+        source_topology_id = Int(get(spec, :source_topology_id, i))
+        object_id = Int(get(spec, :object_id, source_topology_id))
+        group = String(get(spec, :group, "plate"))
+        type_name = String(get(spec, :type, "plate"))
+        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
     end
 
     return ArchimedLight.SceneGeometry(
         nothing,
         GeometryBasics.Mesh(points, faces),
         face2node,
-        total_area_per_node,
-        barycenter_per_node,
-        source_topology_id_per_node,
-        object_id_per_node,
-        node_group,
-        node_type,
+        nodes,
         "benchmark_synthetic_scene",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -173,8 +171,8 @@ const SYNTHETIC = _synthetic_fixture()
 
 SUITE["IO"] = BenchmarkGroup()
 SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_light_config($(SIMPLEPLANT.paths.config))
-SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.source_files.scene)) evals = 1
-SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.source_files.meteo))
+SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.paths.scene)) evals = 1
+SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.paths.meteo))
 
 SUITE["Run light"] = BenchmarkGroup()
 SUITE["Run light"]["step"] = BenchmarkGroup()
