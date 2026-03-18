@@ -2,18 +2,18 @@ using OrderedCollections: OrderedDict
 
 const _SYNTHETIC_CASE_FILTERS = Set(filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_SYNTHETIC_CASE", ""), ",")))))
 
-_incident_par_initial_flux(budget) = budget.incident.par.initial_flux_per_node
-_incident_nir_initial_flux(budget) = budget.incident.nir.initial_flux_per_node
-_incident_par_flux(budget) = budget.incident.par.flux_per_node
-_incident_nir_flux(budget) = budget.incident.nir.flux_per_node
-_incident_par_initial_energy(budget) = budget.incident.par.initial_energy_per_node
-_incident_nir_initial_energy(budget) = budget.incident.nir.initial_energy_per_node
-_incident_par_energy(budget) = budget.incident.par.energy_per_node
-_incident_nir_energy(budget) = budget.incident.nir.energy_per_node
-_absorbed_par_initial_flux(budget) = budget.absorbed.par.initial_flux_per_node
-_absorbed_nir_initial_flux(budget) = budget.absorbed.nir.initial_flux_per_node
-_absorbed_par_initial_energy(budget) = budget.absorbed.par.initial_energy_per_node
-_absorbed_nir_initial_energy(budget) = budget.absorbed.nir.initial_energy_per_node
+_incident_par_initial_flux(budget) = budget.ri_par_0_f_per_node
+_incident_nir_initial_flux(budget) = budget.ri_nir_0_f_per_node
+_incident_par_flux(budget) = budget.ri_par_f_per_node
+_incident_nir_flux(budget) = budget.ri_nir_f_per_node
+_incident_par_initial_energy(budget) = budget.ri_par_0_q_per_node
+_incident_nir_initial_energy(budget) = budget.ri_nir_0_q_per_node
+_incident_par_energy(budget) = budget.ri_par_q_per_node
+_incident_nir_energy(budget) = budget.ri_nir_q_per_node
+_absorbed_par_initial_flux(budget) = budget.ra_par_0_f_per_node
+_absorbed_nir_initial_flux(budget) = budget.ra_nir_0_f_per_node
+_absorbed_par_initial_energy(budget) = budget.ra_par_0_q_per_node
+_absorbed_nir_initial_energy(budget) = budget.ra_nir_0_q_per_node
 
 function _synthetic_case_enabled(name::String)
     isempty(_SYNTHETIC_CASE_FILTERS) && return true
@@ -31,22 +31,22 @@ function _synthetic_cfg(
     models::Vector{String}=String[],
 )
     out = deepcopy(cfg)
-    out.general["all_in_turtle"] = all_in_turtle
-    out.general["sky_sectors"] = sectors
-    out.general["scattering"] = scattering
-    out.general["pixel_size"] = pixel_size
-    out.general["toricity"] = toricity
-    out.general["cache_radiation"] = cache_radiation
-    base = out.source_files.base_dir
-    out.source_files.models = OrderedDict{String,String}()
+    out.general.all_in_turtle = all_in_turtle
+    out.general.turtle_sectors = sectors
+    out.general.scattering = scattering
+    out.general.pixel_size = pixel_size
+    out.general.toricity = toricity
+    out.general.cache_radiation = cache_radiation
+    base = out.paths.base_dir
+    out.paths.models = OrderedDict{String,String}()
     if !isempty(models)
         for rel in models
             abs_path = isabspath(rel) ? rel : normpath(joinpath(base, rel))
-            group = ArchimedLight._model_group_from_file(abs_path)
-            out.source_files.models[group] = abs_path
+            group = ArchimedLight._parse_group_model(abs_path).group
+            out.paths.models[group] = abs_path
         end
     end
-    out.models = OrderedDict{String,OrderedDict{String,Any}}()
+    out.models = OrderedDict{String,ArchimedLight.GroupModelConfig}()
     ArchimedLight.refresh_light_config!(out; reload_models=!isempty(models))
     return out
 end
@@ -119,10 +119,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         face2node,
         total_area_per_node,
         barycenter_per_node,
-        source_topology_id_per_node,
-        object_id_per_node,
         node_group,
         node_type,
+        source_topology_id_per_node,
+        object_id_per_node,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -669,16 +669,16 @@ end
                     step_duration_seconds=2.0,
                     columns=["node_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
                 ).rows
-                row_by_node = Dict(Int(r.node_id) => r for r in rows)
+                row_by_node = Dict(Int(r["node_id"]) => r for r in rows)
 
-                @test isapprox(Float64(row_by_node[1].Ri_PAR_0_q), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ri_NIR_0_q), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ra_PAR_0_q), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ra_NIR_0_q), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[2].Ri_PAR_0_q), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ri_NIR_0_q), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ra_PAR_0_q), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ra_NIR_0_q), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[1]["Ri_PAR_0_q"]), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1]["Ri_NIR_0_q"]), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1]["Ra_PAR_0_q"]), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[1]["Ra_NIR_0_q"]), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
+                @test isapprox(Float64(row_by_node[2]["Ri_PAR_0_q"]), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2]["Ri_NIR_0_q"]), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2]["Ra_PAR_0_q"]), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
+                @test isapprox(Float64(row_by_node[2]["Ra_NIR_0_q"]), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
             end
         end
     end

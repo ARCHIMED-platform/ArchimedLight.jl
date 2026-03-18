@@ -273,16 +273,16 @@ end
 function _synthetic_scene_for_source(source_id::String)
     if source_id == "single_plate_direct"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
         ])
     elseif source_id == "partial_overlap_direct"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", item_id=1),
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", item_id=2),
+            (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", object_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", object_id=2),
         ])
     elseif source_id == "toricity_wraparound"
         scene = _synthetic_horizontal_scene([
-            (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", item_id=1),
+            (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
         ])
         return ArchimedLight.SceneGeometry(
             scene.mtg,
@@ -292,19 +292,19 @@ function _synthetic_scene_for_source(source_id::String)
             scene.barycenter_per_node,
             scene.node_group,
             scene.node_type,
-            scene.java_item_id_per_node,
-            scene.java_component_id_per_node,
+            scene.source_topology_id_per_node,
+            scene.object_id_per_node,
             scene.source_path,
             (0.0, 0.0, 1.0, 1.0),
         )
     elseif source_id == "stacked_scattering"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", item_id=1),
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", item_id=2),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
         ])
     elseif source_id == "cached_series_parity"
         return _synthetic_horizontal_scene([
-            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", item_id=1),
+            (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
         ])
     end
     error("Unsupported synthetic source $(repr(source_id))")

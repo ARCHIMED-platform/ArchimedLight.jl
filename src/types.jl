@@ -14,8 +14,43 @@ mutable struct LightConfigPaths
     config::String
     scene::String
     meteo::String
-    models::Vector{String}
+    models::OrderedDict{String,String}
     base_dir::String
+end
+
+mutable struct OpticalProperties
+    par::Float64
+    nir::Float64
+    extras::OrderedDict{String,Any}
+end
+
+mutable struct InterceptionModelConfig
+    use::Union{Nothing,String}
+    model::String
+    transparency::Float64
+    optical_properties::Union{Nothing,OpticalProperties}
+    variants::OrderedDict{String,OrderedDict{String,Any}}
+    extras::OrderedDict{String,Any}
+end
+
+mutable struct LightEmitterConfig
+    model::String
+    radiance::Float64
+    gamma::OpticalProperties
+    extras::OrderedDict{String,Any}
+end
+
+mutable struct TypeModelConfig
+    interception::Union{Nothing,InterceptionModelConfig}
+    light_emitter::Union{Nothing,LightEmitterConfig}
+    plot_paving::Int
+    extras::OrderedDict{String,Any}
+end
+
+mutable struct GroupModelConfig
+    group::String
+    types::OrderedDict{String,TypeModelConfig}
+    extras::OrderedDict{String,Any}
 end
 
 mutable struct LightGeneralConfig
@@ -57,7 +92,7 @@ mutable struct LightConfig
     paths::LightConfigPaths
     general::LightGeneralConfig
     outputs::LightOutputsConfig
-    models::Vector{OrderedDict{String,Any}}
+    models::OrderedDict{String,GroupModelConfig}
     extras::OrderedDict{String,Any}
 end
 
@@ -74,8 +109,8 @@ struct SceneGeometry
     barycenter_per_node::Dict{Int,NTuple{3,Float64}}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
-    java_item_id_per_node::Dict{Int,Int}
-    java_component_id_per_node::Dict{Int,Int}
+    source_topology_id_per_node::Dict{Int,Int}
+    object_id_per_node::Dict{Int,Int}
     source_path::String
     scene_xy_bounds::Union{Nothing,NTuple{4,Float64}}
 end

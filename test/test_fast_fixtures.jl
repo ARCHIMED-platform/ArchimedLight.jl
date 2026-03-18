@@ -130,7 +130,7 @@ end
                     cfg;
                     meteo_row=meteo_row,
                     step_number=0,
-                    columns=["step_number", "item_id", "component_id", "area", "Ri_PAR_0_q"],
+                    columns=["step_number", "source_topology_id", "object_id", "area", "Ri_PAR_0_q"],
                     strict=false,
                 )
                 expected_csv = joinpath(case_root, "expected", "component_values.csv")
@@ -138,7 +138,7 @@ end
                 observed_rows = collect(Tables.rowtable(CSV.File(observed_csv; delim=';', normalizenames=false)))
 
                 @test length(observed_rows) == length(expected_rows)
-                key_notoric(row) = (Int(row.step_number), Int(row.item_id), Int(row.component_id))
+                key_notoric(row) = (Int(row.step_number), Int(row.source_topology_id))
                 expected_map = Dict(key_notoric(r) => r for r in expected_rows)
                 observed_map = Dict(key_notoric(r) => r for r in observed_rows)
                 @test Set(keys(observed_map)) == Set(keys(expected_map))
@@ -173,7 +173,7 @@ end
                     cfg;
                     meteo_row=meteo_row,
                     step_number=0,
-                    columns=["step_number", "item_id", "component_id", "area", "Ri_PAR_0_q"],
+                    columns=["step_number", "source_topology_id", "object_id", "area", "Ri_PAR_0_q"],
                     strict=false,
                 )
                 expected_csv = joinpath(case_root, "expected", "component_values.csv")
@@ -181,7 +181,7 @@ end
                 observed_rows = collect(Tables.rowtable(CSV.File(observed_csv; delim=';', normalizenames=false)))
 
                 @test length(observed_rows) == length(expected_rows)
-                key_toric(row) = (Int(row.step_number), Int(row.item_id), Int(row.component_id))
+                key_toric(row) = (Int(row.step_number), Int(row.source_topology_id))
                 expected_map = Dict(key_toric(r) => r for r in expected_rows)
                 observed_map = Dict(key_toric(r) => r for r in observed_rows)
                 @test Set(keys(observed_map)) == Set(keys(expected_map))

@@ -113,10 +113,10 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         face2node,
         total_area_per_node,
         barycenter_per_node,
-        source_topology_id_per_node,
-        object_id_per_node,
         node_group,
         node_type,
+        source_topology_id_per_node,
+        object_id_per_node,
         "benchmark_synthetic_scene",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )

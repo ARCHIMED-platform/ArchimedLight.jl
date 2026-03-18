@@ -44,7 +44,10 @@ function read_java_component_values(path::String)
     rows = collect(CSV.File(path; delim=';'))
     d = Dict{Tuple{Int,Int},NamedTuple}()
     for r in rows
-        key = (to_int(getproperty(r, :item_id)), to_int(getproperty(r, :component_id)))
+        object_id = :object_id in propertynames(r) ? to_int(getproperty(r, :object_id)) : to_int(getproperty(r, :item_id))
+        source_topology_id =
+            :source_topology_id in propertynames(r) ? to_int(getproperty(r, :source_topology_id)) : to_int(getproperty(r, :component_id))
+        key = (object_id, source_topology_id)
         names = propertynames(r)
         d[key] = (
             area=(:area in names ? to_float(getproperty(r, :area)) : NaN),
@@ -58,7 +61,7 @@ function read_java_component_values(path::String)
 end
 
 function build_julia_component_values(scene, cfg, step)
-    key_by_node = ArchimedLight._interception_java_keys(scene, cfg)
+    key_by_node = ArchimedLight._interception_output_keys(scene, cfg)
     area_by_node = node_area_from_interception_geometry(scene, cfg)
     custom0 = get(step.budget.extra_0_q_per_band, "CUSTOM", Dict{Int,Float64}())
     customn = get(step.budget.extra_q_per_band, "CUSTOM", Dict{Int,Float64}())
@@ -85,7 +88,7 @@ function write_component_comparison(out_csv::String, java_vals, julia_vals)
 
     mkpath(dirname(out_csv))
     open(out_csv, "w") do io
-        println(io, "item_id;component_id;java_area;julia_area;java_Ri_PAR_0_q;julia_Ri_PAR_0_q;java_Ri_PAR_q;julia_Ri_PAR_q;java_Ri_custom_0_q;julia_Ri_custom_0_q;java_Ri_custom_q;julia_Ri_custom_q;absdiff_Ri_PAR_q;reldiff_Ri_PAR_q")
+        println(io, "object_id;source_topology_id;java_area;julia_area;java_Ri_PAR_0_q;julia_Ri_PAR_0_q;java_Ri_PAR_q;julia_Ri_PAR_q;java_Ri_custom_0_q;julia_Ri_custom_0_q;java_Ri_custom_q;julia_Ri_custom_q;absdiff_Ri_PAR_q;reldiff_Ri_PAR_q")
         for key in keys_common
             jv = java_vals[key]
             lv = julia_vals[key]
@@ -208,15 +211,17 @@ function main()
     println("- staged vs pipeline max abs Ri_NIR_q diff: ", staged_pipeline_nir_diff)
 
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
-    par_q_by_component = Dict{Int,Float64}()
+    par_q_by_source_topology = Dict{Int,Float64}()
     for (nid, q) in step.budget.ri_par_q_per_node
-        comp_id = get(scene.java_component_id_per_node, nid, nothing)
-        comp_id === nothing && continue
-        par_q_by_component[Int(comp_id)] = Float64(q)
+        source_topology_id = get(scene.source_topology_id_per_node, nid, nothing)
+        source_topology_id === nothing && continue
+        par_q_by_source_topology[Int(source_topology_id)] = Float64(q)
     end
     traverse!(scene.mtg) do node
-        comp_id = Int(node_id(node)) + 1
-        node[:Ri_PAR_q] = get(par_q_by_component, comp_id, nothing)
+        source_topology_id = get(node, :source_topology_id, nothing)
+        source_topology_id === nothing && return true
+        node[:Ri_PAR_q] = get(par_q_by_source_topology, to_int(source_topology_id), nothing)
+        return true
     end
 
     # 3D visualization using PlantGeom + CairoMakie, colored by intercepted PAR.
@@ -247,14 +252,16 @@ function main()
         end
 
         # Map Java Ri_PAR_q on MTG nodes and render a second comparison figure.
-        java_par_by_component = Dict{Int,Float64}()
-        for ((item_id, component_id), vals) in java_vals
-            item_id == 1 || continue
-            java_par_by_component[component_id] = vals.Ri_PAR_q
+        java_par_by_source_topology = Dict{Int,Float64}()
+        for ((object_id, source_topology_id), vals) in java_vals
+            object_id == 1 || continue
+            java_par_by_source_topology[source_topology_id] = vals.Ri_PAR_q
         end
         traverse!(scene.mtg) do node
-            comp_id = Int(node_id(node)) + 1
-            node[:Ri_PAR_q_java] = get(java_par_by_component, comp_id, nothing)
+            source_topology_id = get(node, :source_topology_id, nothing)
+            source_topology_id === nothing && return true
+            node[:Ri_PAR_q_java] = get(java_par_by_source_topology, to_int(source_topology_id), nothing)
+            return true
         end
         fig_java, _, p_java = plantviz(scene.mtg, color=:Ri_PAR_q_java)
         PlantGeom.colorbar(fig_java[1, 2], p_java)

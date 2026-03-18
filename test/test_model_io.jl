@@ -41,10 +41,11 @@ import MultiScaleTreeGraph
         write(meteo_path, "date;hour_start;hour_end;Rg;Tac;latitude;longitude;altitude\n2016/07/01;08:00:00;09:00:00;0;25;0;0;0\n")
 
         cfg = ArchimedLight.read_light_config(cfg_path)
-        @test basename.(cfg.paths.models) == ["plant.yml"]
+        @test collect(keys(cfg.paths.models)) == ["plant"]
+        @test basename.(collect(values(cfg.paths.models))) == ["plant.yml"]
 
         cfg.general.pixel_size = 0.025
-        cfg.models[1]["Type"]["Leaf"]["Interception"]["transparency"] = 0.25
+        cfg.models["plant"].types["Leaf"].interception.transparency = 0.25
 
         @test isapprox(cfg.general.pixel_size, 0.025; atol=1e-12)
 

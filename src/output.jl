@@ -3,8 +3,9 @@ import CSV
 const _COMPONENT_VARIABLE_ORDER = [
     "step_number",
     "step_duration",
-    "item_id",
-    "component_id",
+    "node_id",
+    "source_topology_id",
+    "object_id",
     "group",
     "type",
     "area",
@@ -67,7 +68,7 @@ const _SUMMARY_VARIABLE_ORDER = [
     "step_duration",
     "group",
     "type",
-    "item_id",
+    "object_id",
     "area",
     "Ri_q",
 ]
@@ -449,8 +450,8 @@ function _node_ids_for_output(scene::SceneGeometry)
     sort!(
         ids;
         by=nid -> (
-            get(scene.java_item_id_per_node, nid, 0),
-            get(scene.java_component_id_per_node, nid, nid),
+            get(scene.object_id_per_node, nid, 0),
+            get(scene.source_topology_id_per_node, nid, nid),
             nid,
         ),
     )
@@ -484,25 +485,25 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         end
     end
 
-    key_by_node = _interception_java_keys(scene, cfg)
+    key_by_node = _interception_output_keys(scene, cfg)
     node_ids = collect(keys(key_by_node))
     sort!(
         node_ids;
         by=nid -> begin
-            item_id, component_id = key_by_node[nid]
-            (item_id, component_id, nid)
+            object_id, source_topology_id = key_by_node[nid]
+            (object_id, source_topology_id, nid)
         end,
     )
 
-    item_per_node = Dict{Int,Int}()
-    component_per_node = Dict{Int,Int}()
+    source_topology_id_per_node = Dict{Int,Int}()
+    object_id_per_node = Dict{Int,Int}()
     group_per_node = Dict{Int,String}()
     type_per_node = Dict{Int,String}()
     group_type_hints = _group_type_hints(cfg)
     for nid in node_ids
-        item_id, component_id = key_by_node[nid]
-        item_per_node[nid] = item_id
-        component_per_node[nid] = component_id
+        object_id, source_topology_id = key_by_node[nid]
+        source_topology_id_per_node[nid] = source_topology_id
+        object_id_per_node[nid] = object_id
         g = haskey(node_group_geom, nid) ? node_group_geom[nid] : get(scene.node_group, nid, "")
         group_per_node[nid] = g
         t = strip(get(scene.node_type, nid, ""))
@@ -524,34 +525,32 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         node_ids=node_ids,
         area_per_node=area_per_node,
         barycenter_per_node=barycenter_per_node,
-        item_per_node=item_per_node,
-        component_per_node=component_per_node,
+        source_topology_id_per_node=source_topology_id_per_node,
+        object_id_per_node=object_id_per_node,
         group_per_node=group_per_node,
         type_per_node=type_per_node,
     )
 end
 
-function _java_id_maps(scene::SceneGeometry, cfg::LightConfig)
-    keys_by_node = _interception_java_keys(scene, cfg)
-    item_per_node = Dict{Int,Int}()
-    comp_per_node = Dict{Int,Int}()
+function _output_identity_maps(scene::SceneGeometry, cfg::LightConfig)
+    keys_by_node = _interception_output_keys(scene, cfg)
+    object_id_per_node = Dict{Int,Int}()
+    source_topology_id_per_node = Dict{Int,Int}()
     for (nid, key) in keys_by_node
-        item_per_node[nid] = key[1]
-        comp_per_node[nid] = key[2]
+        object_id_per_node[nid] = key[1]
+        source_topology_id_per_node[nid] = key[2]
     end
-    return item_per_node, comp_per_node
+    return object_id_per_node, source_topology_id_per_node
 end
 
 function _group_type_hints(cfg::LightConfig)
     out = Dict{String,Vector{String}}()
-    for model in cfg.models
-        group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
+    for group_model in values(cfg.models)
+        group = strip(group_model.group)
         isempty(group) && continue
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
         names = String[]
-        for k in keys(types)
-            s = strip(string(k))
+        for type_name in keys(group_model.types)
+            s = strip(type_name)
             isempty(s) || push!(names, s)
         end
         isempty(names) || (out[group] = sort(unique(names)))
@@ -661,8 +660,8 @@ function _component_variable_value(
     step_duration::Float64,
     area_per_node::Dict{Int,Float64},
     barycenter_per_node::Dict{Int,NTuple{3,Float64}},
-    item_per_node::Dict{Int,Int},
-    component_per_node::Dict{Int,Int},
+    source_topology_id_per_node::Dict{Int,Int},
+    object_id_per_node::Dict{Int,Int},
     group_per_node::Dict{Int,String},
     type_per_node::Dict{Int,String},
     absorptance_cache::Dict{String,Dict{Int,Float64}},
@@ -678,10 +677,12 @@ function _component_variable_value(
         return step_number
     elseif variable == "step_duration"
         return step_duration
-    elseif variable == "item_id"
-        return get(item_per_node, nid, -1)
-    elseif variable == "component_id"
-        return get(component_per_node, nid, nid)
+    elseif variable == "node_id"
+        return nid
+    elseif variable == "source_topology_id"
+        return get(source_topology_id_per_node, nid, nid)
+    elseif variable == "object_id"
+        return get(object_id_per_node, nid, -1)
     elseif variable == "group"
         return get(group_per_node, nid, "")
     elseif variable == "type"
@@ -772,8 +773,8 @@ function component_values_table(
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
     barycenter_per_node = meta.barycenter_per_node
-    item_per_node = meta.item_per_node
-    component_per_node = meta.component_per_node
+    source_topology_id_per_node = meta.source_topology_id_per_node
+    object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
     rows = Vector{Dict{String,Any}}(undef, length(node_ids))
@@ -795,8 +796,8 @@ function component_values_table(
                 step_duration,
                 area_per_node,
                 barycenter_per_node,
-                item_per_node,
-                component_per_node,
+                source_topology_id_per_node,
+                object_id_per_node,
                 group_per_node,
                 type_per_node,
                 absorptance_cache,
@@ -1215,13 +1216,13 @@ function scattering_iteration_log_table(
     per_iter, _, _ = _scattering_iteration_history_one_band(graph, initial, cfg, b, dflt)
     dt = _step_duration_output_local(meteo_row, nothing)
     w_to_mj = dt / 1e6
-    key_by_node = _interception_java_keys(scene, cfg)
+    key_by_node = _interception_output_keys(scene, cfg)
     node_ids = collect(keys(key_by_node))
     sort!(
         node_ids;
         by=nid -> begin
-            item_id, component_id = key_by_node[nid]
-            (item_id, component_id, nid)
+            object_id, source_topology_id = key_by_node[nid]
+            (object_id, source_topology_id, nid)
         end,
     )
     rows = Dict{String,Any}[]
@@ -1229,14 +1230,14 @@ function scattering_iteration_log_table(
         iter_idx = it - 1
         for nid in node_ids
             row = Dict{String,Any}()
-            item_id, component_id = key_by_node[nid]
+            object_id, source_topology_id = key_by_node[nid]
             for c in cols
                 if c == "step"
                     row[c] = step_number
                 elseif c == "plantid"
-                    row[c] = item_id
+                    row[c] = object_id
                 elseif c == "nodeid"
-                    row[c] = component_id
+                    row[c] = source_topology_id
                 elseif c == "iter"
                     row[c] = iter_idx
                 elseif c == "scat"
@@ -1303,7 +1304,7 @@ function node_links_stats_alldirs_table(
 )
     cols = columns === nothing ? copy(_NODE_LINKS_STATS_ALLDIRS_ORDER) : _canonical_node_links_stats_order(String.(columns))
     pair_counts, _, _, _ = _pair_counts_for_scattering(scene, turtle, cfg)
-    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
+    object_id_per_node, source_topology_id_per_node = _output_identity_maps(scene, cfg)
 
     neighbours_by_node = Dict{Int,Set{Int}}()
     hits_by_node = Dict{Int,Int}()
@@ -1324,15 +1325,15 @@ function node_links_stats_alldirs_table(
         hits_by_node[to] = get(hits_by_node, to, 0) + c
     end
 
-    node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(item_per_node, nid, -1), get(comp_per_node, nid, nid), nid))
+    node_ids = sort(collect(keys(neighbours_by_node)); by=nid -> (get(object_id_per_node, nid, -1), get(source_topology_id_per_node, nid, nid), nid))
     rows = Dict{String,Any}[]
     for nid in node_ids
         row = Dict{String,Any}()
         for c in cols
             if c == "plantid"
-                row[c] = get(item_per_node, nid, -1)
+                row[c] = get(object_id_per_node, nid, -1)
             elseif c == "nodeid"
-                row[c] = get(comp_per_node, nid, nid)
+                row[c] = get(source_topology_id_per_node, nid, nid)
             elseif c == "links"
                 row[c] = length(get(neighbours_by_node, nid, Set{Int}()))
             elseif c == "hits"
@@ -1376,7 +1377,7 @@ function node_links_dir_table(
 )
     0 <= direction_index < length(turtle.sectors) || error("direction_index out of bounds")
     cols = columns === nothing ? copy(_NODE_LINKS_DIR_ORDER) : _canonical_node_links_dir_order(String.(columns))
-    item_per_node, comp_per_node = _java_id_maps(scene, cfg)
+    object_id_per_node, source_topology_id_per_node = _output_identity_maps(scene, cfg)
     vertices, faces, face2node, _, plotbox, _ = _scene_geometry_for_interception(scene, cfg)
     cache_ctx = _projection_cache_context(vertices, faces, face2node, plotbox, cfg)
     sector = turtle.sectors[direction_index + 1]
@@ -1389,18 +1390,18 @@ function node_links_dir_table(
         for h in 1:(length(stack) - 1)
             n1 = stack[h][2]
             n2 = stack[h + 1][2]
-            k1 = (get(item_per_node, n1, -1), get(comp_per_node, n1, n1))
-            k2 = (get(item_per_node, n2, -1), get(comp_per_node, n2, n2))
+            k1 = (get(object_id_per_node, n1, -1), get(source_topology_id_per_node, n1, n1))
+            k2 = (get(object_id_per_node, n2, -1), get(source_topology_id_per_node, n2, n2))
             a, b = k1 <= k2 ? (n1, n2) : (n2, n1)
             counts[(a, b)] = get(counts, (a, b), 0) + 1
         end
     end
 
     keys_sorted = sort(collect(keys(counts)); by=k -> (
-        get(item_per_node, k[1], -1),
-        get(comp_per_node, k[1], k[1]),
-        get(item_per_node, k[2], -1),
-        get(comp_per_node, k[2], k[2]),
+        get(object_id_per_node, k[1], -1),
+        get(source_topology_id_per_node, k[1], k[1]),
+        get(object_id_per_node, k[2], -1),
+        get(source_topology_id_per_node, k[2], k[2]),
     ))
     rows = Dict{String,Any}[]
     for (n1, n2) in keys_sorted
@@ -1409,13 +1410,13 @@ function node_links_dir_table(
             if c == "dir"
                 row[c] = direction_index
             elseif c == "plantid1"
-                row[c] = get(item_per_node, n1, -1)
+                row[c] = get(object_id_per_node, n1, -1)
             elseif c == "id1"
-                row[c] = get(comp_per_node, n1, n1)
+                row[c] = get(source_topology_id_per_node, n1, n1)
             elseif c == "plantid2"
-                row[c] = get(item_per_node, n2, -1)
+                row[c] = get(object_id_per_node, n2, -1)
             elseif c == "id2"
-                row[c] = get(comp_per_node, n2, n2)
+                row[c] = get(source_topology_id_per_node, n2, n2)
             elseif c == "n"
                 row[c] = get(counts, (n1, n2), 0)
             else
@@ -1447,8 +1448,8 @@ end
 """
     summary_values_table(scene, steps, cfg; meteo_rows=nothing, start_step_number=0, columns=nothing, unavailable="NA")
 
-Build a Java-like `summary.csv` table represented as `(columns, rows)`.
-Rows are grouped by `(item_id, group, type)` for each step.
+Build a `summary.csv` table represented as `(columns, rows)`.
+Rows are grouped by `(object_id, group, type)` for each step.
 """
 function summary_values_table(
     scene::SceneGeometry,
@@ -1466,7 +1467,7 @@ function summary_values_table(
     meta = _output_node_metadata(scene, cfg)
     node_ids = meta.node_ids
     area_per_node = meta.area_per_node
-    item_per_node = meta.item_per_node
+    object_id_per_node = meta.object_id_per_node
     group_per_node = meta.group_per_node
     type_per_node = meta.type_per_node
 
@@ -1476,12 +1477,12 @@ function summary_values_table(
         step_no = start_step_number + i - 1
         acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
         for nid in node_ids
-            item = get(item_per_node, nid, -1)
+            object_id = get(object_id_per_node, nid, -1)
             group = get(group_per_node, nid, "")
             type = get(type_per_node, nid, unavailable)
             area = get(area_per_node, nid, 0.0)
             ri_q = get(step.budget.ri_par_q_per_node, nid, 0.0) + get(step.budget.ri_nir_q_per_node, nid, 0.0)
-            k = (item, group, type)
+            k = (object_id, group, type)
             a0, r0 = get(acc, k, (0.0, 0.0))
             acc[k] = (a0 + area, r0 + ri_q)
         end
@@ -1499,7 +1500,7 @@ function summary_values_table(
                     row[c] = k[2]
                 elseif c == "type"
                     row[c] = k[3]
-                elseif c == "item_id"
+                elseif c == "object_id"
                     row[c] = k[1]
                 elseif c == "area"
                     row[c] = area

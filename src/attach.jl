@@ -146,7 +146,7 @@ function _append_paving_nodes!(
             :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
             :functional_group => "pavement",
             :type => "Cobblestone",
-            :item_id => -1,
+            :object_id => -1,
             :source_topology_id => tile.node_id,
         )
         for (attr, values) in field_values

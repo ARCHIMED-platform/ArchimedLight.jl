@@ -17,15 +17,7 @@ const HOME_FIGURE_GROUND_SPAN = 45.0
 
 sim_dir = joinpath(REPO_ROOT, "example_2", "config.yml")
 cfg = read_light_config(sim_dir)
-for model in cfg.models
-    get(model, "Group", nothing) == "pavement" || continue
-    types = get(model, "Type", nothing)
-    types isa AbstractDict || continue
-    haskey(types, "Cobblestone") || continue
-    cobble = types["Cobblestone"]
-    cobble isa AbstractDict || continue
-    cobble["plot_paving"] = HOME_FIGURE_PLOT_PAVING
-end
+cfg.models["pavement"].types["Cobblestone"].plot_paving = HOME_FIGURE_PLOT_PAVING
 scene = read_scene(cfg.paths.scene)
 meteo = read_meteo(cfg.paths.meteo)
 step = run_light_step(scene, first(meteo.rows), cfg)

@@ -52,17 +52,9 @@ end
 
 function _cfg_plot_paving(cfg::LightConfig)
     best = 0
-    for model in cfg.models
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (_, tconf) in types
-            tconf isa AbstractDict || continue
-            v = try
-                Int(get(tconf, "plot_paving", 0))
-            catch
-                0
-            end
-            best = max(best, v)
+    for group_model in values(cfg.models)
+        for type_model in values(group_model.types)
+            best = max(best, type_model.plot_paving)
         end
     end
     return best
@@ -70,21 +62,13 @@ end
 
 function _virtual_sensor_groups(cfg::LightConfig)
     out = Set{String}()
-    for model in cfg.models
-        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
+    for group_model in values(cfg.models)
+        group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
-
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (_, tconf) in types
-            tconf isa AbstractDict || continue
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            if model == "virtualsensor"
+        for type_model in values(group_model.types)
+            interception = type_model.interception
+            interception === nothing && continue
+            if lowercase(strip(interception.model)) == "virtualsensor"
                 push!(out, group)
                 break
             end
@@ -105,22 +89,14 @@ end
 
 function _ignored_group_types(cfg::LightConfig)
     out = Dict{String,Set{String}}()
-    for model in cfg.models
-        group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
+    for group_model in values(cfg.models)
+        group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
-
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        for (type_name0, tconf) in types
-            tconf isa AbstractDict || continue
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            model == "ignore" || continue
-            tname = strip(string(type_name0))
+        for (type_name, type_model) in group_model.types
+            interception = type_model.interception
+            interception === nothing && continue
+            lowercase(strip(interception.model)) == "ignore" || continue
+            tname = strip(type_name)
             isempty(tname) && continue
             s = get!(out, group) do
                 Set{String}()
@@ -144,48 +120,20 @@ end
 
 function _group_light_emitters(cfg::LightConfig)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for model in cfg.models
-        group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
+    for group_model in values(cfg.models)
+        group = strip(group_model.group)
         isempty(group) && continue
+        for (type_name0, type_model) in group_model.types
+            emitter = type_model.light_emitter
+            emitter === nothing && continue
+            type_name = strip(type_name0)
+            lowercase(strip(emitter.model)) == "lambertianemitter" || continue
 
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-
-        for (type_name0, tconf) in types
-            tconf isa AbstractDict || continue
-            type_name = strip(string(type_name0))
-            em0 = get(tconf, "LightEmitter", nothing)
-            em0 isa AbstractDict || continue
-            em = em0
-            model = lowercase(strip(string(get(em, "model", ""))))
-            model == "lambertianemitter" || continue
-
-            radiance = try
-                Float64(em["radiance"])
-            catch
-                try
-                    parse(Float64, string(get(em, "radiance", "0")))
-                catch
-                    0.0
-                end
-            end
+            radiance = emitter.radiance
             radiance > 0.0 || continue
 
-            gpar = 0.48
-            gnir = 0.52
-            g0 = get(em, "gamma", nothing)
-            if g0 isa AbstractDict
-                gpar = try
-                    Float64(get(g0, "PAR", gpar))
-                catch
-                    gpar
-                end
-                gnir = try
-                    Float64(get(g0, "NIR", gnir))
-                catch
-                    gnir
-                end
-            end
+            gpar = emitter.gamma.par
+            gnir = emitter.gamma.nir
             gpar = max(gpar, 0.0)
             gnir = max(gnir, 0.0)
             gsum = gpar + gnir
@@ -1033,7 +981,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     return vertices, faces, face2node, unique(node_ids), plotbox, node_group
 end
 
-function _interception_java_keys(scene::SceneGeometry, cfg::LightConfig)
+function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
     _, _, _, node_ids, _, node_group = _scene_geometry_for_interception(scene, cfg)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
@@ -1044,9 +992,9 @@ function _interception_java_keys(scene::SceneGeometry, cfg::LightConfig)
 
     for nid in node_ids
         haskey(keys_by_node, nid) && continue
-        item_id = get(scene.java_item_id_per_node, nid, 1)
-        comp_id = get(scene.java_component_id_per_node, nid, nid + 1)
-        keys_by_node[nid] = (item_id, comp_id)
+        object_id = get(scene.object_id_per_node, nid, 1)
+        source_topology_id = get(scene.source_topology_id_per_node, nid, nid + 1)
+        keys_by_node[nid] = (object_id, source_topology_id)
     end
     keys_by_node
 end

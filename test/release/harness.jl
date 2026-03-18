@@ -130,8 +130,9 @@ function _write_component_series_csv(path::AbstractString, scene, series, cfg, m
     first_write = true
     cols = [
         "step_number",
-        "item_id",
-        "component_id",
+        "node_id",
+        "source_topology_id",
+        "object_id",
         "group",
         "type",
         "area",
@@ -224,7 +225,7 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
                 "hour_end",
                 "group",
                 "type",
-                "item_id",
+                "object_id",
                 "area",
                 "Ri_q",
                 "Ra_q",
@@ -418,11 +419,11 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "item_id", "component_id"]]
+            [["step_number", "source_topology_id"], ["step_number", "object_id", "source_topology_id"], ["step_number", "node_id"]]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"
-            [["step_number", "group", "type", "item_id"], ["step_number", "item_id"]]
+            [["step_number", "group", "type", "object_id"], ["step_number", "object_id"]]
         elseif name == "meteo.csv"
             [["step_number"], ["stepNumber"], ["date", "hour_start", "hour_end"]]
         elseif name == "log-sun-position.csv"

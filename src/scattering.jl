@@ -95,46 +95,29 @@ end
 function _group_optical_coeffs(cfg::LightConfig)
     coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
-    for model in cfg.models
-        group = haskey(model, "Group") ? string(model["Group"]) : ""
+    for group_model in values(cfg.models)
+        group = group_model.group
         isempty(group) && continue
 
-        types = get(model, "Type", nothing)
-        types isa AbstractDict || continue
-        isempty(types) && continue
+        isempty(group_model.types) && continue
 
-        for (tkey, tval) in types
-            tconf = tval
-            tconf isa AbstractDict || continue
+        for (type_name, type_model) in group_model.types
+            interception = type_model.interception
+            interception === nothing && continue
 
-            inter = get(tconf, "Interception", nothing)
-            inter isa AbstractDict || continue
-            iuse = get(inter, "use", nothing)
-            iconf = iuse !== nothing && haskey(inter, string(iuse)) ? inter[string(iuse)] : inter
-            iconf isa AbstractDict || continue
-
-            model = lowercase(strip(string(get(iconf, "model", ""))))
-            c =
-                if model == "virtualsensor"
+            coeff =
+                if lowercase(strip(interception.model)) == "virtualsensor"
                     Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
                 else
-                    op = get(iconf, "optical_properties", nothing)
-                    op isa AbstractDict || continue
-                    ctmp = Dict{String,Float64}()
-                    for (k, v) in op
-                        try
-                            ctmp[uppercase(string(k))] = Float64(v)
-                        catch
-                        end
-                    end
-                    ctmp
+                    props = interception.optical_properties
+                    props === nothing && continue
+                    Dict{String,Float64}("PAR" => props.par, "NIR" => props.nir)
                 end
 
-            tname = string(tkey)
-            coeffs[(group, tname)] = c
+            coeffs[(group, type_name)] = coeff
             # Group-level fallback for nodes without explicit type metadata.
             if !haskey(coeffs, (group, "*"))
-                coeffs[(group, "*")] = c
+                coeffs[(group, "*")] = coeff
             end
         end
     end
