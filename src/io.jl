@@ -558,10 +558,7 @@ end
 
 function _collect_scene_node_metadata!(
     node,
-    node_group,
-    node_type,
-    source_topology_id_per_node,
-    object_id_per_node,
+    nodes,
     per_object_component_counter,
     current_group::String="",
     current_object_id::Int=1,
@@ -574,18 +571,21 @@ function _collect_scene_node_metadata!(
 
     if _is_scene_geometry_node(node)
         nid = Int(MultiScaleTreeGraph.node_id(node))
-        node_group[nid] = group
-        node_type[nid] = type_name
-        object_id_per_node[nid] = object_id
 
         sid = _source_topology_id(node)
         if sid !== nothing
-            source_topology_id_per_node[nid] = Int(sid)
+            source_topology_id = Int(sid)
         else
             k = get(per_object_component_counter, object_id, 0) + 1
             per_object_component_counter[object_id] = k
-            source_topology_id_per_node[nid] = k + 1
+            source_topology_id = k + 1
         end
+        nodes[nid] = (
+            group=group,
+            type=type_name,
+            source_topology_id=source_topology_id,
+            object_id=object_id,
+        )
     end
 
     children = MultiScaleTreeGraph.children(node)
@@ -593,10 +593,7 @@ function _collect_scene_node_metadata!(
         for ch in children
             _collect_scene_node_metadata!(
                 ch,
-                node_group,
-                node_type,
-                source_topology_id_per_node,
-                object_id_per_node,
+                nodes,
                 per_object_component_counter,
                 group,
                 object_id,
@@ -612,17 +609,11 @@ end
 function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
     merged_mesh, face2node = PlantGeom.build_merged_mesh_with_map(mtg; filter_fun=_is_scene_geometry_node)
 
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
+    node_meta = Dict{Int,NamedTuple{(:group, :type, :source_topology_id, :object_id),Tuple{String,String,Int,Int}}}()
     per_object_component_counter = Dict{Int,Int}()
     _collect_scene_node_metadata!(
         mtg,
-        node_group,
-        node_type,
-        source_topology_id_per_node,
-        object_id_per_node,
+        node_meta,
         per_object_component_counter,
     )
 
@@ -643,25 +634,23 @@ function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds
         sx, sy, sz = get(bary_acc, n, (0.0, 0.0, 0.0))
         bary_acc[n] = (sx + area * cx, sy + area * cy, sz + area * cz)
     end
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
+    nodes = Dict{Int,SceneNodeData{Float64}}()
     for (nid, area) in node_area
-        if area > 0
-            sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
-            barycenter_per_node[nid] = (sx / area, sy / area, sz / area)
-        else
-            barycenter_per_node[nid] = (NaN, NaN, NaN)
-        end
+        barycenter =
+            if area > 0
+                sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
+                (sx / area, sy / area, sz / area)
+            else
+                (NaN, NaN, NaN)
+            end
+        meta = get(node_meta, nid, (group="", type="", source_topology_id=nid, object_id=-1))
+        nodes[nid] = SceneNodeData(area, barycenter, meta.group, meta.type, meta.source_topology_id, meta.object_id)
     end
     SceneGeometry(
         mtg,
         merged_mesh,
         face2node,
-        node_area,
-        barycenter_per_node,
-        node_group,
-        node_type,
-        source_topology_id_per_node,
-        object_id_per_node,
+        nodes,
         String(source_path),
         scene_xy_bounds,
     )

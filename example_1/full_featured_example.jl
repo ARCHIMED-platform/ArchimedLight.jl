@@ -165,7 +165,7 @@ function main()
         scat,
         cfg;
         step_duration_seconds=dt_seconds,
-        component_area_per_node=scene.total_area_per_node,
+        component_area_per_node=node_areas(scene),
     )
 
     # Single-call pipeline with backend kwargs.
@@ -213,9 +213,9 @@ function main()
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
     par_q_by_source_topology = Dict{Int,Float64}()
     for (nid, q) in step.budget.incident_energy.total.par
-        source_topology_id = get(scene.source_topology_id_per_node, nid, nothing)
-        source_topology_id === nothing && continue
-        par_q_by_source_topology[Int(source_topology_id)] = Float64(q)
+        node = scene_node(scene, nid)
+        node === nothing && continue
+        par_q_by_source_topology[node.source_topology_id] = Float64(q)
     end
     traverse!(scene.mtg) do node
         haskey(node, :source_topology_id) || return true

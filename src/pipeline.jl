@@ -515,13 +515,13 @@ function _node_absorptance_per_band(scene::SceneGeometry, cfg::LightConfig, band
     out = Dict{Int,Float64}()
     geometry = _scene_geometry_for_interception(scene, cfg)
     for nid in geometry.node_ids
-        group = get(geometry.node_group, nid, get(scene.node_group, nid, ""))
+        group = get(geometry.node_group, nid, _scene_group(scene, nid, ""))
         if group in virtual_groups
             out[nid] = 0.0
             continue
         end
         default_type = group == "pavement" ? "Cobblestone" : ""
-        typ = get(scene.node_type, nid, default_type)
+        typ = _scene_type(scene, nid, default_type)
         coeffs = get(
             coeffs_by_group_type,
             (group, typ),

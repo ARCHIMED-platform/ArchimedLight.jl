@@ -415,12 +415,12 @@ function _step_duration_output_local(meteo_row, step_duration_seconds)
 end
 
 function _node_ids_for_output(scene::SceneGeometry)
-    ids = collect(keys(scene.total_area_per_node))
+    ids = collect(keys(scene.nodes))
     sort!(
         ids;
         by=nid -> (
-            get(scene.object_id_per_node, nid, 0),
-            get(scene.source_topology_id_per_node, nid, nid),
+            _scene_object_id(scene, nid, 0),
+            _scene_source_topology_id(scene, nid, nid),
             nid,
         ),
     )
@@ -473,9 +473,9 @@ function _output_node_metadata(scene::SceneGeometry, cfg::LightConfig)
         object_id, source_topology_id = key_by_node[nid]
         source_topology_id_per_node[nid] = source_topology_id
         object_id_per_node[nid] = object_id
-        g = haskey(geometry.node_group, nid) ? geometry.node_group[nid] : get(scene.node_group, nid, "")
+        g = haskey(geometry.node_group, nid) ? geometry.node_group[nid] : _scene_group(scene, nid, "")
         group_per_node[nid] = g
-        t = strip(get(scene.node_type, nid, ""))
+        t = strip(_scene_type(scene, nid, ""))
         if isempty(t)
             if g == "pavement"
                 t = "Cobblestone"

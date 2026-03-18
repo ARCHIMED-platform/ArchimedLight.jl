@@ -134,8 +134,8 @@ function _is_ignored_node(
     ignored::Dict{String,Set{String}},
 )
     isempty(ignored) && return false
-    g = _normalize_group_name_local(get(scene.node_group, node_id, ""))
-    t = strip(get(scene.node_type, node_id, ""))
+    g = _normalize_group_name_local(_scene_group(scene, node_id, ""))
+    t = strip(_scene_type(scene, node_id, ""))
     return haskey(ignored, g) && (t in ignored[g])
 end
 
@@ -193,18 +193,18 @@ function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
     nir = Dict{Int,Float64}()
     for ((group, type_name), pwr) in by_group_type
         nids = Int[
-            nid for (nid, g) in scene.node_group if g == group && get(scene.node_type, nid, "") == type_name
+            nid for (nid, node) in scene.nodes if node.group == group && node.type == type_name
         ]
         if isempty(nids)
             # Fallback for scenes where type labels are unavailable.
-            nids = Int[nid for (nid, g) in scene.node_group if g == group]
+            nids = Int[nid for (nid, node) in scene.nodes if node.group == group]
         end
         isempty(nids) && continue
 
-        atot = sum(get(scene.total_area_per_node, nid, 0.0) for nid in nids)
+        atot = sum(_scene_area(scene, nid, 0.0) for nid in nids)
         if atot > 0.0
             for nid in nids
-                w = get(scene.total_area_per_node, nid, 0.0) / atot
+                w = _scene_area(scene, nid, 0.0) / atot
                 par[nid] = get(par, nid, 0.0) + pwr.par * w
                 nir[nid] = get(nir, nid, 0.0) + pwr.nir * w
             end
@@ -980,10 +980,10 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
 
     node_ids = unique(face2node)
-    node_group = Dict{Int,String}(nid => get(scene.node_group, nid, "") for nid in node_ids)
+    node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
     plot_paving = _cfg_plot_paving(cfg)
     if plot_paving > 0
-        first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
+        first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
         paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
         v_offset = length(vertices)
         append!(vertices, paving_vertices)
@@ -1011,8 +1011,8 @@ function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
 
     for nid in geometry.node_ids
         haskey(keys_by_node, nid) && continue
-        object_id = get(scene.object_id_per_node, nid, 1)
-        source_topology_id = get(scene.source_topology_id_per_node, nid, nid + 1)
+        object_id = _scene_object_id(scene, nid, 1)
+        source_topology_id = _scene_source_topology_id(scene, nid, nid + 1)
         keys_by_node[nid] = (object_id, source_topology_id)
     end
     keys_by_node

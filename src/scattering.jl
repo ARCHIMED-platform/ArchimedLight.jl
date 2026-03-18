@@ -175,9 +175,9 @@ function _scattering_context(scene::SceneGeometry, turtle::TurtleGrid, first::Fi
     all_hits = _all_dir_hits_for_scattering(first, sun_hits, cfg, node_ids)
     node_type = Dict{Int,String}()
     for nid in node_ids
-        g = get(node_group, nid, get(scene.node_group, nid, ""))
+        g = get(node_group, nid, _scene_group(scene, nid, ""))
         default_type = g == "pavement" ? "Cobblestone" : ""
-        node_type[nid] = get(scene.node_type, nid, default_type)
+        node_type[nid] = _scene_type(scene, nid, default_type)
     end
     return ScatteringSceneContext(pair_counts, all_hits, node_ids, node_group, node_type, group_type_coeffs)
 end

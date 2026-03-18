@@ -35,7 +35,7 @@ function _attach_node_values!(
 end
 
 function _geometry_node_ids(scene::SceneGeometry)
-    Set{Int}(keys(scene.total_area_per_node))
+    Set{Int}(keys(scene.nodes))
 end
 
 function _budget_node_field(step::LightStepResult, field::Symbol)
@@ -108,7 +108,7 @@ function _paving_nodes_data(scene::SceneGeometry, cfg::LightConfig; xy_bounds=no
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
-    first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
+    first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
     paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
 
     faces_by_node = Dict{Int,Vector{PlantGeom.Face3}}()
@@ -319,7 +319,7 @@ function attach_light_series!(
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     fill_value::Float64=NaN,
 )
-    node_ids = sort!(collect(keys(scene.total_area_per_node)))
+    node_ids = scene_node_ids(scene)
     for field in fields
         by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
         for step in steps

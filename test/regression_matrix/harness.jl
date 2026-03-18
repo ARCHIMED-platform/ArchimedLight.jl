@@ -288,12 +288,7 @@ function _synthetic_scene_for_source(source_id::String)
             scene.mtg,
             scene.merged_mesh,
             scene.face2node,
-            scene.total_area_per_node,
-            scene.barycenter_per_node,
-            scene.node_group,
-            scene.node_type,
-            scene.source_topology_id_per_node,
-            scene.object_id_per_node,
+            scene.nodes,
             scene.source_path,
             (0.0, 0.0, 1.0, 1.0),
         )

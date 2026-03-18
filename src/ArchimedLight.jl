@@ -15,7 +15,12 @@ export LightConfigPaths
 export LightGeneralConfig
 export LightOutputsConfig
 export MeteoTable
+export SceneNodeData
 export SceneGeometry
+export scene_node
+export scene_node_ids
+export node_areas
+export node_barycenters
 export InterceptionBackend, RasterCPUBackend
 export ScatteringBackend, RaycastScatteringBackend, LinksScatteringBackend
 export SkyState

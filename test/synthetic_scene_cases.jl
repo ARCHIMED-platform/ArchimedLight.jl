@@ -69,12 +69,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
     faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
-    total_area_per_node = Dict{Int,Float64}()
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
+    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
 
     xs = Float64[]
     ys = Float64[]
@@ -101,28 +96,24 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
         area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
-        total_area_per_node[i] = area1 + area2
-        barycenter_per_node[i] = (
+        area = area1 + area2
+        barycenter = (
             (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
-        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
-        node_group[i] = String(get(spec, :group, "plate"))
-        node_type[i] = String(get(spec, :type, "plate"))
+        source_topology_id = Int(get(spec, :source_topology_id, i))
+        object_id = Int(get(spec, :object_id, source_topology_id))
+        group = String(get(spec, :group, "plate"))
+        type_name = String(get(spec, :type, "plate"))
+        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
     end
 
     ArchimedLight.SceneGeometry(
         nothing,
         GeometryBasics.Mesh(points, faces),
         face2node,
-        total_area_per_node,
-        barycenter_per_node,
-        node_group,
-        node_type,
-        source_topology_id_per_node,
-        object_id_per_node,
+        nodes,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
@@ -186,7 +177,7 @@ end
             turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
             fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
             first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-12, rtol=1e-12)
             @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.incident_par_q; atol=1e-10, rtol=1e-10)
@@ -211,7 +202,7 @@ end
             turtle_no_scat = ArchimedLight.build_turtle(cfg_no_scat, inputs.sky)
             flux_no_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_no_scat, cfg_no_scat)
             first_no_scat = ArchimedLight.compute_first_order(scene, turtle_no_scat, flux_no_scat, cfg_no_scat)
-            budget_no_scat = ArchimedLight.integrate_light(first_no_scat, nothing, cfg_no_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_no_scat = ArchimedLight.integrate_light(first_no_scat, nothing, cfg_no_scat; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(first_no_scat.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
             @test isapprox(get(_incident_par_initial_energy(budget_no_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
@@ -222,7 +213,7 @@ end
             flux_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_scat, cfg_scat)
             first_scat = ArchimedLight.compute_first_order(scene, turtle_scat, flux_scat, cfg_scat)
             scat = ArchimedLight.compute_scattering(scene, turtle_scat, first_scat, cfg_scat)
-            budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test get(scat.added_power.par, 2, 0.0) > 0.0
             @test isapprox(get(_incident_par_initial_energy(budget_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
@@ -253,7 +244,7 @@ end
             turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
             fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
             first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.upper_projected; atol=1e-10, rtol=1e-10)
             @test isapprox(get(first.projected_area_per_node, 2, 0.0), expected.lower_projected; atol=1e-10, rtol=1e-10)
@@ -287,9 +278,9 @@ end
             turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
             fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
             first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
-            @test isapprox(scene.total_area_per_node[1], expected.area; atol=1e-10, rtol=1e-10)
+            @test isapprox(ArchimedLight.scene_node(scene, 1).area, expected.area; atol=1e-10, rtol=1e-10)
             @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-10, rtol=1e-10)
             @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
         end
@@ -347,13 +338,13 @@ end
             turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
             flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
             first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
             turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
             flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(first_notoric.projected_area_per_node, 1, 0.0), expected.no_toric_projected_area; atol=1e-12, rtol=1e-12)
             @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_ri_par_0_q; atol=1e-12, rtol=1e-12)
@@ -389,13 +380,13 @@ end
             turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
             flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
             first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
             turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
             flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
             @test isapprox(get(_incident_par_initial_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
@@ -443,13 +434,13 @@ end
             turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
             flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
             first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
             turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
             flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test get(_incident_par_initial_energy(budget_notoric), 1, 0.0) > 0.0
             @test get(_incident_par_initial_energy(budget_notoric), 2, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
@@ -490,14 +481,14 @@ end
             flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
             first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
             scat_notoric = ArchimedLight.compute_scattering(scene, turtle_notoric, first_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, scat_notoric, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_notoric = ArchimedLight.integrate_light(first_notoric, scat_notoric, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
             turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
             flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
             first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
             scat_toric = ArchimedLight.compute_scattering(scene, turtle_toric, first_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, scat_toric, cfg_toric; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_toric = ArchimedLight.integrate_light(first_toric, scat_toric, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
             @test isapprox(get(_incident_par_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_q; atol=1e-12, rtol=1e-12)
@@ -545,7 +536,7 @@ end
             turtle_opaque = ArchimedLight.build_turtle(cfg_opaque, inputs.sky)
             flux_opaque = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_opaque, cfg_opaque)
             first_opaque = ArchimedLight.compute_first_order(scene, turtle_opaque, flux_opaque, cfg_opaque)
-            budget_opaque = ArchimedLight.integrate_light(first_opaque, nothing, cfg_opaque; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+            budget_opaque = ArchimedLight.integrate_light(first_opaque, nothing, cfg_opaque; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
             mktempdir() do tmp
                 sensor_model = joinpath(tmp, "model_sensor.yml")
@@ -554,7 +545,7 @@ end
                 turtle_sensor = ArchimedLight.build_turtle(cfg_sensor, inputs.sky)
                 flux_sensor = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_sensor, cfg_sensor)
                 first_sensor = ArchimedLight.compute_first_order(scene, turtle_sensor, flux_sensor, cfg_sensor)
-                budget_sensor = ArchimedLight.integrate_light(first_sensor, nothing, cfg_sensor; step_duration_seconds=1.0, component_area_per_node=scene.total_area_per_node)
+                budget_sensor = ArchimedLight.integrate_light(first_sensor, nothing, cfg_sensor; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
 
                 @test isapprox(get(_incident_par_initial_energy(budget_opaque), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
                 @test isapprox(get(_incident_par_initial_energy(budget_sensor), 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)

@@ -101,19 +101,43 @@ struct MeteoTable
     metadata::NamedTuple
 end
 
-struct SceneGeometry
-    mtg
-    merged_mesh
-    face2node::Vector{Int}
-    total_area_per_node::Dict{Int,Float64}
-    barycenter_per_node::Dict{Int,NTuple{3,Float64}}
-    node_group::Dict{Int,String}
-    node_type::Dict{Int,String}
-    source_topology_id_per_node::Dict{Int,Int}
-    object_id_per_node::Dict{Int,Int}
-    source_path::String
-    scene_xy_bounds::Union{Nothing,NTuple{4,Float64}}
+struct SceneNodeData{T}
+    area::T
+    barycenter::NTuple{3,T}
+    group::String
+    type::String
+    source_topology_id::Int
+    object_id::Int
 end
+
+struct SceneGeometry{MTG,Mesh,T}
+    mtg::MTG
+    merged_mesh::Mesh
+    face2node::Vector{Int}
+    nodes::Dict{Int,SceneNodeData{T}}
+    source_path::String
+    scene_xy_bounds::Union{Nothing,NTuple{4,T}}
+end
+
+scene_node(scene::SceneGeometry, node_id::Integer) = get(scene.nodes, Int(node_id), nothing)
+scene_node_ids(scene::SceneGeometry) = sort!(collect(keys(scene.nodes)))
+node_areas(scene::SceneGeometry) = Dict(nid => node.area for (nid, node) in scene.nodes)
+node_barycenters(scene::SceneGeometry) = Dict(nid => node.barycenter for (nid, node) in scene.nodes)
+
+function _scene_node_field(scene::SceneGeometry, node_id::Integer, field::Symbol, default)
+    node = scene_node(scene, node_id)
+    node === nothing ? default : getfield(node, field)
+end
+
+_scene_area(scene::SceneGeometry, node_id::Integer, default=0.0) = _scene_node_field(scene, node_id, :area, default)
+_scene_barycenter(scene::SceneGeometry, node_id::Integer, default=(NaN, NaN, NaN)) =
+    _scene_node_field(scene, node_id, :barycenter, default)
+_scene_group(scene::SceneGeometry, node_id::Integer, default="") = _scene_node_field(scene, node_id, :group, default)
+_scene_type(scene::SceneGeometry, node_id::Integer, default="") = _scene_node_field(scene, node_id, :type, default)
+_scene_source_topology_id(scene::SceneGeometry, node_id::Integer, default=Int(node_id)) =
+    _scene_node_field(scene, node_id, :source_topology_id, default)
+_scene_object_id(scene::SceneGeometry, node_id::Integer, default=-1) =
+    _scene_node_field(scene, node_id, :object_id, default)
 
 struct SkyState
     sun_azimuth_deg::Float64

@@ -54,12 +54,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
     faces = PlantGeom.Face3[]
     face2node = Int[]
-    total_area_per_node = Dict{Int,Float64}()
-    barycenter_per_node = Dict{Int,NTuple{3,Float64}}()
-    node_group = Dict{Int,String}()
-    node_type = Dict{Int,String}()
-    source_topology_id_per_node = Dict{Int,Int}()
-    object_id_per_node = Dict{Int,Int}()
+    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
 
     xs = Float64[]
     ys = Float64[]
@@ -86,28 +81,24 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
 
         area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
         area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
-        total_area_per_node[i] = area1 + area2
-        barycenter_per_node[i] = (
+        area = area1 + area2
+        barycenter = (
             (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
-        node_group[i] = String(get(spec, :group, "plate"))
-        node_type[i] = String(get(spec, :type, "plate"))
-        source_topology_id_per_node[i] = Int(get(spec, :source_topology_id, i))
-        object_id_per_node[i] = Int(get(spec, :object_id, source_topology_id_per_node[i]))
+        group = String(get(spec, :group, "plate"))
+        type_name = String(get(spec, :type, "plate"))
+        source_topology_id = Int(get(spec, :source_topology_id, i))
+        object_id = Int(get(spec, :object_id, source_topology_id))
+        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
     end
 
     ArchimedLight.SceneGeometry(
         nothing,
         GeometryBasics.Mesh(points, faces),
         face2node,
-        total_area_per_node,
-        barycenter_per_node,
-        node_group,
-        node_type,
-        source_topology_id_per_node,
-        object_id_per_node,
+        nodes,
         "synthetic_scene_cases",
         (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
     )
