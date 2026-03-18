@@ -112,7 +112,7 @@ function _apply_case_options(cfg0::ArchimedLight.LightConfig, options::OrderedDi
         nir_scattering=Bool(options["nir_scattering"]),
         java_logged_turtle_dirs=Bool(options["java_logged_turtle_dirs"]),
     )
-    cfg.raw["output_directory"] = mktempdir()
+    cfg.outputs.output_directory = mktempdir()
     return cfg
 end
 
@@ -134,8 +134,8 @@ function _fast_fixture_source(source_id::String)
     get!(_FAST_FIXTURE_CACHE, source_id) do
         case_root = joinpath(@__DIR__, "..", "fast_fixtures", source_id)
         cfg0 = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-        scene = ArchimedLight.read_scene(cfg0.scene)
-        meteo = ArchimedLight.read_meteo(cfg0.meteo)
+        scene = ArchimedLight.read_scene(cfg0.paths.scene)
+        meteo = ArchimedLight.read_meteo(cfg0.paths.meteo)
         (case_root=case_root, cfg0=cfg0, scene=scene, meteo=meteo)
     end
 end
@@ -333,11 +333,9 @@ function _compute_synthetic_case(case::RegressionCase)
     if case.scenario.source_id == "cached_series_parity"
         meteo = _synthetic_meteo_for_source(case.scenario.source_id)
         cfg_uncached = deepcopy(cfg)
-        cfg_uncached.raw["cache_radiation"] = false
-        ArchimedLight.refresh_light_config!(cfg_uncached)
+        cfg_uncached.general.cache_radiation = false
         cfg_cached = deepcopy(cfg)
-        cfg_cached.raw["cache_radiation"] = true
-        ArchimedLight.refresh_light_config!(cfg_cached)
+        cfg_cached.general.cache_radiation = true
         series_uncached = ArchimedLight.run_light_series(scene, meteo, cfg_uncached; scattering_mode=scattering_mode)
         series_cached = ArchimedLight.run_light_series(scene, meteo, cfg_cached; scattering_mode=scattering_mode)
         diffs = OrderedDict{String,Float64}()

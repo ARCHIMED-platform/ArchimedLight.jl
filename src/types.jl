@@ -10,9 +10,15 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 
 struct LinksScatteringBackend <: ScatteringBackend end
 
-mutable struct LightConfig
+mutable struct LightConfigPaths
+    config::String
     scene::String
     meteo::String
+    models::Vector{String}
+    base_dir::String
+end
+
+mutable struct LightGeneralConfig
     all_in_turtle::Bool
     turtle_sectors::Int
     pixel_size::Float64
@@ -23,10 +29,36 @@ mutable struct LightConfig
     scattering_coeff_par::Float64
     scattering_coeff_nir::Float64
     cache_radiation::Bool
-    raw::OrderedDict{String,Any}
+    cache_pixel_table::Bool
+    toricity::Bool
+    radiation_timestep_minutes::Float64
+    nir_interception::Bool
+    nir_scattering::Bool
+    java_logged_turtle_dirs::Bool
+    meteo_range::Union{Nothing,String}
+    debug::Bool
+    log_debug::Bool
+    debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}}
+end
+
+mutable struct LightOutputsConfig
+    output_directory::String
+    simulation_directory::String
+    write_summary::Bool
+    export_ops::Any
+    component_variables::OrderedDict{String,Bool}
+    scene_variables::OrderedDict{String,Bool}
+    opf_variables::OrderedDict{String,Bool}
+    opf_overwrite_variables::Bool
+end
+
+mutable struct LightConfig
     source_path::String
-    model_paths::Vector{String}
-    model_raw::Vector{OrderedDict{String,Any}}
+    paths::LightConfigPaths
+    general::LightGeneralConfig
+    outputs::LightOutputsConfig
+    models::Vector{OrderedDict{String,Any}}
+    extras::OrderedDict{String,Any}
 end
 
 struct MeteoTable

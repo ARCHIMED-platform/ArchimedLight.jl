@@ -49,32 +49,116 @@ function _model_paths_from_raw(d::AbstractDict{String,Any}, scene::AbstractStrin
     [_join_if_relative(base, string(m)) for m in models]
 end
 
+function _ordered_bool_dict(v)
+    out = OrderedDict{String,Bool}()
+    v isa AbstractDict || return out
+    for (k, enabled) in v
+        out[string(k)] = _as_bool(enabled, false)
+    end
+    out
+end
+
+function _parse_debug_drop_leading_hit(v)
+    v isa AbstractDict || return nothing
+    node_id = _as_int(get(v, "node_id", nothing), 0)
+    x = _as_int(get(v, "x", nothing), -1)
+    y = _as_int(get(v, "y", nothing), -1)
+    node_id > 0 || return nothing
+    x >= 0 || return nothing
+    y >= 0 || return nothing
+    return (node_id=node_id, x=x, y=y)
+end
+
+function _default_general_config()
+    LightGeneralConfig(
+        false,
+        46,
+        0.25 / 100.0,
+        true,
+        true,
+        20,
+        0.01,
+        0.15,
+        0.30,
+        false,
+        false,
+        true,
+        15.0,
+        true,
+        true,
+        false,
+        nothing,
+        false,
+        false,
+        nothing,
+    )
+end
+
+function _default_outputs_config()
+    LightOutputsConfig(
+        "output",
+        "",
+        false,
+        nothing,
+        OrderedDict{String,Bool}(),
+        OrderedDict{String,Bool}(),
+        OrderedDict{String,Bool}(),
+        true,
+    )
+end
+
+const _CONFIG_KNOWN_TOP_LEVEL_KEYS = Set([
+    "scene",
+    "models",
+    "meteo",
+    "all_in_turtle",
+    "sky_sectors",
+    "pixel_size",
+    "area_ratio",
+    "scattering",
+    "scattering_max_iter",
+    "scattering_stop_ratio",
+    "scattering_coeff_par",
+    "scattering_coeff_nir",
+    "cache_radiation",
+    "cache_pixel_table",
+    "toricity",
+    "radiation_timestep",
+    "nir_interception",
+    "nir_scattering",
+    "java_logged_turtle_dirs",
+    "meteo_range",
+    "debug",
+    "log_debug",
+    "debug_drop_leading_hit",
+    "output_directory",
+    "simulation_directory",
+    "write_summary",
+    "export_ops",
+    "component_variables",
+    "scene_variables",
+    "opf_variables",
+    "opf_overwrite_variables",
+])
+
+function _config_extras(raw::OrderedDict{String,Any})
+    extras = OrderedDict{String,Any}()
+    for (k, v) in raw
+        k == "__base_dir" && continue
+        k in _CONFIG_KNOWN_TOP_LEVEL_KEYS && continue
+        extras[k] = v
+    end
+    extras
+end
+
 function refresh_light_config!(cfg::LightConfig; reload_models::Bool=false)
-    d = cfg.raw
-    base = get(d, "__base_dir", dirname(cfg.source_path))
-    d["__base_dir"] = base
-
-    haskey(d, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
-    haskey(d, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
-
-    cfg.scene = _join_if_relative(base, string(d["scene"]))
-    cfg.meteo = _join_if_relative(base, string(d["meteo"]))
-    cfg.all_in_turtle = _as_bool(get(d, "all_in_turtle", false), false)
-    cfg.turtle_sectors = _as_int(get(d, "sky_sectors", 46), 46)
-    cfg.pixel_size = _as_float(get(d, "pixel_size", 0.25), 0.25) / 100.0
-    cfg.area_ratio = _as_bool(get(d, "area_ratio", true), true)
-    cfg.scattering = _as_bool(get(d, "scattering", true), true)
-    cfg.scattering_max_iter = _as_int(get(d, "scattering_max_iter", 20), 20)
-    cfg.scattering_stop_ratio = _as_float(get(d, "scattering_stop_ratio", 0.01), 0.01)
-    cfg.scattering_coeff_par = _as_float(get(d, "scattering_coeff_par", 0.15), 0.15)
-    cfg.scattering_coeff_nir = _as_float(get(d, "scattering_coeff_nir", 0.30), 0.30)
-    cfg.cache_radiation = _as_bool(get(d, "cache_radiation", false), false)
-
-    model_paths = _model_paths_from_raw(d, cfg.scene)
-    if reload_models || model_paths != cfg.model_paths
-        cfg.model_paths = model_paths
-        cfg.model_raw = OrderedDict{String,Any}[
-            isfile(path) ? _load_yaml_ordered(path) : OrderedDict{String,Any}() for path in model_paths
+    base = cfg.paths.base_dir
+    cfg.paths.scene = _join_if_relative(base, cfg.paths.scene)
+    cfg.paths.meteo = _join_if_relative(base, cfg.paths.meteo)
+    cfg.paths.models = [_join_if_relative(base, path) for path in cfg.paths.models]
+    if reload_models
+        cfg.models = OrderedDict{String,Any}[
+            isfile(path) ? _load_yaml_ordered(path) : OrderedDict{String,Any}() for path in cfg.paths.models
         ]
     end
     return cfg
@@ -99,33 +183,70 @@ Read a YAML configuration file and normalize ARCHIMED light options into a `Ligh
 `pixel_size` is interpreted like Java input files (centimeters) and converted to meters.
 """
 function read_light_config(path::AbstractString)
-    d = _load_yaml_ordered(path)
-    d["__base_dir"] = dirname(path)
-    cfg = LightConfig(
-        "",
-        "",
-        false,
-        46,
-        0.0025,
-        true,
-        true,
-        20,
-        0.01,
-        0.15,
-        0.30,
-        false,
-        d,
+    raw = _load_yaml_ordered(path)
+    raw["__base_dir"] = dirname(path)
+
+    haskey(raw, "scene") || error("Missing config key `scene`. Expected a top-level key in the YAML config.")
+    haskey(raw, "meteo") || error("Missing config key `meteo`. Expected a top-level key in the YAML config.")
+
+    base = String(raw["__base_dir"])
+    paths = LightConfigPaths(
         String(path),
-        String[],
-        OrderedDict{String,Any}[],
+        string(raw["scene"]),
+        string(raw["meteo"]),
+        _model_paths_from_raw(raw, path),
+        base,
     )
-    return refresh_light_config!(cfg; reload_models=true)
+
+    general = _default_general_config()
+    general.all_in_turtle = _as_bool(get(raw, "all_in_turtle", general.all_in_turtle), general.all_in_turtle)
+    general.turtle_sectors = _as_int(get(raw, "sky_sectors", general.turtle_sectors), general.turtle_sectors)
+    general.pixel_size = _as_float(get(raw, "pixel_size", general.pixel_size * 100.0), general.pixel_size * 100.0) / 100.0
+    general.area_ratio = _as_bool(get(raw, "area_ratio", general.area_ratio), general.area_ratio)
+    general.scattering = _as_bool(get(raw, "scattering", general.scattering), general.scattering)
+    general.scattering_max_iter = _as_int(get(raw, "scattering_max_iter", general.scattering_max_iter), general.scattering_max_iter)
+    general.scattering_stop_ratio = _as_float(get(raw, "scattering_stop_ratio", general.scattering_stop_ratio), general.scattering_stop_ratio)
+    general.scattering_coeff_par = _as_float(get(raw, "scattering_coeff_par", general.scattering_coeff_par), general.scattering_coeff_par)
+    general.scattering_coeff_nir = _as_float(get(raw, "scattering_coeff_nir", general.scattering_coeff_nir), general.scattering_coeff_nir)
+    general.cache_radiation = _as_bool(get(raw, "cache_radiation", general.cache_radiation), general.cache_radiation)
+    general.cache_pixel_table = _as_bool(get(raw, "cache_pixel_table", general.cache_pixel_table), general.cache_pixel_table)
+    general.toricity = _as_bool(get(raw, "toricity", general.toricity), general.toricity)
+    general.radiation_timestep_minutes = _as_float(get(raw, "radiation_timestep", general.radiation_timestep_minutes), general.radiation_timestep_minutes)
+    general.nir_interception = _as_bool(get(raw, "nir_interception", general.nir_interception), general.nir_interception)
+    general.nir_scattering = _as_bool(get(raw, "nir_scattering", general.nir_scattering), general.nir_scattering)
+    general.java_logged_turtle_dirs = _as_bool(get(raw, "java_logged_turtle_dirs", general.java_logged_turtle_dirs), general.java_logged_turtle_dirs)
+    meteo_range = get(raw, "meteo_range", nothing)
+    general.meteo_range = meteo_range === nothing ? nothing : strip(string(meteo_range))
+    general.debug = _as_bool(get(raw, "debug", general.debug), general.debug)
+    general.log_debug = _as_bool(get(raw, "log_debug", general.log_debug), general.log_debug)
+    general.debug_drop_leading_hit = _parse_debug_drop_leading_hit(get(raw, "debug_drop_leading_hit", nothing))
+
+    outputs = _default_outputs_config()
+    outputs.output_directory = string(get(raw, "output_directory", outputs.output_directory))
+    simdir = get(raw, "simulation_directory", outputs.simulation_directory)
+    outputs.simulation_directory = simdir === nothing ? "" : strip(string(simdir))
+    outputs.write_summary = _as_bool(get(raw, "write_summary", outputs.write_summary), outputs.write_summary)
+    outputs.export_ops = get(raw, "export_ops", outputs.export_ops)
+    outputs.component_variables = _ordered_bool_dict(get(raw, "component_variables", nothing))
+    outputs.scene_variables = _ordered_bool_dict(get(raw, "scene_variables", nothing))
+    outputs.opf_variables = _ordered_bool_dict(get(raw, "opf_variables", nothing))
+    outputs.opf_overwrite_variables = _as_bool(get(raw, "opf_overwrite_variables", outputs.opf_overwrite_variables), outputs.opf_overwrite_variables)
+
+    cfg = LightConfig(
+        String(path),
+        paths,
+        general,
+        outputs,
+        OrderedDict{String,Any}[],
+        _config_extras(raw),
+    )
+    refresh_light_config!(cfg; reload_models=true)
 end
 
 """
     write_light_inputs(outdir, cfg; scene_rel, config_name="config.yml")::String
 
-Write the ordered YAML inputs back to disk, preserving parameter order from import.
+Write the parsed light inputs back to disk.
 `scene_rel` should point to the scene file to reference from the written config.
 """
 function write_light_inputs(
@@ -137,28 +258,64 @@ function write_light_inputs(
     outroot = String(outdir)
     mkpath(outroot)
 
-    raw = copy(cfg.raw)
-    delete!(raw, "__base_dir")
+    raw = OrderedDict{String,Any}()
+    raw["scene"] = _safe_output_relpath(scene_rel)
 
-    model_rels = String[]
-    model_specs = get(raw, "models", nothing)
-    if model_specs isa AbstractVector
-        for i in eachindex(cfg.model_raw)
-            rel = i <= length(model_specs) ? _safe_output_relpath(string(model_specs[i])) : joinpath("models", "model$(i).yml")
+    if !isempty(cfg.paths.models)
+        model_rels = String[]
+        for i in eachindex(cfg.models)
+            rel = joinpath("models", basename(cfg.paths.models[i]))
             path = joinpath(outroot, rel)
             mkpath(dirname(path))
-            YAML.write_file(path, cfg.model_raw[i])
+            YAML.write_file(path, cfg.models[i])
             push!(model_rels, rel)
         end
         raw["models"] = model_rels
     end
 
-    meteo_rel = basename(cfg.meteo)
-    if isfile(cfg.meteo)
-        cp(cfg.meteo, joinpath(outroot, meteo_rel); force=true)
+    meteo_rel = basename(cfg.paths.meteo)
+    if isfile(cfg.paths.meteo)
+        cp(cfg.paths.meteo, joinpath(outroot, meteo_rel); force=true)
     end
-    raw["scene"] = _safe_output_relpath(scene_rel)
     raw["meteo"] = meteo_rel
+
+    for (k, v) in cfg.extras
+        raw[k] = v
+    end
+
+    raw["sky_sectors"] = cfg.general.turtle_sectors
+    raw["all_in_turtle"] = cfg.general.all_in_turtle
+    raw["radiation_timestep"] = cfg.general.radiation_timestep_minutes
+    raw["scattering"] = cfg.general.scattering
+    raw["pixel_size"] = cfg.general.pixel_size * 100.0
+    raw["cache_pixel_table"] = cfg.general.cache_pixel_table
+    raw["toricity"] = cfg.general.toricity
+    raw["cache_radiation"] = cfg.general.cache_radiation
+    raw["area_ratio"] = cfg.general.area_ratio
+    raw["scattering_max_iter"] = cfg.general.scattering_max_iter
+    raw["scattering_stop_ratio"] = cfg.general.scattering_stop_ratio
+    raw["scattering_coeff_par"] = cfg.general.scattering_coeff_par
+    raw["scattering_coeff_nir"] = cfg.general.scattering_coeff_nir
+    cfg.general.nir_interception && !haskey(cfg.extras, "nir_interception") || (raw["nir_interception"] = cfg.general.nir_interception)
+    cfg.general.nir_scattering && !haskey(cfg.extras, "nir_scattering") || (raw["nir_scattering"] = cfg.general.nir_scattering)
+    cfg.general.java_logged_turtle_dirs && (raw["java_logged_turtle_dirs"] = cfg.general.java_logged_turtle_dirs)
+    cfg.general.meteo_range === nothing || (raw["meteo_range"] = cfg.general.meteo_range)
+    cfg.general.debug && (raw["debug"] = cfg.general.debug)
+    cfg.general.log_debug && (raw["log_debug"] = cfg.general.log_debug)
+    cfg.general.debug_drop_leading_hit === nothing || (raw["debug_drop_leading_hit"] = OrderedDict(
+        "node_id" => cfg.general.debug_drop_leading_hit.node_id,
+        "x" => cfg.general.debug_drop_leading_hit.x,
+        "y" => cfg.general.debug_drop_leading_hit.y,
+    ))
+
+    raw["output_directory"] = cfg.outputs.output_directory
+    isempty(cfg.outputs.simulation_directory) || (raw["simulation_directory"] = cfg.outputs.simulation_directory)
+    raw["write_summary"] = cfg.outputs.write_summary
+    cfg.outputs.export_ops === nothing || (raw["export_ops"] = cfg.outputs.export_ops)
+    isempty(cfg.outputs.component_variables) || (raw["component_variables"] = cfg.outputs.component_variables)
+    isempty(cfg.outputs.scene_variables) || (raw["scene_variables"] = cfg.outputs.scene_variables)
+    isempty(cfg.outputs.opf_variables) || (raw["opf_variables"] = cfg.outputs.opf_variables)
+    raw["opf_overwrite_variables"] = cfg.outputs.opf_overwrite_variables
 
     cfg_path = joinpath(outroot, config_name)
     YAML.write_file(cfg_path, raw)

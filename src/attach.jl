@@ -93,7 +93,7 @@ function _paving_nodes_data(scene::SceneGeometry, cfg::LightConfig; xy_bounds=no
 
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
-    plotbox = _plotbox(scene, vertices, cfg.pixel_size)
+    plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
     first_node = isempty(scene.total_area_per_node) ? 1 : (maximum(keys(scene.total_area_per_node)) + 1)
     paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
 

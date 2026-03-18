@@ -21,31 +21,11 @@ function _normalize_group_name_local(x)
 end
 
 function _cfg_toricity(cfg::LightConfig)
-    _as_bool_local(get(cfg.raw, "toricity", true), true)
+    cfg.general.toricity
 end
 
 function _cfg_debug_drop_leading_hit(cfg::LightConfig)
-    spec = get(cfg.raw, "debug_drop_leading_hit", nothing)
-    spec isa AbstractDict || return nothing
-    node_id = try
-        Int(get(spec, "node_id", 0))
-    catch
-        0
-    end
-    x = try
-        Int(get(spec, "x", -1))
-    catch
-        -1
-    end
-    y = try
-        Int(get(spec, "y", -1))
-    catch
-        -1
-    end
-    node_id > 0 || return nothing
-    x >= 0 || return nothing
-    y >= 0 || return nothing
-    return (node_id=node_id, x=x, y=y)
+    cfg.general.debug_drop_leading_hit
 end
 
 function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg::LightConfig)
@@ -72,7 +52,7 @@ end
 
 function _cfg_plot_paving(cfg::LightConfig)
     best = 0
-    for model in cfg.model_raw
+    for model in cfg.models
         types = get(model, "Type", nothing)
         types isa AbstractDict || continue
         for (_, tconf) in types
@@ -90,7 +70,7 @@ end
 
 function _virtual_sensor_groups(cfg::LightConfig)
     out = Set{String}()
-    for model in cfg.model_raw
+    for model in cfg.models
         group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
         isempty(group) && continue
 
@@ -125,7 +105,7 @@ end
 
 function _ignored_group_types(cfg::LightConfig)
     out = Dict{String,Set{String}}()
-    for model in cfg.model_raw
+    for model in cfg.models
         group = haskey(model, "Group") ? _normalize_group_name_local(model["Group"]) : ""
         isempty(group) && continue
 
@@ -164,7 +144,7 @@ end
 
 function _group_light_emitters(cfg::LightConfig)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for model in cfg.model_raw
+    for model in cfg.models
         group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
         isempty(group) && continue
 
@@ -228,7 +208,7 @@ end
 function _use_upper_hit_pixel_table(cfg::LightConfig)
     # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
     # or explicit light emitters require complete interception stacks.
-    if cfg.scattering
+    if cfg.general.scattering
         return false
     end
     isempty(_virtual_sensor_groups(cfg)) || return false
@@ -324,18 +304,12 @@ function _emitter_transfer_weights(
 end
 
 function _cfg_cache_pixel_table(cfg::LightConfig)
-    if haskey(cfg.raw, "cache_pixel_table")
-        return _as_bool_local(cfg.raw["cache_pixel_table"], false)
-    end
-    if haskey(cfg.raw, "save_on_disk")
-        return _as_bool_local(cfg.raw["save_on_disk"], false)
-    end
-    false
+    cfg.general.cache_pixel_table
 end
 
 function _projection_cache_dir(cfg::LightConfig)
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
-    out_rel = haskey(cfg.raw, "output_directory") ? string(cfg.raw["output_directory"]) : ".archimedlight_cache"
+    base = cfg.paths.base_dir
+    out_rel = cfg.outputs.output_directory
     out_dir = isabspath(out_rel) ? out_rel : normpath(joinpath(base, out_rel))
     joinpath(out_dir, "pixel_tables_cache")
 end
@@ -831,7 +805,7 @@ function _rasterize_direction_java(
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projected_mesh_area), keys(projected_pixels_area))
-        if !cfg.area_ratio
+        if !cfg.general.area_ratio
             ratios[nid] = 1.0
         else
             ppa = get(projected_pixels_area, nid, 0.0)
@@ -930,20 +904,11 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
 end
 
 function _strict_java_float(cfg::LightConfig)
-    raw = cfg.raw
-    v = get(raw, "strict_java_float", nothing)
-    return _as_bool(v, false)
+    false
 end
 
 function _projection_unit_scale(cfg::LightConfig)
-    raw = cfg.raw
-    v = get(raw, "projection_unit_scale", nothing)
-    s = try
-        v === nothing ? 1.0 : Float64(v)
-    catch
-        1.0
-    end
-    return (isfinite(s) && s > 0.0) ? s : 1.0
+    1.0
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
@@ -1045,7 +1010,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
-    plotbox = _plotbox(scene, vertices, cfg.pixel_size)
+    plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
 
     node_ids = unique(face2node)
     node_group = Dict{Int,String}(nid => get(scene.node_group, nid, "") for nid in node_ids)

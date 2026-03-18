@@ -31,11 +31,7 @@ function _as_bool_local_turtle(x, default::Bool)
 end
 
 function _use_java_logged_turtle_dirs(cfg::LightConfig)
-    v = get(cfg.raw, "java_logged_turtle_dirs", nothing)
-    if v === nothing
-        v = get(ENV, "ARCHIMEDLIGHT_JAVA_LOGGED_TURTLE_DIRS", nothing)
-    end
-    _as_bool_local_turtle(v, false)
+    cfg.general.java_logged_turtle_dirs
 end
 
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
@@ -378,14 +374,14 @@ end
     build_turtle(cfg, sky)::TurtleGrid
 
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
-sector when `cfg.all_in_turtle == false`.
+sector when `cfg.general.all_in_turtle == false`.
 
 Set `java_logged_turtle_dirs: true` in the
 light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
 Float32 Java-style construction for larger sector counts).
 """
 function build_turtle(cfg::LightConfig, sky::SkyState)
-    n = max(cfg.turtle_sectors, 1)
+    n = max(cfg.general.turtle_sectors, 1)
     use_logged_dirs = _use_java_logged_turtle_dirs(cfg)
     dirs =
         if _java_turtle_order(n) >= 0
@@ -399,7 +395,7 @@ function build_turtle(cfg::LightConfig, sky::SkyState)
         push!(sectors, TurtleSector(i, dirs[i], w, :sky))
     end
 
-    if !cfg.all_in_turtle && sky.sun_elevation_deg > 0.0
+    if !cfg.general.all_in_turtle && sky.sun_elevation_deg > 0.0
         push!(sectors, TurtleSector(length(sectors) + 1, _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg), 0.0, :sun))
     end
     TurtleGrid(sectors)
@@ -524,7 +520,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
         end
     end
 
-    if cfg.all_in_turtle
+    if cfg.general.all_in_turtle
         # Java Turtle.directInTurtle parity:
         # distribute direct irradiance by angular overlap between a sun halo and each sector.
         dir_count = length(sky_ids)

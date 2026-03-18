@@ -33,8 +33,8 @@ function integrate_light(
     ra_nir_q_per_node = Dict{Int,Float64}()
 
     node_ids = collect(keys(first.projected_area_per_node))
-    default_abs_par = clamp(1.0 - cfg.scattering_coeff_par, 0.0, 1.0)
-    default_abs_nir = clamp(1.0 - cfg.scattering_coeff_nir, 0.0, 1.0)
+    default_abs_par = clamp(1.0 - cfg.general.scattering_coeff_par, 0.0, 1.0)
+    default_abs_nir = clamp(1.0 - cfg.general.scattering_coeff_nir, 0.0, 1.0)
     for nid in node_ids
         pa =
             if component_area_per_node === nothing
@@ -118,7 +118,7 @@ function integrate_light(
 end
 
 function _turtle_cache_key(turtle::TurtleGrid, cfg::LightConfig)
-    h = hash((length(turtle.sectors), cfg.pixel_size, cfg.area_ratio))
+    h = hash((length(turtle.sectors), cfg.general.pixel_size, cfg.general.area_ratio))
     for s in turtle.sectors
         d = s.direction
         h = hash((round(d[1], digits=8), round(d[2], digits=8), round(d[3], digits=8), s.source), h)
@@ -276,7 +276,7 @@ function _row_datetime_interval_local(row; index::Int=0)
 end
 
 function _cfg_meteo_range_spec_local(cfg::LightConfig)
-    v = get(cfg.raw, "meteo_range", nothing)
+    v = cfg.general.meteo_range
     v === nothing && return nothing
     s = strip(string(v))
     isempty(s) ? nothing : s
@@ -298,9 +298,9 @@ function _parse_bool_strict_local(v, field_name::String)
 end
 
 function _cfg_bool_override_local(cfg::LightConfig, key::String)
-    v = get(cfg.raw, key, nothing)
-    v === nothing && return nothing
-    _parse_bool_strict_local(v, key)
+    key == "nir_scattering" && return cfg.general.nir_scattering
+    key == "nir_interception" && return cfg.general.nir_interception
+    return nothing
 end
 
 """
@@ -310,7 +310,7 @@ NIR scattering activation with optional explicit override (`nir_scattering`).
 Default behavior remains enabled whenever scattering is enabled.
 """
 function _nir_scattering_enabled_local(cfg::LightConfig)
-    cfg.scattering || return false
+    cfg.general.scattering || return false
     override = _cfg_bool_override_local(cfg, "nir_scattering")
     override === nothing ? true : override
 end
@@ -454,8 +454,8 @@ end
 
 function _default_scattering_factor_local(cfg::LightConfig, band::String)
     b = uppercase(band)
-    b == "NIR" && return cfg.scattering_coeff_nir
-    return cfg.scattering_coeff_par
+    b == "NIR" && return cfg.general.scattering_coeff_nir
+    return cfg.general.scattering_coeff_par
 end
 
 function _compute_scattering_with_flags(
@@ -467,7 +467,7 @@ function _compute_scattering_with_flags(
     backend::Union{Nothing,ScatteringBackend}=nothing,
     nir_scattering::Bool=true,
 )
-    cfg.scattering || return nothing
+    cfg.general.scattering || return nothing
     nir_scattering && return compute_scattering(scene, turtle, first, cfg; mode=mode, backend=backend)
 
     par_only = compute_scattering_band(
@@ -479,7 +479,7 @@ function _compute_scattering_with_flags(
         backend=backend,
         band="PAR",
         initial_power_per_node=first.incident_par_power_per_node,
-        default_coeff=cfg.scattering_coeff_par,
+        default_coeff=cfg.general.scattering_coeff_par,
     )
     return ScatteringResult(par_only.added_power_per_node, Dict{Int,Float64}(), par_only.iterations, par_only.converged)
 end
@@ -581,7 +581,7 @@ function _compute_extra_band_light(
         order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_par_power_per_node)
 
         added =
-            if cfg.scattering
+            if cfg.general.scattering
                 compute_scattering_band(
                     scene,
                     turtle,
@@ -676,7 +676,7 @@ end
     run_light_series(scene, meteo, cfg; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
 
 Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
-response reuse when `cfg.cache_radiation` is enabled.
+response reuse when `cfg.general.cache_radiation` is enabled.
 """
 function run_light_series(
     scene::SceneGeometry,
@@ -692,7 +692,7 @@ function run_light_series(
     area_per_node = _interception_area_per_node_local(scene, cfg)
     abs_par = _node_absorptance_per_band(scene, cfg, "PAR")
     abs_nir = nir_interception ? _node_absorptance_per_band(scene, cfg, "NIR") : Dict{Int,Float64}()
-    use_cache = cfg.cache_radiation && _can_use_series_radiation_cache(ib)
+    use_cache = cfg.general.cache_radiation && _can_use_series_radiation_cache(ib)
     cache = Dict{UInt64,Tuple{
         Vector{Dict{Int,Float64}},
         Vector{Dict{Int,Int}},

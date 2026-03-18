@@ -186,7 +186,7 @@ end
 
 function _default_light_component_variables(cfg::LightConfig)
     cols = [c for c in _COMPONENT_VARIABLE_ORDER if !(c in _OUT_OF_SCOPE_COMPONENT_VARIABLES)]
-    if !cfg.scattering
+    if !cfg.general.scattering
         cols = [c for c in cols if !(c in _SCATTERING_REQUIRED_COMPONENT_VARIABLES)]
     end
     return cols
@@ -194,7 +194,7 @@ end
 
 function _require_supported_output_configuration(cfg::LightConfig, cols::Vector{String})
     requested = Set(cols)
-    bad_scattering = !cfg.scattering ? sort!(collect(intersect(requested, _SCATTERING_REQUIRED_COMPONENT_VARIABLES))) : String[]
+    bad_scattering = !cfg.general.scattering ? sort!(collect(intersect(requested, _SCATTERING_REQUIRED_COMPONENT_VARIABLES))) : String[]
     bad_scope = sort!(collect(intersect(requested, _OUT_OF_SCOPE_COMPONENT_VARIABLES)))
 
     isempty(bad_scattering) && isempty(bad_scope) && return nothing
@@ -213,12 +213,12 @@ end
 """
     component_variable_names(cfg)::Vector{String}
 
-Resolve component output variable names from `cfg.raw["component_variables"]` when available.
+Resolve component output variable names from `cfg.outputs.component_variables` when available.
 Only variables with truthy values are kept.
 """
 function component_variable_names(cfg::LightConfig)
-    d = get(cfg.raw, "component_variables", nothing)
-    d isa AbstractDict || return _default_light_component_variables(cfg)
+    d = cfg.outputs.component_variables
+    isempty(d) && return _default_light_component_variables(cfg)
 
     vars = String[]
     for (k, v) in d
@@ -233,12 +233,12 @@ end
 """
     scene_variable_names(cfg)::Vector{String}
 
-Resolve scene output variable names from `cfg.raw["scene_variables"]` when available.
+Resolve scene output variable names from `cfg.outputs.scene_variables` when available.
 Only variables with truthy values are kept. Defaults match Java `scene_values.csv`.
 """
 function scene_variable_names(cfg::LightConfig)
-    d = get(cfg.raw, "scene_variables", nothing)
-    d isa AbstractDict || return copy(_SCENE_VARIABLE_ORDER)
+    d = cfg.outputs.scene_variables
+    isempty(d) && return copy(_SCENE_VARIABLE_ORDER)
 
     vars = String[]
     for (k, v) in d
@@ -249,8 +249,7 @@ function scene_variable_names(cfg::LightConfig)
 end
 
 function _config_wants_component_outputs(cfg::LightConfig)
-    d = get(cfg.raw, "component_variables", nothing)
-    d isa AbstractDict || return false
+    d = cfg.outputs.component_variables
     for (_, v) in d
         _as_bool(v, false) && return true
     end
@@ -258,16 +257,11 @@ function _config_wants_component_outputs(cfg::LightConfig)
 end
 
 function _config_debug_enabled(cfg::LightConfig)
-    raw = cfg.raw
-    for key in ("log_debug", "debug")
-        haskey(raw, key) || continue
-        _as_bool(raw[key], false) && return true
-    end
-    return false
+    cfg.general.log_debug || cfg.general.debug
 end
 
 function _export_ops_raw_value(cfg::LightConfig)
-    get(cfg.raw, "export_ops", nothing)
+    cfg.outputs.export_ops
 end
 
 function _available_export_step_numbers(start_step_number::Int, nsteps::Int)
@@ -301,8 +295,8 @@ function _ops_export_step_numbers(cfg::LightConfig, start_step_number::Int, nste
 end
 
 function _ops_export_variables(cfg::LightConfig)
-    d = get(cfg.raw, "opf_variables", nothing)
-    d isa AbstractDict || return ["Ri_PAR_0_f", "Ri_NIR_0_f"]
+    d = cfg.outputs.opf_variables
+    isempty(d) && return ["Ri_PAR_0_f", "Ri_NIR_0_f"]
     vars = String[]
     valid = Set(_COMPONENT_VARIABLE_ORDER)
     for (k, v) in d
@@ -315,8 +309,7 @@ function _ops_export_variables(cfg::LightConfig)
 end
 
 function _opf_overwrite_variables(cfg::LightConfig)
-    haskey(cfg.raw, "opf_overwrite_variables") || return true
-    return _as_bool(cfg.raw["opf_overwrite_variables"], true)
+    cfg.outputs.opf_overwrite_variables
 end
 
 function _write_export_ops_outputs(
@@ -386,8 +379,8 @@ end
 Resolve absolute output directory from config (`output_directory`, default `"output"`).
 """
 function output_directory(cfg::LightConfig)
-    out_rel = haskey(cfg.raw, "output_directory") ? string(cfg.raw["output_directory"]) : "output"
-    base = get(cfg.raw, "__base_dir", dirname(cfg.scene))
+    out_rel = cfg.outputs.output_directory
+    base = cfg.paths.base_dir
     isabspath(out_rel) ? normpath(out_rel) : normpath(joinpath(base, out_rel))
 end
 
@@ -430,13 +423,13 @@ function simulation_output_directory(
     out_base = base_output === nothing ? output_directory(cfg) : normpath(String(base_output))
     create && mkpath(out_base)
 
-    sim_name = haskey(cfg.raw, "simulation_directory") ? strip(string(cfg.raw["simulation_directory"])) : ""
+    sim_name = cfg.outputs.simulation_directory
     if isempty(sim_name)
         sim_name = _next_simulation_counter_dirname(out_base; counter_digits=counter_digits)
     end
 
     out = normpath(joinpath(out_base, sim_name))
-    if create && clean_existing && haskey(cfg.raw, "simulation_directory") && isdir(out)
+    if create && clean_existing && !isempty(cfg.outputs.simulation_directory) && isdir(out)
         rm(out; recursive=true, force=true)
     end
     create && mkpath(out)
@@ -551,7 +544,7 @@ end
 
 function _group_type_hints(cfg::LightConfig)
     out = Dict{String,Vector{String}}()
-    for model in cfg.model_raw
+    for model in cfg.models
         group = haskey(model, "Group") ? strip(string(model["Group"])) : ""
         isempty(group) && continue
         types = get(model, "Type", nothing)
@@ -1162,12 +1155,12 @@ function _scattering_iteration_history_one_band(
     coeff_by_node = _coeff_by_node(graph, band_key, default_coeff)
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     ref = _sum_dict_values(current)
-    thr = cfg.scattering_stop_ratio * max(ref, eps(Float64))
+    thr = cfg.general.scattering_stop_ratio * max(ref, eps(Float64))
     per_iter = Vector{Dict{Int,Float64}}()
     iterations = 0
     converged = false
 
-    for it in 1:cfg.scattering_max_iter
+    for it in 1:cfg.general.scattering_max_iter
         iterations = it
         hit_energy = _dict_zero(node_ids)
         for nid in node_ids
@@ -1580,10 +1573,10 @@ function write_light_outputs(
 
     do_component = isnothing(write_component) ? _config_wants_component_outputs(cfg) : Bool(write_component)
     do_scene = isnothing(write_scene) ? true : Bool(write_scene)
-    do_summary = isnothing(write_summary) ? _as_bool(get(cfg.raw, "write_summary", false), false) : Bool(write_summary)
+    do_summary = isnothing(write_summary) ? cfg.outputs.write_summary : Bool(write_summary)
     debug_default = _config_debug_enabled(cfg)
     do_sun_log = isnothing(write_sun_position_log) ? debug_default : Bool(write_sun_position_log)
-    do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.scattering) : Bool(write_scattering_log)
+    do_scat_log = isnothing(write_scattering_log) ? (debug_default && cfg.general.scattering) : Bool(write_scattering_log)
     do_export_ops = isnothing(write_export_ops) ? (_export_ops_raw_value(cfg) !== nothing) : Bool(write_export_ops)
     do_inputs = isnothing(write_inputs) ? do_export_ops : Bool(write_inputs)
 
@@ -1624,7 +1617,7 @@ function write_light_outputs(
         out["log_sun_position"] = path
     end
 
-    if do_scat_log && cfg.scattering
+    if do_scat_log && cfg.general.scattering
         for b in scattering_log_bands
             band = uppercase(String(b))
             path = joinpath(outroot, "log-iteration-scat-$(lowercase(band)).csv")

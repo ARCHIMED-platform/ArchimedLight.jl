@@ -84,7 +84,7 @@ end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, cfg::LightConfig, node_ids)
     all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
-    if !cfg.all_in_turtle
+    if !cfg.general.all_in_turtle
         for (nid, hsun) in sun_hits
             all_hits[nid] = max(0, get(all_hits, nid, 0) - hsun)
         end
@@ -95,7 +95,7 @@ end
 function _group_optical_coeffs(cfg::LightConfig)
     coeffs = Dict{Tuple{String,String},Dict{String,Float64}}()
 
-    for model in cfg.model_raw
+    for model in cfg.models
         group = haskey(model, "Group") ? string(model["Group"]) : ""
         isempty(group) && continue
 
@@ -232,8 +232,8 @@ end
 
 function _default_band_coeff(cfg::LightConfig, band_key::String)
     bk = uppercase(band_key)
-    bk == "NIR" && return cfg.scattering_coeff_nir
-    return cfg.scattering_coeff_par
+    bk == "NIR" && return cfg.general.scattering_coeff_nir
+    return cfg.general.scattering_coeff_par
 end
 
 function _coeff_by_node(
@@ -269,11 +269,11 @@ function _propagate_scattering_one_band(
     current = Dict{Int,Float64}(nid => get(initial_power_per_node, nid, 0.0) for nid in node_ids)
     added = _dict_zero(node_ids)
     ref = _sum_dict_values(current)
-    thr = cfg.scattering_stop_ratio * max(ref, eps(Float64))
+    thr = cfg.general.scattering_stop_ratio * max(ref, eps(Float64))
     iterations = 0
 
     converged = false
-    for it in 1:cfg.scattering_max_iter
+    for it in 1:cfg.general.scattering_max_iter
         iterations = it
 
         hit_energy = _dict_zero(node_ids)
@@ -447,14 +447,14 @@ function compute_scattering(
         graph,
         cfg,
         "PAR",
-        cfg.scattering_coeff_par,
+        cfg.general.scattering_coeff_par,
     )
     added_nir, it_nir, conv_nir = _scattering_one_band(
         initial_nir,
         graph,
         cfg,
         "NIR",
-        cfg.scattering_coeff_nir,
+        cfg.general.scattering_coeff_nir,
     )
 
     ScatteringResult(added_par, added_nir, max(it_par, it_nir), conv_par && conv_nir)

@@ -50,8 +50,8 @@ end
 function write_case(case_name::String)
     case_root = joinpath(dirname(@__DIR__), "test", "fast_fixtures", case_name)
     cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    scene = ArchimedLight.read_scene(cfg.paths.scene)
+    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
     selected = ArchimedLight.prepare_meteo(meteo, cfg)
     series = ArchimedLight.run_light_series(scene, meteo, cfg)
 

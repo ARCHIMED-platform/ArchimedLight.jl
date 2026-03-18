@@ -11,6 +11,9 @@ include("attach.jl")
 include("output.jl")
 
 export LightConfig
+export LightConfigPaths
+export LightGeneralConfig
+export LightOutputsConfig
 export MeteoTable
 export SceneGeometry
 export InterceptionBackend, RasterCPUBackend

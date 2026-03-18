@@ -32,8 +32,8 @@ end
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
     cfg = ArchimedLight.read_light_config(paths.config)
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
+    scene = ArchimedLight.read_scene(cfg.paths.scene)
+    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
     rows = ArchimedLight.prepare_meteo(meteo, cfg).rows
     return (paths=paths, cfg=cfg, scene=scene, meteo=meteo, rows=rows)
 end
@@ -42,13 +42,20 @@ function _override_cfg(cfg0::ArchimedLight.LightConfig; kwargs...)
     cfg = deepcopy(cfg0)
     for (k, v) in kwargs
         if k == :pixel_size_m
-            cfg.raw["pixel_size"] = Float64(v) * 100.0
+            cfg.general.pixel_size = Float64(v)
+        elseif k == :toricity
+            cfg.general.toricity = Bool(v)
+        elseif k == :scattering
+            cfg.general.scattering = Bool(v)
+        elseif k == :cache_radiation
+            cfg.general.cache_radiation = Bool(v)
+        elseif k == :cache_pixel_table
+            cfg.general.cache_pixel_table = Bool(v)
         else
-            cfg.raw[String(k)] = v
+            setproperty!(cfg.general, k, v)
         end
     end
-    ArchimedLight.refresh_light_config!(cfg; reload_models=true)
-    cfg.raw["output_directory"] = mktempdir()
+    cfg.outputs.output_directory = mktempdir()
     return cfg
 end
 
@@ -177,8 +184,8 @@ const SYNTHETIC = _synthetic_fixture()
 
 SUITE["IO"] = BenchmarkGroup()
 SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_light_config($(SIMPLEPLANT.paths.config))
-SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.scene)) evals = 1
-SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.meteo))
+SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.paths.scene)) evals = 1
+SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.paths.meteo))
 
 SUITE["Run light"] = BenchmarkGroup()
 SUITE["Run light"]["step"] = BenchmarkGroup()

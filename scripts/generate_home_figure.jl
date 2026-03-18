@@ -16,13 +16,20 @@ const HOME_FIGURE_PLOT_PAVING = 2500
 const HOME_FIGURE_GROUND_SPAN = 45.0
 
 sim_dir = joinpath(REPO_ROOT, "example_2", "config.yml")
-# cfg = read_light_config(_home_figure_config_path())
 cfg = read_light_config(sim_dir)
-scene = read_scene(cfg.scene)
-meteo = read_meteo(cfg.meteo)
+for model in cfg.models
+    get(model, "Group", nothing) == "pavement" || continue
+    types = get(model, "Type", nothing)
+    types isa AbstractDict || continue
+    haskey(types, "Cobblestone") || continue
+    cobble = types["Cobblestone"]
+    cobble isa AbstractDict || continue
+    cobble["plot_paving"] = HOME_FIGURE_PLOT_PAVING
+end
+scene = read_scene(cfg.paths.scene)
+meteo = read_meteo(cfg.paths.meteo)
 step = run_light_step(scene, first(meteo.rows), cfg)
 
-colorrange = _ri_par_colorrange(scene, step, cfg, NamedTuple{(:xmin, :ymin, :xmax, :ymax)}(scene.scene_xy_bounds))
 viz_mtg = visual_scene_mtg(
     scene,
     cfg,
@@ -46,4 +53,3 @@ PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 mkpath(dirname(OUT_PATH))
 save(OUT_PATH, fig)
 println("wrote ", OUT_PATH)
-

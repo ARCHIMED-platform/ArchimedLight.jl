@@ -1,12 +1,12 @@
 using Test
 
-@testset "Core smoke" begin
-    case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input")
-    cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-    scene = ArchimedLight.read_scene(cfg.scene)
-    meteo = ArchimedLight.read_meteo(cfg.meteo)
-    selected = ArchimedLight.prepare_meteo(meteo, cfg)
-    series = ArchimedLight.run_light_series(scene, meteo, cfg)
+    @testset "Core smoke" begin
+        case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input")
+        cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
+        scene = ArchimedLight.read_scene(cfg.paths.scene)
+        meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
+        selected = ArchimedLight.prepare_meteo(meteo, cfg)
+        series = ArchimedLight.run_light_series(scene, meteo, cfg)
 
     @test !isempty(selected.rows)
     @test !isempty(series)

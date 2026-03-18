@@ -7,8 +7,8 @@
 using ArchimedLight
 
 cfg = read_light_config("config.yml")
-scene = read_scene(cfg.scene)
-meteo = read_meteo(cfg.meteo)
+scene = read_scene(cfg.paths.scene)
+meteo = read_meteo(cfg.paths.meteo)
 row = first(meteo.rows)
 ```
 
