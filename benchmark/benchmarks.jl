@@ -21,25 +21,7 @@ end
 
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
-    raw = ArchimedLight._load_yaml_ordered(paths.config)
-    scene = ArchimedLight.read_scene(normpath(joinpath(paths.root, string(raw["scene"]))))
-    models = ArchimedLight.read_models(paths.config)
-    options = ArchimedLight.read_options(paths.config)
-    meteo = ArchimedLight.read_meteo(normpath(joinpath(paths.root, string(raw["meteo"]))))
-
-    paving_count = 0
-    for group_model in values(models.groups)
-        for type_model in values(group_model.types)
-            if haskey(type_model.extras, "plot_paving")
-                paving_count = max(paving_count, Int(type_model.extras["plot_paving"]))
-            end
-        end
-    end
-    if paving_count > 0
-        n = max(1, round(Int, sqrt(paving_count)))
-        ArchimedLight.add_ground!(scene; nx=n, ny=n, z=0.005)
-    end
-
+    options, scene, meteo, models = ArchimedLight.read_config(paths.config)
     rows = ArchimedLight.prepare_meteo(meteo, options).rows
     return (paths=paths, scene=scene, models=models, options=options, meteo=meteo, rows=rows)
 end
@@ -185,6 +167,7 @@ const SKY_DIRECT = _load_fixture("sky_46_direct")
 const SYNTHETIC = _synthetic_fixture()
 
 SUITE["IO"] = BenchmarkGroup()
+SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_config($(SIMPLEPLANT.paths.config))
 SUITE["IO"]["read models"]["simpleplant"] = @benchmarkable ArchimedLight.read_models($(SIMPLEPLANT.paths.config))
 SUITE["IO"]["read options"]["simpleplant"] = @benchmarkable ArchimedLight.read_options($(SIMPLEPLANT.paths.config))
 SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene(joinpath($(SIMPLEPLANT.paths.root), "scene", "simple.ops")) evals = 1

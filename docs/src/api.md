@@ -3,6 +3,7 @@
 ```@docs
 LightModels
 LightOptions
+read_config
 read_models
 prepare_models
 read_options

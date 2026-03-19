@@ -241,6 +241,110 @@ function read_options(path::AbstractString)
     )
 end
 
+function _config_ground_spec(models::LightModels)
+    count = 0
+    group_name = "pavement"
+    type_name = "Cobblestone"
+    for (group, group_model) in models.groups
+        for (type_key, type_model) in group_model.types
+            if haskey(type_model.extras, "plot_paving")
+                paving_count = _as_int(type_model.extras["plot_paving"], 0)
+                if paving_count > count
+                    count = paving_count
+                    group_name = group
+                    type_name = type_key
+                end
+            end
+        end
+    end
+    return (count=count, group=group_name, type=type_name)
+end
+
+function _scene_has_group_type(scene::SceneGeometry, group::AbstractString, type::AbstractString)
+    any(node.group == group && node.type == type for node in values(scene.nodes))
+end
+
+function _paving_tile_mesh(vertices, faces_for_tile)
+    used = sort!(unique(vcat([[Int(f[1]), Int(f[2]), Int(f[3])] for f in faces_for_tile]...)))
+    remap = Dict{Int,Int}(old => new for (new, old) in enumerate(used))
+    tile_points = GeometryBasics.Point3f[
+        GeometryBasics.Point3f(Float32(vertices[idx][1]), Float32(vertices[idx][2]), Float32(vertices[idx][3])) for idx in used
+    ]
+    tile_faces = PlantGeom.Face3[
+        PlantGeom.Face3(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
+    ]
+    return GeometryBasics.Mesh(tile_points, tile_faces)
+end
+
+function _materialize_paving!(
+    scene::SceneGeometry,
+    count::Int;
+    xy_bounds=nothing,
+    group::AbstractString="pavement",
+    type::AbstractString="Cobblestone",
+)
+    count > 0 || return scene
+    scene.mtg === nothing && error("_materialize_paving! requires an MTG-backed scene.")
+    bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
+    bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
+    xmin, ymin, xmax, ymax = bounds
+    plotbox = (
+        origin_x=Float64(xmin),
+        origin_y=Float64(ymin),
+        xdim=Float64(xmax - xmin),
+        ydim=Float64(ymax - ymin),
+    )
+    first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
+    vertices, faces, face2node, _ = _paving_mesh(plotbox, count, first_node)
+    faces_by_node = Dict{Int,Vector{PlantGeom.Face3}}()
+    for (face, nid) in zip(faces, face2node)
+        push!(get!(faces_by_node, nid, PlantGeom.Face3[]), face)
+    end
+
+    root_scale = MultiScaleTreeGraph.scale(scene.mtg)
+    for nid in sort!(collect(keys(faces_by_node)))
+        mesh = _paving_tile_mesh(vertices, faces_by_node[nid])
+        ref_mesh = PlantGeom.RefMesh("$(group)_$(nid)", mesh)
+        MultiScaleTreeGraph.Node(
+            nid,
+            scene.mtg,
+            MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), nid, root_scale + 1),
+            Dict{Symbol,Any}(
+                :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
+                :functional_group => String(group),
+                :type => String(type),
+                :object_id => -1,
+                :source_topology_id => nid,
+            ),
+        )
+    end
+
+    scene.scene_xy_bounds = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
+    _drop_scene_surface_geometry!(scene.mtg)
+    _refresh_ref_mesh_registry!(scene.mtg)
+    _refresh_scene!(scene)
+end
+
+function read_config(path::AbstractString; plot_paving_override=nothing)
+    raw = _load_yaml_ordered(path)
+    base = dirname(path)
+    scene_rel = haskey(raw, "scene") ? string(raw["scene"]) : error("Config file $(path) is missing `scene`.")
+    meteo_rel = haskey(raw, "meteo") ? string(raw["meteo"]) : error("Config file $(path) is missing `meteo`.")
+
+    options = read_options(path)
+    scene = read_scene(_join_if_relative(base, scene_rel))
+    meteo = read_meteo(_join_if_relative(base, meteo_rel))
+    models = read_models(path)
+
+    ground = _config_ground_spec(models)
+    ground_count = plot_paving_override === nothing ? ground.count : _as_int(plot_paving_override, ground.count)
+    if ground_count > 0 && !_scene_has_group_type(scene, ground.group, ground.type)
+        _materialize_paving!(scene, ground_count; group=ground.group, type=ground.type)
+    end
+
+    return options, scene, meteo, models
+end
+
 function _triangle_area3d(p1, p2, p3)
     v1 = StaticArrays.SVector{3,Float64}(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
     v2 = StaticArrays.SVector{3,Float64}(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
@@ -470,6 +574,12 @@ function _refresh_ref_mesh_registry!(mtg)
     return mtg[:ref_meshes]
 end
 
+function _drop_scene_surface_geometry!(mtg)
+    haskey(mtg, :geometry) || return mtg
+    mtg[:geometry] = nothing
+    return mtg
+end
+
 function _normalize_source_topology_ids!(mtg)
     MultiScaleTreeGraph.traverse!(mtg) do node
         if !haskey(node, :source_topology_id) || node[:source_topology_id] === nothing
@@ -529,6 +639,7 @@ function add_ground!(
     end
 
     scene.scene_xy_bounds = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
+    _drop_scene_surface_geometry!(scene.mtg)
     _refresh_ref_mesh_registry!(scene.mtg)
     _refresh_scene!(scene)
 end

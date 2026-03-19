@@ -41,6 +41,7 @@ export add_ground!
 export read_models
 export prepare_models
 export read_options
+export read_config
 export read_meteo
 export prepare_meteo
 export compute_sky

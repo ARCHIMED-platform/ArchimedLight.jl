@@ -152,10 +152,7 @@ function main()
     base = @__DIR__
 
     config_path = joinpath(base, "config.yml")
-    scene = read_scene(joinpath(base, "scene", "simple.ops"))
-    models = read_models([joinpath(base, "model_simple.yml"), joinpath(base, "model_soil.yml")])
-    options = read_options(config_path)
-    meteo = read_meteo(joinpath(base, "meteo.csv"))
+    options, scene, meteo, models = read_config(config_path)
     row = first(prepare_meteo(meteo, options).rows)
 
     # Stage-by-stage execution with explicit backend objects.

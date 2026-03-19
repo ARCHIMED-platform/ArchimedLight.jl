@@ -25,10 +25,7 @@ Energy balance, transpiration, and photosynthesis are meant to be computed by [P
 ```julia
 using ArchimedLight
 
-scene = read_scene("scene.ops")
-models = read_models(["plant.yml", "soil.yml"])
-options = LightOptions()
-meteo = read_meteo("meteo.csv")
+options, scene, meteo, models = read_config("config.yml")
 
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)

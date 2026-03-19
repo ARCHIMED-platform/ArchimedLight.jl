@@ -19,10 +19,7 @@ Energy balance, transpiration and photosynthesis are intentionally out of scope 
 ```julia
 using ArchimedLight
 
-scene = read_scene("scene.ops")
-models = read_models(["plant.yml", "soil.yml"])
-options = LightOptions()
-meteo = read_meteo("meteo.csv")
+options, scene, meteo, models = read_config("config.yml")
 
 row = first(prepare_meteo(meteo, options).rows)
 sky = compute_sky(row, options)
@@ -50,6 +47,9 @@ File exports and attached MTG attributes keep the ARCHIMED names:
 
 ## Short pipeline
 ```julia
+options, scene, meteo, models = read_config("config.yml")
+row = first(prepare_meteo(meteo, options).rows)
+
 step = run_light_step(scene, models, row, options)
 series = run_light_series(scene, models, meteo, options)
 
@@ -76,6 +76,7 @@ julia --project=. example_1/full_featured_example.jl
 ```
 
 ## Stage flexibility
+- `read_config("config.yml")` is the convenience entrypoint for file-driven workflows and returns `options, scene, meteo, models`.
 - You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, `integrate_light`, ...).
 - File-based and in-memory workflows share the same runtime path: `read_scene(...)` and `prepare_scene(...)` both produce `SceneGeometry`, while `read_models(...)` and `prepare_models(...)` both produce `LightModels`.
 - `compute_sky` follows the ARCHIMED clearness/global conversion and DeJong hourly direct/diffuse partitioning.

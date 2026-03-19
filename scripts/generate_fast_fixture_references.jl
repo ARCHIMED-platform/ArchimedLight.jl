@@ -5,8 +5,6 @@ using CSV
 using Tables
 using CairoMakie
 
-include(joinpath(dirname(@__DIR__), "test", "support.jl"))
-
 function render_ri_par_f_figure(scene, models, options, step; title::String)
     geometry = ArchimedLight._scene_geometry_for_interception(scene, models, options)
     metric = step.budget.incident_flux.total.par
@@ -72,17 +70,18 @@ end
 
 function write_case(case_name::String)
     case_root = joinpath(dirname(@__DIR__), "test", "fast_fixtures", case_name)
-    fixture = load_fixture_inputs(joinpath(case_root, "input"))
-    step = first(run_light_series(fixture.scene, fixture.models, fixture.meteo, fixture.options))
+    config_path = joinpath(case_root, "input", "config.yml")
+    options, scene, meteo, models = read_config(config_path)
+    step = first(run_light_series(scene, models, meteo, options))
 
     expected_root = joinpath(case_root, "expected")
     mkpath(expected_root)
 
     csv_path = joinpath(expected_root, "component_values.csv")
-    CSV.write(csv_path, Tables.table(_component_rows(fixture.scene, fixture.models, fixture.options, step)); delim=';')
+    CSV.write(csv_path, Tables.table(_component_rows(scene, models, options, step)); delim=';')
 
     png_path = joinpath(expected_root, "ri_par_f_step0.png")
-    fig = render_ri_par_f_figure(fixture.scene, fixture.models, fixture.options, step; title="$(case_name) | Ri_PAR_f")
+    fig = render_ri_par_f_figure(scene, models, options, step; title="$(case_name) | Ri_PAR_f")
     save(png_path, fig)
 
     println("updated ", case_name)
