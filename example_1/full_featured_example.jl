@@ -1,3 +1,7 @@
+const REPO_ROOT = dirname(@__DIR__)
+import Pkg
+Pkg.activate(joinpath(REPO_ROOT, "test"))
+
 using ArchimedLight
 using CSV
 using PlantGeom
@@ -28,8 +32,8 @@ function triangle_area3d(p1, p2, p3)
     0.5 * norm(cross(v1, v2))
 end
 
-function node_area_from_interception_geometry(scene, cfg)
-    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+function node_area_from_interception_geometry(scene, models, options)
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, models, options)
     area = Dict{Int,Float64}()
     for i in eachindex(geometry.faces)
         f = geometry.faces[i]
@@ -60,9 +64,9 @@ function read_java_component_values(path::String)
     return d
 end
 
-function build_julia_component_values(scene, cfg, step)
-    key_by_node = ArchimedLight._interception_output_keys(scene, cfg)
-    area_by_node = node_area_from_interception_geometry(scene, cfg)
+function build_julia_component_values(scene, models, options, step)
+    key_by_node = ArchimedLight._interception_output_keys(scene, models, options)
+    area_by_node = node_area_from_interception_geometry(scene, models, options)
     custom0 = get(step.budget.extra_initial_energy_per_band, "CUSTOM", Dict{Int,Float64}())
     customn = get(step.budget.extra_energy_per_band, "CUSTOM", Dict{Int,Float64}())
     d = Dict{Tuple{Int,Int},NamedTuple}()
@@ -147,32 +151,24 @@ end
 function main()
     base = @__DIR__
 
-    cfg = read_light_config(joinpath(base, "config.yml"))
-    scene = read_scene(cfg.paths.scene)
-    meteo = read_meteo(cfg.paths.meteo)
-    row = first(meteo.rows)
+    config_path = joinpath(base, "config.yml")
+    options, scene, meteo, models = read_config(config_path)
+    row = first(prepare_meteo(meteo, options).rows)
 
     # Stage-by-stage execution with explicit backend objects.
-    sky = compute_sky(row, cfg)
-    turtle = build_turtle(cfg, sky)
-    fluxes = compute_directional_fluxes(sky, turtle, cfg)
-    first_order = compute_first_order(scene, turtle, fluxes, cfg; backend=RasterCPUBackend())
-    graph = build_scattering_transfer_graph(scene, turtle, first_order, cfg; backend=RaycastScatteringBackend())
-    scat = compute_scattering(graph, first_order, cfg; backend=RaycastScatteringBackend())
-    dt_seconds = step_duration_seconds(row)
-    budget = integrate_light(
-        first_order,
-        scat,
-        cfg;
-        step_duration_seconds=dt_seconds,
-        component_area_per_node=node_areas(scene),
-    )
+    sky = compute_sky(row, options)
+    turtle = build_turtle(options, sky)
+    fluxes = compute_directional_fluxes(row, sky, turtle, options)
+    first_order = compute_first_order(scene, models, turtle, fluxes, options; backend=RasterCPUBackend())
+    scat = compute_scattering(scene, models, turtle, first_order, options; backend=RaycastScatteringBackend())
+    budget = integrate_light(scene, models, first_order, scat, options; meteo_row=row)
 
     # Single-call pipeline with backend kwargs.
     step = run_light_step(
         scene,
+        models,
         row,
-        cfg;
+        options;
         interception_backend=RasterCPUBackend(),
         scattering_backend=RaycastScatteringBackend(),
     )
@@ -189,8 +185,9 @@ function main()
     # Series execution (same inputs) with links backend selection.
     series = run_light_series(
         scene,
+        models,
         meteo,
-        cfg;
+        options;
         interception_backend=RasterCPUBackend(),
         scattering_mode=:links,
         scattering_backend=LinksScatteringBackend(),
@@ -239,7 +236,7 @@ function main()
     java_component_path = joinpath(base, "output", "000001", "component_values.csv")
     if isfile(java_component_path)
         java_vals = read_java_component_values(java_component_path)
-        julia_vals = build_julia_component_values(scene, cfg, step)
+        julia_vals = build_julia_component_values(scene, models, options, step)
         cmp_path = joinpath(out_dir, "component_values_java_vs_julia.csv")
         cmp = write_component_comparison(cmp_path, java_vals, julia_vals)
         println("- Java vs Julia comparison CSV: ", cmp_path)

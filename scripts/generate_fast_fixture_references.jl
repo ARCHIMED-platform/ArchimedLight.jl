@@ -5,8 +5,8 @@ using CSV
 using Tables
 using CairoMakie
 
-function render_ri_par_f_figure(scene, step, cfg; title::String)
-    geometry = ArchimedLight._scene_geometry_for_interception(scene, cfg)
+function render_ri_par_f_figure(scene, models, options, step; title::String)
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, models, options)
     metric = step.budget.incident_flux.total.par
 
     v_sum = zeros(Float64, length(geometry.vertices))
@@ -47,33 +47,41 @@ function render_ri_par_f_figure(scene, step, cfg; title::String)
     return fig
 end
 
+function _component_rows(scene, models, options, step)
+    out = NamedTuple[]
+    keys_by_node = ArchimedLight._interception_output_keys(scene, models, options)
+    for nid in sort(collect(keys(keys_by_node)))
+        node = ArchimedLight.scene_node(scene, nid)
+        node === nothing && continue
+        object_id, source_topology_id = keys_by_node[nid]
+        push!(
+            out,
+            (
+                step_number=0,
+                source_topology_id=source_topology_id,
+                object_id=object_id,
+                area=node.area,
+                Ri_PAR_0_q=get(step.budget.incident_energy.initial.par, nid, 0.0),
+            ),
+        )
+    end
+    out
+end
+
 function write_case(case_name::String)
     case_root = joinpath(dirname(@__DIR__), "test", "fast_fixtures", case_name)
-    cfg = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-    scene = ArchimedLight.read_scene(cfg.paths.scene)
-    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
-    selected = ArchimedLight.prepare_meteo(meteo, cfg)
-    series = ArchimedLight.run_light_series(scene, meteo, cfg)
+    config_path = joinpath(case_root, "input", "config.yml")
+    options, scene, meteo, models = read_config(config_path)
+    step = first(run_light_series(scene, models, meteo, options))
 
-    step = first(series)
-    meteo_row = first(selected.rows)
     expected_root = joinpath(case_root, "expected")
     mkpath(expected_root)
 
     csv_path = joinpath(expected_root, "component_values.csv")
-    ArchimedLight.write_component_values_csv(
-        csv_path,
-        scene,
-        step,
-        cfg;
-        meteo_row=meteo_row,
-        step_number=0,
-        columns=["step_number", "source_topology_id", "object_id", "area", "Ri_PAR_0_q"],
-        strict=false,
-    )
+    CSV.write(csv_path, Tables.table(_component_rows(scene, models, options, step)); delim=';')
 
     png_path = joinpath(expected_root, "ri_par_f_step0.png")
-    fig = render_ri_par_f_figure(scene, step, cfg; title="$(case_name) | Ri_PAR_f")
+    fig = render_ri_par_f_figure(scene, models, options, step; title="$(case_name) | Ri_PAR_f")
     save(png_path, fig)
 
     println("updated ", case_name)

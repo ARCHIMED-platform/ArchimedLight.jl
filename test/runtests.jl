@@ -14,6 +14,8 @@ using Tables
 const _TEST_PROFILE = lowercase(get(ENV, "ARCHIMEDLIGHT_TEST_PROFILE", "all"))
 const _RUN_RELEASE_TESTS = _TEST_PROFILE == "release"
 
+include("support.jl")
+
 @testset "Core tests" begin
     include("test_core.jl")
 end

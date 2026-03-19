@@ -1,29 +1,9 @@
-using OrderedCollections: OrderedDict
 import MultiScaleTreeGraph
 
 @testset "Model IO" begin
-    @testset "Ordered YAML round-trip" begin
+    @testset "YAML and typed models agree" begin
         tmp = mktempdir()
-        mkpath(joinpath(tmp, "models"))
-
-        cfg_path = joinpath(tmp, "config.yml")
-        model_path = joinpath(tmp, "models", "plant.yml")
-        meteo_path = joinpath(tmp, "meteo.csv")
-
-        write(
-            cfg_path,
-            join(
-                [
-                    "scene: scene/exported.ops",
-                    "models:",
-                    "  - models/plant.yml",
-                    "meteo: meteo.csv",
-                    "pixel_size: 1.0",
-                    "scattering: false",
-                ],
-                "\n",
-            ) * "\n",
-        )
+        model_path = joinpath(tmp, "plant.yml")
         write(
             model_path,
             join(
@@ -34,64 +14,47 @@ import MultiScaleTreeGraph
                     "    Interception:",
                     "      model: Translucent",
                     "      transparency: 0.1",
+                    "      optical_properties:",
+                    "        PAR: 0.15",
+                    "        NIR: 0.30",
                 ],
                 "\n",
             ) * "\n",
         )
-        write(meteo_path, "date;hour_start;hour_end;Rg;Tac;latitude;longitude;altitude\n2016/07/01;08:00:00;09:00:00;0;25;0;0;0\n")
 
-        cfg = ArchimedLight.read_light_config(cfg_path)
-        @test collect(keys(cfg.paths.models)) == ["plant"]
-        @test basename.(collect(values(cfg.paths.models))) == ["plant.yml"]
+        read_back = ArchimedLight.read_models(model_path)
+        prepared = ArchimedLight.prepare_models([
+            ArchimedLight.GroupModel(
+                "plant";
+                types=OrderedDict(
+                    "Leaf" => ArchimedLight.TypeModel(
+                        interception=ArchimedLight.InterceptionModel(
+                            model="Translucent",
+                            transparency=0.1,
+                            optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                        ),
+                    ),
+                ),
+            ),
+        ])
 
-        cfg.general.pixel_size = 0.025
-        cfg.models["plant"].types["Leaf"].interception.transparency = 0.25
-
-        @test isapprox(cfg.general.pixel_size, 0.025; atol=1e-12)
-
-        outdir = joinpath(tmp, "written")
-        out_cfg = ArchimedLight.write_light_inputs(outdir, cfg; scene_rel="scene/exported.ops")
-        out_cfg_txt = read(out_cfg, String)
-        out_model_txt = read(joinpath(outdir, "models", "plant.yml"), String)
-
-        @test findfirst("scene:", out_cfg_txt) < findfirst("models:", out_cfg_txt) < findfirst("meteo:", out_cfg_txt)
-        @test occursin("pixel_size: 2.5", out_cfg_txt)
-        @test findfirst("Group:", out_model_txt) < findfirst("Type:", out_model_txt)
-        @test occursin("transparency: 0.25", out_model_txt)
+        @test collect(keys(read_back.groups)) == collect(keys(prepared.groups))
+        @test read_back["plant"].types["Leaf"].interception.model == "Translucent"
+        @test isapprox(read_back["plant"].types["Leaf"].interception.optical_properties.par, 0.15; atol=1e-12)
+        @test isapprox(read_back["plant"].types["Leaf"].interception.transparency, 0.1; atol=1e-12)
     end
 
-    @testset "Scene export writes OPF attrs" begin
-        case_root = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input")
-        cfg = ArchimedLight.read_light_config(joinpath(case_root, "config.yml"))
-        cfg.outputs.export_ops = true
-        cfg.outputs.opf_variables = OrderedDict("Ri_PAR_0_q" => true)
-
-        scene = ArchimedLight.read_scene(cfg.paths.scene)
-        meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
-        selected = ArchimedLight.prepare_meteo(meteo, cfg)
-        step = only(ArchimedLight.run_light_series(scene, meteo, cfg))
+    @testset "Scene write round-trip keeps attached attrs" begin
+        fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
+        row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+        step = ArchimedLight.run_light_step(fixture.scene, fixture.models, row, fixture.options)
+        ArchimedLight.attach_light_step!(fixture.scene, step; fields=[:incident_par_initial_energy])
 
         outdir = mktempdir()
-        files = ArchimedLight.write_light_outputs(
-            scene,
-            step,
-            cfg;
-            meteo_row=only(selected.rows),
-            outdir=outdir,
-            write_component=false,
-            write_scene=false,
-            write_summary=false,
-            write_sun_position_log=false,
-            write_scattering_log=false,
-        )
+        out_opf = joinpath(outdir, "scene.opf")
+        ArchimedLight.write_scene(out_opf, fixture.scene)
 
-        @test haskey(files, "ops_step_00001")
-        @test haskey(files, "config")
-
-        exported_opf = joinpath(outdir, "opf", "simple_OPF_shapes.opf")
-        @test isfile(exported_opf)
-
-        opf = PlantGeom.read_opf(exported_opf, attr_type=Dict)
+        opf = ArchimedLight.read_scene(out_opf).mtg
         found_attr = false
         MultiScaleTreeGraph.traverse!(opf) do node
             if haskey(node, :Ri_PAR_0_q)

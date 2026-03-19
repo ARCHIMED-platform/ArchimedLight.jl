@@ -4,10 +4,10 @@ Julia reimplementation of the ARCHIMED light interception pipeline with a compos
 
 ![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
 
-The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script builds a visualization MTG with `visual_scene_mtg(...; fields=[:incident_par_flux])`, which materializes the ARCHIMED cobblestone paving as regular geometry nodes and writes the corresponding MTG attribute `Ri_PAR_f` before calling `plantviz(..., color=:Ri_PAR_f)`.
+The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script loads a scene, models, options, and meteo rows, adds explicit ground geometry, runs one light step, attaches `Ri_PAR_f` onto the MTG, and then renders the colored scene with `plantviz(..., color=:Ri_PAR_f)`.
 
 ## Current scope
-- Scene/config/meteo input pipeline
+- Scene/model/meteo input pipeline
 - Sky + turtle discretization
 - First-order interception (CPU raster/z-buffer)
 - Iterative scattering (CPU reference)
@@ -19,18 +19,15 @@ Energy balance, transpiration and photosynthesis are intentionally out of scope 
 ```julia
 using ArchimedLight
 
-cfg = read_light_config("config.yml")
-scene = read_scene(cfg.paths.scene)
-meteo = read_meteo(cfg.paths.meteo)
+options, scene, meteo, models = read_config("config.yml")
 
-sky = compute_sky(first(meteo.rows), cfg)
-turtle = build_turtle(cfg, sky)
-fluxes = compute_directional_fluxes(sky, turtle, cfg)
-first_order = compute_first_order(scene, turtle, fluxes, cfg)
-graph = build_scattering_transfer_graph(scene, turtle, first_order, cfg)
-scat = compute_scattering(graph, first_order, cfg)
-step_seconds = 1800.0 # use your meteo timestep duration in seconds
-budget = integrate_light(first_order, scat, cfg; step_duration_seconds=step_seconds, component_area_per_node=scene.total_area_per_node)
+row = first(prepare_meteo(meteo, options).rows)
+sky = compute_sky(row, options)
+turtle = build_turtle(options, sky)
+fluxes = compute_directional_fluxes(row, sky, turtle, options)
+first_order = compute_first_order(scene, models, turtle, fluxes, options)
+scat = compute_scattering(scene, models, turtle, first_order, options)
+budget = integrate_light(scene, models, first_order, scat, options; meteo_row=row)
 ```
 
 In Julia code, `LightBudget` is grouped by quantity and waveband:
@@ -42,34 +39,32 @@ budget.absorbed_flux.total.nir
 budget.absorbed_energy.initial.par
 ```
 
-File exports keep the ARCHIMED column names:
+File exports and attached MTG attributes keep the ARCHIMED names:
 - `Ri_*`: incident light
 - `Ra_*`: absorbed light
 - `*_f`: irradiance (`W m^-2`)
 - `*_q`: per-component energy per timestep (`J`)
 
-## Single-call pipeline
+## Short pipeline
 ```julia
-step = run_light_step(scene, first(meteo.rows), cfg)
-series = run_light_series(scene, meteo, cfg)
+options, scene, meteo, models = read_config("config.yml")
+row = first(prepare_meteo(meteo, options).rows)
+
+step = run_light_step(scene, models, row, options)
+series = run_light_series(scene, models, meteo, options)
+
+attach_light_step!(scene, step; fields=[:incident_par_flux, :absorbed_par_total_energy])
+write_scene("output/scene.opf", scene)
+
 # Optional backend kwargs:
-step = run_light_step(scene, first(meteo.rows), cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
-
-# Component export using ARCHIMED column names:
-write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=first(meteo.rows), step_number=0)
-
-# Scene export using ARCHIMED column names:
-write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
-
-# Logs:
-write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
-write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=first(meteo.rows), band="PAR")
-
-# High-level writer (component/scene/summary/logs from config defaults, overridable):
-write_light_outputs(scene, series, cfg; meteo_rows=meteo.rows, outdir="output")
-
-# Simulation output path:
-sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
+step = run_light_step(
+    scene,
+    models,
+    row,
+    options;
+    interception_backend=RasterCPUBackend(),
+    scattering_backend=RaycastScatteringBackend(),
+)
 ```
 
 ## Full Example
@@ -81,17 +76,18 @@ julia --project=. example_1/full_featured_example.jl
 ```
 
 ## Stage flexibility
-- You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, ...).
-- You can prebuild scattering transfers via `build_scattering_transfer_graph(...)` and reuse them with `compute_scattering(graph, ...)`.
+- `read_config("config.yml")` is the convenience entrypoint for file-driven workflows and returns `options, scene, meteo, models`.
+- You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, `integrate_light`, ...).
+- File-based and in-memory workflows share the same runtime path: `read_scene(...)` and `prepare_scene(...)` both produce `SceneGeometry`, while `read_models(...)` and `prepare_models(...)` both produce `LightModels`.
 - `compute_sky` follows the ARCHIMED clearness/global conversion and DeJong hourly direct/diffuse partitioning.
 - `compute_sky` uses substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend (`RasterCPUBackend()` also available).
 - `compute_scattering(...; mode=:raycast)` / `compute_scattering(...; mode=:links)` expose the two supported scattering modes; backend objects are also available (`RaycastScatteringBackend()`, `LinksScatteringBackend()`).
-- Component output variables are validated for light-only scope: scattering outputs require `scattering: true`; photosynthesis/energy-balance/TIR outputs are intentionally rejected (compute later with PlantBiophysics).
 - `pixel_size` is validated with ARCHIMED-compatible bounds (`0 < pixel_size <= 0.5` meters).
-- `cache_pixel_table: true` enables on-disk direction projection cache under `<output_directory>/pixel_tables_cache`.
+- `cache_pixel_table=true` enables an on-disk direction projection cache under the interception cache directory.
 - `build_turtle` follows the canonical ARCHIMED sector counts `1, 6, 16, 46, 136, 406`.
+- `add_ground!(scene; ...)` is an explicit scene-editing step, so inspectable ground is ordinary geometry in the exported MTG.
 
 ## Testing
 Run the default fast suite:
@@ -106,7 +102,7 @@ This runs core checks, fast manual fixtures, and synthetic scene unit tests in o
 Run one named synthetic case only:
 
 ```bash
-ARCHIMEDLIGHT_SYNTHETIC_CASE=two_planes_shadow_absorptance julia --project=test test/runtests.jl
+ARCHIMEDLIGHT_SYNTHETIC_CASE=single_plate_direct julia --project=test test/runtests.jl
 ```
 
 Run one named fast fixture case only:
@@ -139,13 +135,10 @@ The regression harness writes a machine-readable CSV report at
 `test/regression_matrix/reports/latest/regression_report.csv` by default and stores frozen
 fast-profile baselines under `test/regression_matrix/baselines/`.
 
-The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl` with explicit
-`inputs` and `expected` blocks. Current case names include:
-`single_plate_direct`, `stacked_scattering`, `partial_overlap_direct`,
-`tilted_plate_projection`, `oblique_shadow`, `toricity_wraparound`,
-`toricity_cross_border_shadow`, `toricity_diffuse_cross_border_shadow`,
-`toricity_scattering_cross_border`, `virtual_sensor_transparency`, `single_plate_absorptance`,
-`two_planes_shadow_absorptance`, and `cached_series_parity`.
+The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl`. Current case names include:
+`single_plate_direct`, `stacked_scattering`, `toricity_wraparound`,
+`virtual_sensor_transparency`, `run_light_step_matches_staged`,
+`cache_radiation_parity`, and `missing_models`.
 
 Fast fixture inputs/references are under `test/fast_fixtures/` and are intended to be readable
 as usage examples.
@@ -217,22 +210,3 @@ julia --project=test test/regression_matrix/runtests.jl
 
 The repository includes a separate benchmark project for `AirspeedVelocity.jl` under
 `benchmark/`.
-
-Validate that the benchmark suite loads:
-
-```bash
-julia --project=benchmark benchmark/benchmarks.jl
-```
-
-Run the suite with `benchpkg`:
-
-```bash
-benchpkg --path . --script benchmark/benchmarks.jl
-```
-
-Typical filtered and revision-vs-dirty workflows:
-
-```bash
-benchpkg --path . --script benchmark/benchmarks.jl --match "Run light"
-benchpkg --path . --script benchmark/benchmarks.jl --rev HEAD~1 --rev dirty
-```

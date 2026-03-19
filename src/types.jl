@@ -10,21 +10,15 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 
 struct LinksScatteringBackend <: ScatteringBackend end
 
-mutable struct LightConfigPaths
-    config::String
-    scene::String
-    meteo::String
-    models::OrderedDict{String,String}
-    base_dir::String
-end
-
 mutable struct OpticalProperties
     par::Float64
     nir::Float64
     extras::OrderedDict{String,Any}
 end
 
-mutable struct InterceptionModelConfig
+OpticalProperties(par::Real=0.0, nir::Real=0.0) = OpticalProperties(Float64(par), Float64(nir), OrderedDict{String,Any}())
+
+mutable struct InterceptionModel
     use::Union{Nothing,String}
     model::String
     transparency::Float64
@@ -33,67 +27,137 @@ mutable struct InterceptionModelConfig
     extras::OrderedDict{String,Any}
 end
 
-mutable struct LightEmitterConfig
+function InterceptionModel(;
+    model::AbstractString="Translucent",
+    transparency::Real=0.0,
+    optical_properties::Union{Nothing,OpticalProperties}=nothing,
+    use::Union{Nothing,AbstractString}=nothing,
+    variants::OrderedDict{String,OrderedDict{String,Any}}=OrderedDict{String,OrderedDict{String,Any}}(),
+    extras::OrderedDict{String,Any}=OrderedDict{String,Any}(),
+)
+    InterceptionModel(
+        use === nothing ? nothing : String(use),
+        String(model),
+        Float64(transparency),
+        optical_properties,
+        variants,
+        extras,
+    )
+end
+
+mutable struct EmitterModel
     model::String
     radiance::Float64
     gamma::OpticalProperties
     extras::OrderedDict{String,Any}
 end
 
-mutable struct TypeModelConfig
-    interception::Union{Nothing,InterceptionModelConfig}
-    light_emitter::Union{Nothing,LightEmitterConfig}
-    plot_paving::Int
+function EmitterModel(;
+    model::AbstractString="LambertianEmitter",
+    radiance::Real=0.0,
+    gamma::OpticalProperties=OpticalProperties(0.48, 0.52),
+    extras::OrderedDict{String,Any}=OrderedDict{String,Any}(),
+)
+    EmitterModel(String(model), Float64(radiance), gamma, extras)
+end
+
+mutable struct TypeModel
+    interception::Union{Nothing,InterceptionModel}
+    light_emitter::Union{Nothing,EmitterModel}
     extras::OrderedDict{String,Any}
 end
 
-mutable struct GroupModelConfig
+function TypeModel(;
+    interception::Union{Nothing,InterceptionModel}=nothing,
+    light_emitter::Union{Nothing,EmitterModel}=nothing,
+    extras::OrderedDict{String,Any}=OrderedDict{String,Any}(),
+)
+    TypeModel(interception, light_emitter, extras)
+end
+
+mutable struct GroupModel
     group::String
-    types::OrderedDict{String,TypeModelConfig}
+    types::OrderedDict{String,TypeModel}
     extras::OrderedDict{String,Any}
 end
 
-mutable struct LightGeneralConfig
-    all_in_turtle::Bool
-    turtle_sectors::Int
-    pixel_size::Float64
-    area_ratio::Bool
-    scattering::Bool
-    scattering_max_iter::Int
-    scattering_stop_ratio::Float64
-    scattering_coeff_par::Float64
-    scattering_coeff_nir::Float64
-    cache_radiation::Bool
-    cache_pixel_table::Bool
-    toricity::Bool
-    radiation_timestep_minutes::Float64
-    nir_interception::Bool
-    nir_scattering::Bool
-    java_logged_turtle_dirs::Bool
-    meteo_range::Union{Nothing,String}
-    debug::Bool
-    log_debug::Bool
-    debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}}
+function GroupModel(
+    group::AbstractString;
+    types::OrderedDict{String,TypeModel}=OrderedDict{String,TypeModel}(),
+    extras::OrderedDict{String,Any}=OrderedDict{String,Any}(),
+)
+    GroupModel(String(group), types, extras)
 end
 
-mutable struct LightOutputsConfig
-    output_directory::String
-    simulation_directory::String
-    write_summary::Bool
-    export_ops::Any
-    component_variables::OrderedDict{String,Bool}
-    scene_variables::OrderedDict{String,Bool}
-    opf_variables::OrderedDict{String,Bool}
-    opf_overwrite_variables::Bool
+struct LightModels
+    groups::OrderedDict{String,GroupModel}
 end
 
-mutable struct LightConfig
-    source_path::String
-    paths::LightConfigPaths
-    general::LightGeneralConfig
-    outputs::LightOutputsConfig
-    models::OrderedDict{String,GroupModelConfig}
-    extras::OrderedDict{String,Any}
+LightModels() = LightModels(OrderedDict{String,GroupModel}())
+
+function LightModels(groups::AbstractVector{<:GroupModel})
+    ordered = OrderedDict{String,GroupModel}()
+    for group in groups
+        ordered[group.group] = group
+    end
+    LightModels(ordered)
+end
+
+Base.values(models::LightModels) = values(models.groups)
+Base.keys(models::LightModels) = keys(models.groups)
+Base.haskey(models::LightModels, key) = haskey(models.groups, key)
+Base.getindex(models::LightModels, key) = models.groups[key]
+
+Base.@kwdef struct LightOptions
+    all_in_turtle::Bool = false
+    turtle_sectors::Int = 46
+    pixel_size::Float64 = 0.25 / 100.0
+    area_ratio::Bool = true
+    scattering::Bool = true
+    scattering_max_iter::Int = 20
+    scattering_stop_ratio::Float64 = 0.01
+    scattering_coeff_par::Float64 = 0.15
+    scattering_coeff_nir::Float64 = 0.30
+    cache_radiation::Bool = false
+    cache_pixel_table::Bool = false
+    toricity::Bool = true
+    radiation_timestep_minutes::Float64 = 15.0
+    nir_interception::Bool = true
+    nir_scattering::Bool = true
+    java_logged_turtle_dirs::Bool = false
+    meteo_range::Union{Nothing,String} = nothing
+    debug::Bool = false
+    log_debug::Bool = false
+    debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}} = nothing
+end
+
+function LightOptions(old::LightOptions; kwargs...)
+    params = Dict{Symbol,Any}(
+        :all_in_turtle => old.all_in_turtle,
+        :turtle_sectors => old.turtle_sectors,
+        :pixel_size => old.pixel_size,
+        :area_ratio => old.area_ratio,
+        :scattering => old.scattering,
+        :scattering_max_iter => old.scattering_max_iter,
+        :scattering_stop_ratio => old.scattering_stop_ratio,
+        :scattering_coeff_par => old.scattering_coeff_par,
+        :scattering_coeff_nir => old.scattering_coeff_nir,
+        :cache_radiation => old.cache_radiation,
+        :cache_pixel_table => old.cache_pixel_table,
+        :toricity => old.toricity,
+        :radiation_timestep_minutes => old.radiation_timestep_minutes,
+        :nir_interception => old.nir_interception,
+        :nir_scattering => old.nir_scattering,
+        :java_logged_turtle_dirs => old.java_logged_turtle_dirs,
+        :meteo_range => old.meteo_range,
+        :debug => old.debug,
+        :log_debug => old.log_debug,
+        :debug_drop_leading_hit => old.debug_drop_leading_hit,
+    )
+    for (k, v) in kwargs
+        params[k] = v
+    end
+    return LightOptions(; params...)
 end
 
 struct MeteoTable
@@ -110,7 +174,7 @@ struct SceneNodeData{T}
     object_id::Int
 end
 
-struct SceneGeometry{MTG,Mesh,T}
+mutable struct SceneGeometry{MTG,Mesh,T}
     mtg::MTG
     merged_mesh::Mesh
     face2node::Vector{Int}

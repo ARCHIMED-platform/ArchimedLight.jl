@@ -3,65 +3,59 @@
 `ArchimedLight.jl` is designed so each stage can be called independently.
 
 ## Inputs
+
 ```julia
 using ArchimedLight
 
-cfg = read_light_config("config.yml")
-scene = read_scene(cfg.paths.scene)
-meteo = read_meteo(cfg.paths.meteo)
-row = first(meteo.rows)
+options, scene, meteo, models = read_config("config.yml")
+row = first(prepare_meteo(meteo, options).rows)
 ```
 
 ## Stage-by-stage Execution
+
 ```julia
-sky = compute_sky(row, cfg)
-turtle = build_turtle(cfg, sky)
-fluxes = compute_directional_fluxes(sky, turtle, cfg)
-first = compute_first_order(scene, turtle, fluxes, cfg)
-graph = build_scattering_transfer_graph(scene, turtle, first, cfg)
-scat = compute_scattering(graph, first, cfg)
-step_seconds = 1800.0 # use your meteo timestep duration in seconds
-budget = integrate_light(first, scat, cfg; step_duration_seconds=step_seconds, component_area_per_node=scene.total_area_per_node)
+sky = compute_sky(row, options)
+turtle = build_turtle(options, sky)
+fluxes = compute_directional_fluxes(row, sky, turtle, options)
+first = compute_first_order(scene, models, turtle, fluxes, options)
+scat = compute_scattering(scene, models, turtle, first, options)
+budget = integrate_light(scene, models, first, scat, options; meteo_row=row)
 
 budget.incident_flux.total.par
 budget.incident_energy.total.par
 budget.absorbed_flux.total.par
 ```
 
-In Julia code, light results are accessed through these grouped `LightBudget` fields. CSV exports and visualization attributes keep the ARCHIMED names such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.
+In Julia code, light results are accessed through grouped `LightBudget` fields. Exported files and attached visualization attributes keep ARCHIMED names such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.
 
 ## Single-Call Pipeline
+
 ```julia
-step = run_light_step(scene, row, cfg)
-series = run_light_series(scene, meteo, cfg)
+step = run_light_step(scene, models, row, options)
+series = run_light_series(scene, models, meteo, options)
+
+attach_light_step!(scene, step; fields=[:incident_par_flux])
+write_scene("output/scene.opf", scene)
+
 # Optional backend kwargs:
-step = run_light_step(scene, row, cfg; interception_backend=RasterCPUBackend(), scattering_backend=RaycastScatteringBackend())
-
-# Optional component export with ARCHIMED column names:
-write_component_values_csv("output/component_values.csv", scene, step, cfg; meteo_row=row, step_number=0)
-
-# Optional scene export with ARCHIMED column names:
-write_scene_values_csv("output/scene_values.csv", scene, series, cfg; meteo_rows=meteo.rows)
-
-# Optional logs:
-write_sun_position_log_csv("output/log-sun-position.csv", series, meteo.rows)
-write_scattering_iteration_log_csv("output/log-iteration-scat-par.csv", scene, step, cfg; meteo_row=row, band="PAR")
-write_node_links_stats_alldirs_csv("output/log-nodelinks-stats-alldirs.csv", scene, turtle, cfg)
-write_node_links_dir_csv("output/log-nodelinks-dir00.csv", scene, turtle, cfg; direction_index=0)
-
-# High-level output writer (config-driven defaults, overridable):
-write_light_outputs(scene, series, cfg; meteo_rows=meteo.rows, outdir="output")
-
-# Simulation directory resolution:
-sim_out = simulation_output_directory(cfg)  # e.g. <output_directory>/000001
+step = run_light_step(
+    scene,
+    models,
+    row,
+    options;
+    interception_backend=RasterCPUBackend(),
+    scattering_backend=RaycastScatteringBackend(),
+)
 ```
 
 ## Caching Options
-- `cache_radiation: true` in config reuses directional responses across meteo rows in `run_light_series`.
-- `cache_pixel_table: true` stores per-direction projection tables under `<output_directory>/pixel_tables_cache`.
+
+- `LightOptions(cache_radiation=true)` reuses directional responses across meteo rows in `run_light_series`.
+- `LightOptions(cache_pixel_table=true)` stores per-direction projection tables in the on-disk cache directory used by the interception stage.
 
 ## Backends and Modes
+
 - `compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
 - `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are available.
 - `compute_scattering(...; backend=RaycastScatteringBackend())` and `compute_scattering(...; backend=LinksScatteringBackend())` are also available.
-- Component output variable requests are checked in light-only mode: scattering variables need `scattering=true`; photosynthesis/energy-balance/TIR variables are rejected by design.
+- `add_ground!(scene; ...)` is the explicit scene-editing step when you want inspectable paving or soil geometry in the MTG.

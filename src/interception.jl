@@ -41,16 +41,16 @@ function _normalize_group_name_local(x)
     strip(s)
 end
 
-function _cfg_toricity(cfg::LightConfig)
-    cfg.general.toricity
+function _cfg_toricity(options::LightOptions)
+    options.toricity
 end
 
-function _cfg_debug_drop_leading_hit(cfg::LightConfig)
-    cfg.general.debug_drop_leading_hit
+function _cfg_debug_drop_leading_hit(options::LightOptions)
+    options.debug_drop_leading_hit
 end
 
-function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg::LightConfig)
-    spec = _cfg_debug_drop_leading_hit(cfg)
+function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options::LightOptions)
+    spec = _cfg_debug_drop_leading_hit(options)
     spec === nothing && return
     idx = spec.x + 1 + spec.y * plotbox.nx
     stack = get(pixel_hits, idx, nothing)
@@ -71,19 +71,9 @@ function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_
     projected_pixels_area[top_nid] = max(0.0, get(projected_pixels_area, top_nid, 0.0) - plotbox.pixel_area)
 end
 
-function _cfg_plot_paving(cfg::LightConfig)
-    best = 0
-    for group_model in values(cfg.models)
-        for type_model in values(group_model.types)
-            best = max(best, type_model.plot_paving)
-        end
-    end
-    return best
-end
-
-function _virtual_sensor_groups(cfg::LightConfig)
+function _virtual_sensor_groups(models::LightModels)
     out = Set{String}()
-    for group_model in values(cfg.models)
+    for group_model in values(models)
         group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
         for type_model in values(group_model.types)
@@ -98,8 +88,8 @@ function _virtual_sensor_groups(cfg::LightConfig)
     out
 end
 
-function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig)
-    groups = _virtual_sensor_groups(cfg)
+function _virtual_sensor_node_ids(node_group::Dict{Int,String}, models::LightModels)
+    groups = _virtual_sensor_groups(models)
     isempty(groups) && return Set{Int}()
     out = Set{Int}()
     for (nid, g) in node_group
@@ -108,9 +98,9 @@ function _virtual_sensor_node_ids(node_group::Dict{Int,String}, cfg::LightConfig
     out
 end
 
-function _ignored_group_types(cfg::LightConfig)
+function _ignored_group_types(models::LightModels)
     out = Dict{String,Set{String}}()
-    for group_model in values(cfg.models)
+    for group_model in values(models)
         group = _normalize_group_name_local(group_model.group)
         isempty(group) && continue
         for (type_name, type_model) in group_model.types
@@ -128,20 +118,16 @@ function _ignored_group_types(cfg::LightConfig)
     out
 end
 
-function _is_ignored_node(
-    node_id::Int,
-    scene::SceneGeometry,
-    ignored::Dict{String,Set{String}},
-)
+function _is_ignored_node(node_id::Int, scene::SceneGeometry, ignored::Dict{String,Set{String}})
     isempty(ignored) && return false
     g = _normalize_group_name_local(_scene_group(scene, node_id, ""))
     t = strip(_scene_type(scene, node_id, ""))
     return haskey(ignored, g) && (t in ignored[g])
 end
 
-function _group_light_emitters(cfg::LightConfig)
+function _group_light_emitters(models::LightModels)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
-    for group_model in values(cfg.models)
+    for group_model in values(models)
         group = strip(group_model.group)
         isempty(group) && continue
         for (type_name0, type_model) in group_model.types
@@ -174,19 +160,45 @@ function _group_light_emitters(cfg::LightConfig)
     out
 end
 
-function _use_upper_hit_pixel_table(cfg::LightConfig)
+function _type_model(models::LightModels, group::AbstractString, type_name::AbstractString)
+    for group_key in (String(group), "*")
+        haskey(models, group_key) || continue
+        group_model = models[group_key]
+        haskey(group_model.types, String(type_name)) && return group_model.types[String(type_name)]
+        haskey(group_model.types, "*") && return group_model.types["*"]
+        if isempty(strip(String(type_name))) && length(group_model.types) == 1
+            return first(values(group_model.types))
+        end
+    end
+    return nothing
+end
+
+function _validate_scene_models(scene::SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
+    missing = Set{Tuple{String,String}}()
+    for nid in unique(face2node)
+        _is_ignored_node(nid, scene, ignored) && continue
+        group = strip(_scene_group(scene, nid, ""))
+        type_name = strip(_scene_type(scene, nid, ""))
+        _type_model(models, group, type_name) === nothing && push!(missing, (group, type_name))
+    end
+    isempty(missing) && return nothing
+    details = join(["($(repr(g)), $(repr(t)))" for (g, t) in sort!(collect(missing))], ", ")
+    error("Missing models for simulated geometry nodes: $details")
+end
+
+function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
     # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
     # or explicit light emitters require complete interception stacks.
-    if cfg.general.scattering
+    if options.scattering
         return false
     end
-    isempty(_virtual_sensor_groups(cfg)) || return false
-    isempty(_group_light_emitters(cfg)) || return false
+    isempty(_virtual_sensor_groups(models)) || return false
+    isempty(_group_light_emitters(models)) || return false
     return true
 end
 
-function _emitter_power_per_node(scene::SceneGeometry, cfg::LightConfig)
-    by_group_type = _group_light_emitters(cfg)
+function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
+    by_group_type = _group_light_emitters(models)
     isempty(by_group_type) && return Dict{Int,Float64}(), Dict{Int,Float64}()
 
     par = Dict{Int,Float64}()
@@ -224,7 +236,7 @@ function _emitter_transfer_weights(
     faces,
     face2node,
     turtle::TurtleGrid,
-    cfg::LightConfig,
+    options::LightOptions,
     plotbox,
     emitter_nodes::Set{Int},
     cache_ctx,
@@ -237,7 +249,7 @@ function _emitter_transfer_weights(
     for sector in turtle.sectors
         sector.source == :sun && continue
         projection =
-            _direction_projection_cached(vertices, faces, face2node, sector.direction, cfg, plotbox, cache_ctx, upper_hit=false)
+            _direction_projection_cached(vertices, faces, face2node, sector.direction, options, plotbox, cache_ctx, upper_hit=false)
 
         for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
@@ -272,15 +284,13 @@ function _emitter_transfer_weights(
     weights
 end
 
-function _cfg_cache_pixel_table(cfg::LightConfig)
-    cfg.general.cache_pixel_table
+function _cfg_cache_pixel_table(options::LightOptions)
+    options.cache_pixel_table
 end
 
-function _projection_cache_dir(cfg::LightConfig)
-    base = cfg.paths.base_dir
-    out_rel = cfg.outputs.output_directory
-    out_dir = isabspath(out_rel) ? out_rel : normpath(joinpath(base, out_rel))
-    joinpath(out_dir, "pixel_tables_cache")
+function _projection_cache_dir(options::LightOptions)
+    options.cache_pixel_table || return joinpath(tempdir(), "archimedlight-pixel_tables_cache")
+    joinpath(tempdir(), "archimedlight-pixel_tables_cache")
 end
 
 const _FNV64_OFFSET_BASIS = UInt64(0xcbf29ce484222325)
@@ -299,12 +309,12 @@ end
     return _stable_mix_u64(h, reinterpret(UInt64, y))
 end
 
-function _projection_scene_key(vertices, faces, face2node, plotbox, cfg::LightConfig)
+function _projection_scene_key(vertices, faces, face2node, plotbox, options::LightOptions)
     h = _FNV64_OFFSET_BASIS
     h = _stable_mix_i64(h, length(vertices))
     h = _stable_mix_i64(h, length(faces))
     h = _stable_mix_i64(h, length(face2node))
-    h = _stable_mix_u64(h, _cfg_toricity(cfg) ? UInt64(1) : UInt64(0))
+    h = _stable_mix_u64(h, _cfg_toricity(options) ? UInt64(1) : UInt64(0))
     h = _stable_mix_f64(h, plotbox.origin_x)
     h = _stable_mix_f64(h, plotbox.origin_y)
     h = _stable_mix_f64(h, plotbox.xdim)
@@ -340,11 +350,11 @@ function _projection_dir_key(direction)
     h
 end
 
-function _projection_cache_context(vertices, faces, face2node, plotbox, cfg::LightConfig)
-    _cfg_cache_pixel_table(cfg) || return nothing
+function _projection_cache_context(vertices, faces, face2node, plotbox, options::LightOptions)
+    _cfg_cache_pixel_table(options) || return nothing
     return ProjectionCacheContext(
-        _projection_cache_dir(cfg),
-        _projection_scene_key(vertices, faces, face2node, plotbox, cfg),
+        _projection_cache_dir(options),
+        _projection_scene_key(vertices, faces, face2node, plotbox, options),
     )
 end
 
@@ -762,19 +772,19 @@ function _rasterize_direction_java(
     faces,
     face2node,
     direction,
-    cfg::LightConfig,
+    options::LightOptions,
     plotbox;
     cache_ctx=nothing,
     virtual_nodes=Set{Int}(),
     upper_hit::Bool=false,
 )
-    strict_java_float = _strict_java_float(cfg)
+    strict_java_float = _strict_java_float(options)
     projection =
-        _direction_projection_cached(vertices, faces, face2node, direction, cfg, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
+        _direction_projection_cached(vertices, faces, face2node, direction, options, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
 
     ratios = Dict{Int,Float64}()
     for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
-        if !cfg.general.area_ratio
+        if !options.area_ratio
             ratios[nid] = 1.0
         else
             ppa = get(projection.projected_pixels_area, nid, 0.0)
@@ -811,11 +821,11 @@ function _rasterize_direction_java(
     return visible_area, projection.node_hits
 end
 
-function _direction_projection(vertices, faces, face2node, direction, cfg::LightConfig, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
-    toricity = _cfg_toricity(cfg)
-    use_upper_hit = upper_hit === nothing ? _use_upper_hit_pixel_table(cfg) : Bool(upper_hit)
-    strict_java_float = _strict_java_float(cfg)
-    unit_scale = Float32(_projection_unit_scale(cfg))
+function _direction_projection(vertices, faces, face2node, direction, options::LightOptions, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
+    toricity = _cfg_toricity(options)
+    use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
+    strict_java_float = _strict_java_float(options)
+    unit_scale = Float32(_projection_unit_scale(options))
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = Dict{Int,Int}()
@@ -849,13 +859,13 @@ function _direction_projection(vertices, faces, face2node, direction, cfg::Light
         )
     end
 
-    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, cfg)
+    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options)
     return DirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, cfg::LightConfig, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
+function _direction_projection_cached(vertices, faces, face2node, direction, options::LightOptions, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
     if cache_ctx === nothing
-        return _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
+        return _direction_projection(vertices, faces, face2node, direction, options, plotbox; upper_hit=upper_hit)
     end
 
     path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
@@ -865,16 +875,16 @@ function _direction_projection_cached(vertices, faces, face2node, direction, cfg
         rm(path; force=true)
     end
 
-    result = _direction_projection(vertices, faces, face2node, direction, cfg, plotbox; upper_hit=upper_hit)
+    result = _direction_projection(vertices, faces, face2node, direction, options, plotbox; upper_hit=upper_hit)
     _write_projection_cache(path, result)
     return result
 end
 
-function _strict_java_float(cfg::LightConfig)
+function _strict_java_float(options::LightOptions)
     false
 end
 
-function _projection_unit_scale(cfg::LightConfig)
+function _projection_unit_scale(options::LightOptions)
     1.0
 end
 
@@ -960,13 +970,14 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     return vertices, faces, face2node, node_area
 end
 
-function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig)
+function _scene_geometry_for_interception(scene::SceneGeometry, models::LightModels, options::LightOptions)
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
     all_face2node = collect(scene.face2node)
 
-    ignored = _ignored_group_types(cfg)
+    ignored = _ignored_group_types(models)
+    _validate_scene_models(scene, all_face2node, models, ignored)
     faces = PlantGeom.Face3[]
     face2node = Int[]
     for i in eachindex(all_faces)
@@ -977,35 +988,20 @@ function _scene_geometry_for_interception(scene::SceneGeometry, cfg::LightConfig
     end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
-    plotbox = _plotbox(scene, vertices, cfg.general.pixel_size)
+    plotbox = _plotbox(scene, vertices, options.pixel_size)
 
     node_ids = unique(face2node)
     node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
-    plot_paving = _cfg_plot_paving(cfg)
-    if plot_paving > 0
-        first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
-        paving_vertices, paving_faces, paving_face2node, _ = _paving_mesh(plotbox, plot_paving, first_node)
-        v_offset = length(vertices)
-        append!(vertices, paving_vertices)
-        for f in paving_faces
-            push!(faces, PlantGeom.Face3(f[1] + v_offset, f[2] + v_offset, f[3] + v_offset))
-        end
-        append!(face2node, paving_face2node)
-        append!(node_ids, unique(paving_face2node))
-        for nid in unique(paving_face2node)
-            node_group[nid] = "pavement"
-        end
-    end
 
     return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group)
 end
 
-function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
-    geometry = _scene_geometry_for_interception(scene, cfg)
+function _interception_output_keys(scene::SceneGeometry, models::LightModels, options::LightOptions)
+    geometry = _scene_geometry_for_interception(scene, models, options)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
-    pav_ids = sort(Int[nid for nid in geometry.node_ids if get(geometry.node_group, nid, "") == "pavement"])
-    for (i, nid) in enumerate(pav_ids)
+    pavement_ids = sort(Int[nid for nid in geometry.node_ids if get(geometry.node_group, nid, "") == "pavement"])
+    for (i, nid) in enumerate(pavement_ids)
         keys_by_node[nid] = (-1, i + 1)
     end
 
@@ -1019,7 +1015,7 @@ function _interception_output_keys(scene::SceneGeometry, cfg::LightConfig)
 end
 
 """
-    compute_first_order(scene, turtle, fluxes, cfg; backend=:raster_cpu)::FirstOrderResult
+    compute_first_order(scene, models, turtle, fluxes, options; backend=:raster_cpu)::FirstOrderResult
 
 Compute first-order interception by rasterizing each direction, then integrating projected area,
 incident power, and hit counts per geometry node.
@@ -1029,12 +1025,13 @@ incident power, and hit counts per geometry node.
 """
 function compute_first_order(
     scene::SceneGeometry,
+    models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
-    cfg::LightConfig;
+    options::LightOptions;
     backend=:raster_cpu,
 )
-    return compute_first_order(scene, turtle, fluxes, cfg, _resolve_interception_backend(backend))
+    return compute_first_order(scene, models, turtle, fluxes, options, _resolve_interception_backend(backend))
 end
 
 function _resolve_interception_backend(backend::InterceptionBackend)
@@ -1055,16 +1052,17 @@ end
 
 function compute_first_order(
     scene::SceneGeometry,
+    models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
-    cfg::LightConfig,
+    options::LightOptions,
     ::RasterCPUBackend,
 )
 
-    geometry = _scene_geometry_for_interception(scene, cfg)
-    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, cfg)
-    upper_hit = _use_upper_hit_pixel_table(cfg)
-    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, cfg)
+    geometry = _scene_geometry_for_interception(scene, models, options)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, models)
+    upper_hit = _use_upper_hit_pixel_table(models, options)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
 
     projected_area_per_node = Dict(id => 0.0 for id in geometry.node_ids)
     incident_power = SpectralNodeValues(
@@ -1080,7 +1078,7 @@ function compute_first_order(
                 geometry.faces,
                 geometry.face2node,
                 sector.direction,
-                cfg,
+                options,
                 geometry.plotbox;
                 cache_ctx=cache_ctx,
                 virtual_nodes=virtual_nodes,
@@ -1105,7 +1103,7 @@ function compute_first_order(
         end
     end
 
-    emit_par, emit_nir = _emitter_power_per_node(scene, cfg)
+    emit_par, emit_nir = _emitter_power_per_node(scene, models)
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     if !isempty(emitter_nodes)
         w = _emitter_transfer_weights(
@@ -1113,7 +1111,7 @@ function compute_first_order(
             geometry.faces,
             geometry.face2node,
             turtle,
-            cfg,
+            options,
             geometry.plotbox,
             emitter_nodes,
             cache_ctx,
@@ -1133,9 +1131,10 @@ end
 
 function compute_first_order(
     scene::SceneGeometry,
+    models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
-    cfg::LightConfig,
+    options::LightOptions,
     backend::InterceptionBackend,
 )
     error("Unsupported interception backend type: $(typeof(backend))")
