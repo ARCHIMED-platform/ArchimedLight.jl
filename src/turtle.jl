@@ -30,8 +30,8 @@ function _as_bool_local_turtle(x, default::Bool)
     return default
 end
 
-function _use_java_logged_turtle_dirs(cfg::LightConfig)
-    cfg.general.java_logged_turtle_dirs
+function _use_java_logged_turtle_dirs(options::LightOptions)
+    options.java_logged_turtle_dirs
 end
 
 function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
@@ -371,18 +371,18 @@ function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::
 end
 
 """
-    build_turtle(cfg, sky)::TurtleGrid
+    build_turtle(options, sky)::TurtleGrid
 
 Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
-sector when `cfg.general.all_in_turtle == false`.
+sector when `options.all_in_turtle == false`.
 
 Set `java_logged_turtle_dirs: true` in the
 light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
 Float32 Java-style construction for larger sector counts).
 """
-function build_turtle(cfg::LightConfig, sky::SkyState)
-    n = max(cfg.general.turtle_sectors, 1)
-    use_logged_dirs = _use_java_logged_turtle_dirs(cfg)
+function build_turtle(options::LightOptions, sky::SkyState)
+    n = max(options.turtle_sectors, 1)
+    use_logged_dirs = _use_java_logged_turtle_dirs(options)
     dirs =
         if _java_turtle_order(n) >= 0
             use_logged_dirs ? _java_turtle_incoming_logged(n) : _java_turtle_incoming(n)
@@ -395,13 +395,13 @@ function build_turtle(cfg::LightConfig, sky::SkyState)
         push!(sectors, TurtleSector(i, dirs[i], w, :sky))
     end
 
-    if !cfg.general.all_in_turtle && sky.sun_elevation_deg > 0.0
+    if !options.all_in_turtle && sky.sun_elevation_deg > 0.0
         push!(sectors, TurtleSector(length(sectors) + 1, _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg), 0.0, :sun))
     end
     TurtleGrid(sectors)
 end
 
-function _directional_flux_substeps(meteo_row, sky::SkyState, cfg::LightConfig)
+function _directional_flux_substeps(meteo_row, sky::SkyState, options::LightOptions)
     latitude_deg = _row_value(meteo_row, [:latitude, :lat], 0.0)
     latitude_rad = deg2rad(latitude_deg)
     date = _row_date(meteo_row)
@@ -427,7 +427,7 @@ function _directional_flux_substeps(meteo_row, sky::SkyState, cfg::LightConfig)
         start_h,
         end_h,
         latitude_rad,
-        _cfg_radiation_timestep_hours(cfg),
+        _cfg_radiation_timestep_hours(options),
         sky.ri_sw_f,
         clearness,
         global_from_input,
@@ -437,15 +437,15 @@ function _directional_flux_substeps(meteo_row, sky::SkyState, cfg::LightConfig)
 end
 
 """
-    compute_directional_fluxes(meteo_row, sky, turtle, cfg)::DirectionalFluxes
+    compute_directional_fluxes(meteo_row, sky, turtle, options)::DirectionalFluxes
 
 Java-parity directional flux integration using meteo substeps:
 directional fluxes are computed at each substep sun position then averaged over the full meteo step.
 """
-function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
-    substeps, start_h, end_h = _directional_flux_substeps(meteo_row, sky, cfg)
+function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid, options::LightOptions)
+    substeps, start_h, end_h = _directional_flux_substeps(meteo_row, sky, options)
     step_duration_h = end_h - start_h
-    (isempty(substeps) || step_duration_h <= 0.0) && return compute_directional_fluxes(sky, turtle, cfg)
+    (isempty(substeps) || step_duration_h <= 0.0) && return compute_directional_fluxes(sky, turtle, options)
 
     n = length(turtle.sectors)
     par_acc = zeros(Float64, n)
@@ -465,7 +465,7 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
             direct_fraction_sub,
             1.0 - direct_fraction_sub,
         )
-        flux_sub = compute_directional_fluxes(sky_sub, turtle, cfg)
+        flux_sub = compute_directional_fluxes(sky_sub, turtle, options)
         @inbounds for i in 1:n
             par_acc[i] += flux_sub.par[i] * ss.duration
             nir_acc[i] += flux_sub.nir[i] * ss.duration
@@ -493,12 +493,12 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
 end
 
 """
-    compute_directional_fluxes(sky, turtle, cfg)::DirectionalFluxes
+    compute_directional_fluxes(sky, turtle, options)::DirectionalFluxes
 
 Project sky-level PAR/NIR irradiance to each turtle sector using Java-compatible diffuse and
 direct distribution rules.
 """
-function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::LightConfig)
+function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, options::LightOptions)
     n = length(turtle.sectors)
     par = zeros(Float64, n)
     nir = zeros(Float64, n)
@@ -520,7 +520,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, cfg::Ligh
         end
     end
 
-    if cfg.general.all_in_turtle
+    if options.all_in_turtle
         # Java Turtle.directInTurtle parity:
         # distribute direct irradiance by angular overlap between a sun halo and each sector.
         dir_count = length(sky_ids)

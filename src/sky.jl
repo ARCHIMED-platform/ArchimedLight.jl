@@ -360,8 +360,8 @@ function _dict_float_or_nan(d, key::String)
     end
 end
 
-function _cfg_radiation_timestep_hours(cfg::LightConfig)
-    mins = cfg.general.radiation_timestep_minutes
+function _cfg_radiation_timestep_hours(options::LightOptions)
+    mins = options.radiation_timestep_minutes
     mins <= 0.0 && (mins = 15.0)
     mins / 60.0
 end
@@ -556,12 +556,12 @@ function _auto_sun_and_direct_fraction(
 end
 
 """
-    compute_sky(meteo_row, cfg)::SkyState
+    compute_sky(meteo_row, options)::SkyState
 
 Compute sun position, PAR/NIR/SW irradiance, and direct/diffuse partition for one meteo row,
 following Java-compatible precedence rules for available meteorological inputs.
 """
-function compute_sky(meteo_row, cfg::LightConfig)
+function compute_sky(meteo_row, options::LightOptions)
     ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
     ri_par = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)
     ri_nir = _row_value(meteo_row, [:RI_NIR_f, :NIR, :nir], NaN)
@@ -621,7 +621,7 @@ function compute_sky(meteo_row, cfg::LightConfig)
         start_h,
         end_h,
         latitude_rad,
-        _cfg_radiation_timestep_hours(cfg),
+        _cfg_radiation_timestep_hours(options),
         ri_sw,
         clearness,
         global_from_input,

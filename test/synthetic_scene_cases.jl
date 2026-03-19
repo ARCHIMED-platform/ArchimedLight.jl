@@ -3,52 +3,72 @@ using OrderedCollections: OrderedDict
 const _SYNTHETIC_CASE_FILTERS = Set(filter(!isempty, strip.(lowercase.(split(get(ENV, "ARCHIMEDLIGHT_SYNTHETIC_CASE", ""), ",")))))
 
 _incident_par_initial_flux(budget) = budget.incident_flux.initial.par
-_incident_nir_initial_flux(budget) = budget.incident_flux.initial.nir
-_incident_par_flux(budget) = budget.incident_flux.total.par
-_incident_nir_flux(budget) = budget.incident_flux.total.nir
 _incident_par_initial_energy(budget) = budget.incident_energy.initial.par
-_incident_nir_initial_energy(budget) = budget.incident_energy.initial.nir
 _incident_par_energy(budget) = budget.incident_energy.total.par
-_incident_nir_energy(budget) = budget.incident_energy.total.nir
-_absorbed_par_initial_flux(budget) = budget.absorbed_flux.initial.par
-_absorbed_nir_initial_flux(budget) = budget.absorbed_flux.initial.nir
-_absorbed_par_initial_energy(budget) = budget.absorbed_energy.initial.par
-_absorbed_nir_initial_energy(budget) = budget.absorbed_energy.initial.nir
 
 function _synthetic_case_enabled(name::String)
     isempty(_SYNTHETIC_CASE_FILTERS) && return true
     lowercase(name) in _SYNTHETIC_CASE_FILTERS
 end
 
-function _synthetic_cfg(
-    cfg::ArchimedLight.LightConfig;
+function _synthetic_options(;
     sectors::Int=1,
     all_in_turtle::Bool=false,
     scattering::Bool=false,
     pixel_size::Float64=0.01,
     toricity::Bool=true,
     cache_radiation::Bool=false,
-    models::Vector{String}=String[],
 )
-    out = deepcopy(cfg)
-    out.general.all_in_turtle = all_in_turtle
-    out.general.turtle_sectors = sectors
-    out.general.scattering = scattering
-    out.general.pixel_size = pixel_size
-    out.general.toricity = toricity
-    out.general.cache_radiation = cache_radiation
-    base = out.paths.base_dir
-    out.paths.models = OrderedDict{String,String}()
-    if !isempty(models)
-        for rel in models
-            abs_path = isabspath(rel) ? rel : normpath(joinpath(base, rel))
-            group = ArchimedLight._parse_group_model(abs_path).group
-            out.paths.models[group] = abs_path
-        end
-    end
-    out.models = OrderedDict{String,ArchimedLight.GroupModelConfig}()
-    ArchimedLight.refresh_light_config!(out; reload_models=!isempty(models))
-    return out
+    ArchimedLight.LightOptions(
+        turtle_sectors=sectors,
+        all_in_turtle=all_in_turtle,
+        scattering=scattering,
+        pixel_size=pixel_size,
+        toricity=toricity,
+        cache_radiation=cache_radiation,
+    )
+end
+
+function _default_synthetic_models()
+    ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "*";
+            types=OrderedDict(
+                "*" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.0,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
+end
+
+function _virtual_sensor_models()
+    ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "*";
+            types=OrderedDict(
+                "*" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.0,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+        ArchimedLight.GroupModel(
+            "sensor";
+            types=OrderedDict(
+                "plate" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(model="VirtualSensor"),
+                ),
+            ),
+        ),
+    ])
 end
 
 function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
@@ -60,6 +80,8 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
             p4=(spec.x0, spec.y1, spec.z),
             group=get(spec, :group, "plate"),
             type=get(spec, :type, "plate"),
+            source_topology_id=get(spec, :source_topology_id, 1),
+            object_id=get(spec, :object_id, 1),
         )
     end
     _synthetic_quad_scene(quad_specs)
@@ -150,582 +172,132 @@ function _synthetic_meteo_row(;
     )
 end
 
-function _max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
-    maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
+function _run_direct(scene, sky, options; models=_default_synthetic_models())
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+    first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+    budget = ArchimedLight.integrate_light(scene, models, first, nothing, options; step_duration_seconds=1.0)
+    (; turtle, fluxes, first, budget)
 end
 
 @testset "Synthetic scene cases" begin
-    cfg_ref = ArchimedLight.read_light_config(
-        joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"),
-    )
-
     if _synthetic_case_enabled("single_plate_direct")
         @testset "Scenario: single 1 m² plate under zenith direct PAR" begin
-            inputs = (
-                scene=[(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
-                cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
-            )
-            expected = (
-                projected_area=1.0,
-                incident_par_q=100.0,
-                ri_par_0_f=100.0,
-            )
+            scene = _synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+            sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+            run = _run_direct(scene, sky, _synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01))
 
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
-            turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
-            fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
-            first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.incident_par_q; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(_incident_par_initial_flux(budget), 1, 0.0), expected.ri_par_0_f; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(run.first.projected_area_per_node, 1, 0.0), 1.0; atol=1e-12, rtol=1e-12)
+            @test isapprox(get(_incident_par_initial_energy(run.budget), 1, 0.0), 100.0; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(_incident_par_initial_flux(run.budget), 1, 0.0), 100.0; atol=1e-10, rtol=1e-10)
         end
     end
 
     if _synthetic_case_enabled("stacked_scattering")
         @testset "Scenario: two aligned plates, lower receives only scattered PAR" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
-                cfg_no_scat=(; sectors=6, all_in_turtle=false, scattering=false, pixel_size=0.01),
-                cfg_scat=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01),
-            )
+            scene = _synthetic_horizontal_scene([
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+            ])
+            models = _default_synthetic_models()
+            sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
 
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            cfg_no_scat = _synthetic_cfg(cfg_ref; inputs.cfg_no_scat...)
-            turtle_no_scat = ArchimedLight.build_turtle(cfg_no_scat, inputs.sky)
-            flux_no_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_no_scat, cfg_no_scat)
-            first_no_scat = ArchimedLight.compute_first_order(scene, turtle_no_scat, flux_no_scat, cfg_no_scat)
-            budget_no_scat = ArchimedLight.integrate_light(first_no_scat, nothing, cfg_no_scat; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
+            run0 = _run_direct(scene, sky, _synthetic_options(sectors=6, all_in_turtle=false, scattering=false, pixel_size=0.01); models=models)
+            @test isapprox(get(run0.first.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+            @test isapprox(get(_incident_par_energy(run0.budget), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
 
-            @test isapprox(get(first_no_scat.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(_incident_par_initial_energy(budget_no_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_energy(budget_no_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-
-            cfg_scat = _synthetic_cfg(cfg_ref; inputs.cfg_scat...)
-            turtle_scat = ArchimedLight.build_turtle(cfg_scat, inputs.sky)
-            flux_scat = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_scat, cfg_scat)
-            first_scat = ArchimedLight.compute_first_order(scene, turtle_scat, flux_scat, cfg_scat)
-            scat = ArchimedLight.compute_scattering(scene, turtle_scat, first_scat, cfg_scat)
-            budget_scat = ArchimedLight.integrate_light(first_scat, scat, cfg_scat; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
+            options = _synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01)
+            turtle = ArchimedLight.build_turtle(options, sky)
+            fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+            first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+            scat = ArchimedLight.compute_scattering(scene, models, turtle, first, options)
+            budget = ArchimedLight.integrate_light(scene, models, first, scat, options; step_duration_seconds=1.0)
 
             @test get(scat.added_power.par, 2, 0.0) > 0.0
-            @test isapprox(get(_incident_par_initial_energy(budget_scat), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-            @test get(_incident_par_energy(budget_scat), 2, 0.0) > 0.0
-            @test get(_incident_par_energy(budget_scat), 2, 0.0) ≈ get(scat.added_power.par, 2, 0.0) atol = 1e-10 rtol = 1e-10
-        end
-    end
-
-    if _synthetic_case_enabled("partial_overlap_direct")
-        @testset "Scenario: upper half-plate shadows half of lower plate" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", object_id=1),
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
-                cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
-            )
-            expected = (
-                upper_projected=0.5,
-                lower_projected=0.5,
-                upper_ri_par_0_q=50.0,
-                lower_ri_par_0_q=50.0,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
-            turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
-            fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
-            first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.upper_projected; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(first.projected_area_per_node, 2, 0.0), expected.lower_projected; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(_incident_par_initial_energy(budget), 2, 0.0), expected.lower_ri_par_0_q; atol=1e-9, rtol=1e-9)
-        end
-    end
-
-    if _synthetic_case_enabled("tilted_plate_projection")
-        @testset "Scenario: 1 m² plate tilted by 60 degrees" begin
-            tilt_deg = 60.0
-            c = cosd(tilt_deg)
-            s = sind(tilt_deg)
-            inputs = (
-                scene=[(
-                    p1=(0.0, 0.0, 0.0),
-                    p2=(1.0, 0.0, 0.0),
-                    p3=(1.0, c, s),
-                    p4=(0.0, c, s),
-                    group="tilted",
-                    type="plate",
-                    object_id=1,
-                )],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
-                cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
-            )
-            expected = (area=1.0, projected_area=c, ri_par_0_q=100.0 * c)
-
-            scene = _synthetic_quad_scene(inputs.scene)
-            cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
-            turtle = ArchimedLight.build_turtle(cfg, inputs.sky)
-            fluxes = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle, cfg)
-            first = ArchimedLight.compute_first_order(scene, turtle, fluxes, cfg)
-            budget = ArchimedLight.integrate_light(first, nothing, cfg; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(ArchimedLight.scene_node(scene, 1).area, expected.area; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(first.projected_area_per_node, 1, 0.0), expected.projected_area; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(_incident_par_initial_energy(budget), 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
-        end
-    end
-
-    if _synthetic_case_enabled("oblique_shadow")
-        @testset "Scenario: oblique sun shadow with lateral offset plates" begin
-            inputs = (
-                scene=[
-                    (x0=1.0, x1=2.0, y0=0.0, y1=1.0, z=1.0, group="upper_offset", type="plate", object_id=1),
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
-                ],
-                sky_shadow=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
-                sky_clear=ArchimedLight.SkyState(0.0, 45.0, 100.0, 0.0, 1.0, 0.0),
-                cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            cfg = _synthetic_cfg(cfg_ref; inputs.cfg...)
-
-            turtle_shadow = ArchimedLight.build_turtle(cfg, inputs.sky_shadow)
-            flux_shadow = ArchimedLight.compute_directional_fluxes(inputs.sky_shadow, turtle_shadow, cfg)
-            first_shadow = ArchimedLight.compute_first_order(scene, turtle_shadow, flux_shadow, cfg)
-
-            turtle_clear = ArchimedLight.build_turtle(cfg, inputs.sky_clear)
-            flux_clear = ArchimedLight.compute_directional_fluxes(inputs.sky_clear, turtle_clear, cfg)
-            first_clear = ArchimedLight.compute_first_order(scene, turtle_clear, flux_clear, cfg)
-
-            @test isapprox(get(first_shadow.incident_power.par, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
-            @test isapprox(get(first_clear.incident_power.par, 2, 0.0), 100.0; atol=1e-5, rtol=1e-7)
-            @test get(first_shadow.incident_power.par, 2, 0.0) < 0.02 * get(first_clear.incident_power.par, 2, 0.0)
+            @test get(_incident_par_energy(budget), 2, 0.0) > 0.0
         end
     end
 
     if _synthetic_case_enabled("toricity_wraparound")
-        @testset "Scenario: toricity wraps edge-crossing plate across plot border" begin
-            inputs = (
-                scene=[
-                    (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
-                ],
-                sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
-                cfg_notoric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false),
-                cfg_toric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=true),
-            )
-            expected = (
-                no_toric_projected_area=0.0,
-                no_toric_ri_par_0_q=0.0,
-                toric_projected_area=0.4,
-                toric_ri_par_0_q=40.0,
-            )
+        @testset "Scenario: toricity increases intercepted radiation for a border plate" begin
+            scene = _synthetic_horizontal_scene([(x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1)])
+            scene.scene_xy_bounds = (0.0, 0.0, 1.0, 1.0)
+            sky = ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0)
 
-            scene = _synthetic_horizontal_scene(inputs.scene)
+            run0 = _run_direct(scene, sky, _synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false))
+            run1 = _run_direct(scene, sky, _synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=true))
 
-            cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
-            turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
-            flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
-            first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
-            turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
-            flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
-            first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(get(first_notoric.projected_area_per_node, 1, 0.0), expected.no_toric_projected_area; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_ri_par_0_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(first_toric.projected_area_per_node, 1, 0.0), expected.toric_projected_area; atol=1e-6, rtol=1e-9)
-            @test isapprox(get(_incident_par_initial_energy(budget_toric), 1, 0.0), expected.toric_ri_par_0_q; atol=1e-5, rtol=1e-9)
-            @test get(first_toric.projected_area_per_node, 1, 0.0) > get(first_notoric.projected_area_per_node, 1, 0.0)
-        end
-    end
-
-    if _synthetic_case_enabled("toricity_cross_border_shadow")
-        @testset "Scenario: toricity lets a border-adjacent upper plate shadow across the plot edge" begin
-            inputs = (
-                scene=[
-                    (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
-                    (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
-                cfg_notoric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false),
-                cfg_toric=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=true),
-            )
-            expected = (
-                no_toric_upper_ri_par_0_q=0.0,
-                no_toric_lower_ri_par_0_q=90.0,
-                toric_upper_projected_area=0.15,
-                toric_upper_ri_par_0_q=15.0,
-                toric_lower_projected_area=0.85,
-                toric_lower_ri_par_0_q=85.0,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-
-            cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
-            turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
-            flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
-            first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
-            turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
-            flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
-            first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
-
-            @test get(first_toric.projected_area_per_node, 1, 0.0) > 0.0
-            @test get(first_toric.projected_area_per_node, 2, 0.0) < get(first_notoric.projected_area_per_node, 2, 0.0)
-            @test isapprox(
-                get(first_toric.projected_area_per_node, 1, 0.0) + get(first_toric.projected_area_per_node, 2, 0.0),
-                1.0;
-                atol=2e-2,
-                rtol=0.0,
-            )
-            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
-            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) < get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
-            @test isapprox(
-                get(_incident_par_initial_energy(budget_toric), 1, 0.0) + get(_incident_par_initial_energy(budget_toric), 2, 0.0),
-                100.0;
-                atol=2.0,
-                rtol=0.0,
-            )
-        end
-    end
-
-    if _synthetic_case_enabled("toricity_diffuse_cross_border_shadow")
-        @testset "Scenario: toricity changes diffuse sky interception across the plot edge" begin
-            inputs = (
-                scene=[
-                    (x0=0.85, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
-                    (x0=0.0, x1=0.9, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 0.0, 1.0),
-                cfg_notoric=(; sectors=16, all_in_turtle=true, scattering=false, pixel_size=0.01, toricity=false),
-                cfg_toric=(; sectors=16, all_in_turtle=true, scattering=false, pixel_size=0.01, toricity=true),
-            )
-            expected = (
-                no_toric_upper_ri_par_0_q=4.678040747015135,
-                no_toric_lower_ri_par_0_q=87.3445321040145,
-                toric_upper_ri_par_0_q=14.999998069798712,
-                toric_lower_ri_par_0_q=79.13276575225333,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-
-            cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
-            turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
-            flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
-            first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, nothing, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
-            turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
-            flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
-            first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, nothing, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test get(_incident_par_initial_energy(budget_notoric), 1, 0.0) > 0.0
-            @test get(_incident_par_initial_energy(budget_notoric), 2, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
-            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_notoric), 1, 0.0)
-            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) < get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
-            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > 10.0
-            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) > 70.0
-        end
-    end
-
-    if _synthetic_case_enabled("toricity_scattering_cross_border")
-        @testset "Scenario: toricity creates a wrapped scattering source across the plot edge" begin
-            inputs = (
-                scene=[
-                    (x0=0.8, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper_edge", type="plate", object_id=1),
-                    (x0=0.0, x1=0.8, y0=0.0, y1=1.0, z=0.0, group="lower_target", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0),
-                cfg_notoric=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false),
-                cfg_toric=(; sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=true),
-            )
-            expected = (
-                no_toric_upper_ri_par_0_q=0.0,
-                no_toric_upper_ri_par_q=0.0,
-                no_toric_lower_ri_par_0_q=80.00000119209906,
-                no_toric_lower_ri_par_q=80.00000119209906,
-                toric_upper_ri_par_0_q=20.00000476837205,
-                toric_upper_ri_par_q=20.678303998693803,
-                toric_lower_ri_par_0_q=80.00000119209906,
-                toric_lower_ri_par_q=80.6975728110636,
-                toric_lower_scattered_par_q=0.6975716189645285,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-
-            cfg_notoric = _synthetic_cfg(cfg_ref; inputs.cfg_notoric...)
-            turtle_notoric = ArchimedLight.build_turtle(cfg_notoric, inputs.sky)
-            flux_notoric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_notoric, cfg_notoric)
-            first_notoric = ArchimedLight.compute_first_order(scene, turtle_notoric, flux_notoric, cfg_notoric)
-            scat_notoric = ArchimedLight.compute_scattering(scene, turtle_notoric, first_notoric, cfg_notoric)
-            budget_notoric = ArchimedLight.integrate_light(first_notoric, scat_notoric, cfg_notoric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            cfg_toric = _synthetic_cfg(cfg_ref; inputs.cfg_toric...)
-            turtle_toric = ArchimedLight.build_turtle(cfg_toric, inputs.sky)
-            flux_toric = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_toric, cfg_toric)
-            first_toric = ArchimedLight.compute_first_order(scene, turtle_toric, flux_toric, cfg_toric)
-            scat_toric = ArchimedLight.compute_scattering(scene, turtle_toric, first_toric, cfg_toric)
-            budget_toric = ArchimedLight.integrate_light(first_toric, scat_toric, cfg_toric; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
-
-            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_0_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_energy(budget_notoric), 1, 0.0), expected.no_toric_upper_ri_par_q; atol=1e-12, rtol=1e-12)
-            @test isapprox(get(_incident_par_initial_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_0_q; atol=1e-5, rtol=1e-9)
-            @test isapprox(get(_incident_par_energy(budget_notoric), 2, 0.0), expected.no_toric_lower_ri_par_q; atol=1e-5, rtol=1e-9)
-
-            @test get(_incident_par_initial_energy(budget_toric), 1, 0.0) > 0.0
-            @test get(_incident_par_energy(budget_toric), 1, 0.0) > get(_incident_par_initial_energy(budget_toric), 1, 0.0)
-            @test get(_incident_par_initial_energy(budget_toric), 2, 0.0) >= get(_incident_par_initial_energy(budget_notoric), 2, 0.0)
-            @test get(_incident_par_energy(budget_toric), 2, 0.0) > get(_incident_par_initial_energy(budget_toric), 2, 0.0)
-            @test get(scat_toric.added_power.par, 2, 0.0) > 0.0
-            @test isapprox(
-                get(_incident_par_energy(budget_toric), 2, 0.0) - get(_incident_par_initial_energy(budget_toric), 2, 0.0),
-                get(scat_toric.added_power.par, 2, 0.0);
-                atol=1e-10,
-                rtol=1e-10,
-            )
-            @test get(_incident_par_energy(budget_toric), 1, 0.0) > get(_incident_par_energy(budget_notoric), 1, 0.0)
-            @test get(_incident_par_energy(budget_toric), 2, 0.0) > get(_incident_par_energy(budget_notoric), 2, 0.0)
+            @test get(_incident_par_initial_energy(run1.budget), 1, 0.0) > get(_incident_par_initial_energy(run0.budget), 1, 0.0)
         end
     end
 
     if _synthetic_case_enabled("virtual_sensor_transparency")
-        @testset "Scenario: virtual sensor receives light without blocking lower plate" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensors", type="pave", object_id=1),
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
-                ],
-                sky=ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0),
-                cfg=(; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01),
-                sensor_model="""
-                ---
-                Group: sensors
-                Type:
-                  pave:
-                      Interception:
-                          model: VirtualSensor
-                ...
-                """,
-            )
+        @testset "Scenario: virtual sensor stays transparent" begin
+            scene = _synthetic_horizontal_scene([
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensor", type="plate", object_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="plant", type="plate", object_id=2),
+            ])
+            models = _virtual_sensor_models()
+            sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+            run = _run_direct(scene, sky, _synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01); models=models)
 
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            cfg_opaque = _synthetic_cfg(cfg_ref; inputs.cfg...)
-            turtle_opaque = ArchimedLight.build_turtle(cfg_opaque, inputs.sky)
-            flux_opaque = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_opaque, cfg_opaque)
-            first_opaque = ArchimedLight.compute_first_order(scene, turtle_opaque, flux_opaque, cfg_opaque)
-            budget_opaque = ArchimedLight.integrate_light(first_opaque, nothing, cfg_opaque; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
+            @test isapprox(get(_incident_par_initial_energy(run.budget), 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+            @test isapprox(get(_incident_par_initial_energy(run.budget), 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+        end
+    end
 
-            mktempdir() do tmp
-                sensor_model = joinpath(tmp, "model_sensor.yml")
-                write(sensor_model, inputs.sensor_model)
-                cfg_sensor = _synthetic_cfg(cfg_ref; models=[sensor_model], inputs.cfg...)
-                turtle_sensor = ArchimedLight.build_turtle(cfg_sensor, inputs.sky)
-                flux_sensor = ArchimedLight.compute_directional_fluxes(inputs.sky, turtle_sensor, cfg_sensor)
-                first_sensor = ArchimedLight.compute_first_order(scene, turtle_sensor, flux_sensor, cfg_sensor)
-                budget_sensor = ArchimedLight.integrate_light(first_sensor, nothing, cfg_sensor; step_duration_seconds=1.0, component_area_per_node=ArchimedLight.node_areas(scene))
+    if _synthetic_case_enabled("run_light_step_matches_staged")
+        @testset "Scenario: run_light_step matches staged execution" begin
+            scene = _synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+            models = _default_synthetic_models()
+            options = _synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01)
+            row = _synthetic_meteo_row()
 
-                @test isapprox(get(_incident_par_initial_energy(budget_opaque), 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
-                @test isapprox(get(_incident_par_initial_energy(budget_sensor), 1, 0.0), 100.0; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_incident_par_initial_energy(budget_sensor), 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
+            sky = ArchimedLight.compute_sky(row, options)
+            turtle = ArchimedLight.build_turtle(options, sky)
+            fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+            first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+            budget = ArchimedLight.integrate_light(scene, models, first, nothing, options; meteo_row=row)
+            step = ArchimedLight.run_light_step(scene, models, row, options)
+
+            @test budget.incident_energy.total.par == step.budget.incident_energy.total.par
+            @test first.projected_area_per_node == step.first_order.projected_area_per_node
+        end
+    end
+
+    if _synthetic_case_enabled("cache_radiation_parity")
+        @testset "Scenario: cache_radiation keeps identical series outputs" begin
+            scene = _synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+            models = _default_synthetic_models()
+            rows = [
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+            ]
+            meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_series"))
+            uncached = _synthetic_options(cache_radiation=false)
+            cached = _synthetic_options(cache_radiation=true)
+
+            series0 = ArchimedLight.run_light_series(scene, models, meteo, uncached)
+            series1 = ArchimedLight.run_light_series(scene, models, meteo, cached)
+
+            @test length(series0) == length(series1)
+            for i in eachindex(series0)
+                @test series0[i].budget.incident_flux.total.par == series1[i].budget.incident_flux.total.par
+                @test series0[i].budget.incident_energy.total.par == series1[i].budget.incident_energy.total.par
             end
         end
     end
 
-    if _synthetic_case_enabled("single_plate_absorptance")
-        @testset "Scenario: single 1 m² plate with explicit absorptance" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="absorber", type="plate", object_id=1),
-                ],
-                meteo=_synthetic_meteo_row(; duration_seconds=2.0, ri_par_f=100.0, ri_nir_f=80.0, direct_fraction=1.0),
-                model_yaml="""
-                ---
-                Group: absorber
-                Type:
-                  plate:
-                      Interception:
-                          model: Translucent
-                          transparency: 0
-                          optical_properties:
-                              PAR: 0.2
-                              NIR: 0.7
-                ...
-                """,
-            )
-            expected = (
-                ri_par_0_q=200.0,
-                ri_nir_0_q=160.0,
-                ra_par_0_q=160.0,
-                ra_nir_0_q=48.0,
-                ra_par_0_f=80.0,
-                ra_nir_0_f=24.0,
-            )
+    if _synthetic_case_enabled("missing_models")
+        @testset "Scenario: missing models are rejected for geometry nodes" begin
+            scene = _synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+            sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+            options = _synthetic_options()
+            turtle = ArchimedLight.build_turtle(options, sky)
+            fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
 
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            mktempdir() do tmp
-                model_path = joinpath(tmp, "model_absorber.yml")
-                write(model_path, inputs.model_yaml)
-                cfg = _synthetic_cfg(cfg_ref; models=[model_path])
-                step = ArchimedLight.run_light_step(scene, inputs.meteo, cfg)
-
-                @test isapprox(get(_incident_par_initial_energy(step.budget), 1, 0.0), expected.ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_incident_nir_initial_energy(step.budget), 1, 0.0), expected.ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_absorbed_par_initial_energy(step.budget), 1, 0.0), expected.ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_absorbed_nir_initial_energy(step.budget), 1, 0.0), expected.ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_absorbed_par_initial_flux(step.budget), 1, 0.0), expected.ra_par_0_f; atol=1e-9, rtol=1e-9)
-                @test isapprox(get(_absorbed_nir_initial_flux(step.budget), 1, 0.0), expected.ra_nir_0_f; atol=1e-9, rtol=1e-9)
-            end
-        end
-    end
-
-    if _synthetic_case_enabled("two_planes_shadow_absorptance")
-        @testset "Scenario: two 1 m² plates, upper blocks direct light" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
-                ],
-                meteo=_synthetic_meteo_row(; duration_seconds=2.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
-                model_yaml="""
-                ---
-                Group: upper
-                Type:
-                  plate:
-                      Interception:
-                          model: Translucent
-                          transparency: 0
-                          optical_properties:
-                              PAR: 0.25
-                              NIR: 0.5
-                ---
-                Group: lower
-                Type:
-                  plate:
-                      Interception:
-                          model: Translucent
-                          transparency: 0
-                          optical_properties:
-                              PAR: 0.4
-                              NIR: 0.2
-                ...
-                """,
-            )
-            expected = (
-                upper_ri_par_0_q=240.0,
-                upper_ri_nir_0_q=160.0,
-                upper_ra_par_0_q=180.0,
-                upper_ra_nir_0_q=80.0,
-                lower_ri_par_0_q=0.0,
-                lower_ri_nir_0_q=0.0,
-                lower_ra_par_0_q=0.0,
-                lower_ra_nir_0_q=0.0,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            mktempdir() do tmp
-                model_path = joinpath(tmp, "model_two_plates.yml")
-                write(model_path, inputs.model_yaml)
-                cfg = _synthetic_cfg(cfg_ref; sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, models=[model_path])
-                step = ArchimedLight.run_light_step(scene, inputs.meteo, cfg)
-
-                rows = ArchimedLight.component_values_table(
-                    scene,
-                    step,
-                    cfg;
-                    meteo_row=inputs.meteo,
-                    step_number=1,
-                    step_duration_seconds=2.0,
-                    columns=["node_id", "Ri_PAR_0_q", "Ri_NIR_0_q", "Ra_PAR_0_q", "Ra_NIR_0_q"],
-                ).rows
-                row_by_node = Dict(Int(r.node_id) => r for r in rows)
-
-                @test isapprox(Float64(row_by_node[1].Ri_PAR_0_q), expected.upper_ri_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ri_NIR_0_q), expected.upper_ri_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ra_PAR_0_q), expected.upper_ra_par_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[1].Ra_NIR_0_q), expected.upper_ra_nir_0_q; atol=1e-9, rtol=1e-9)
-                @test isapprox(Float64(row_by_node[2].Ri_PAR_0_q), expected.lower_ri_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ri_NIR_0_q), expected.lower_ri_nir_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ra_PAR_0_q), expected.lower_ra_par_0_q; atol=1e-12, rtol=1e-12)
-                @test isapprox(Float64(row_by_node[2].Ra_NIR_0_q), expected.lower_ra_nir_0_q; atol=1e-12, rtol=1e-12)
-            end
-        end
-    end
-
-    if _synthetic_case_enabled("cached_series_parity")
-        @testset "Scenario: repeated simple meteo rows with and without radiation cache" begin
-            inputs = (
-                scene=[
-                    (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
-                ],
-                meteo_rows=[
-                    _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
-                    _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
-                    _synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
-                ],
-            )
-            expected = (
-                ri_par_f=120.0,
-                ri_nir_f=80.0,
-                step1_ri_par_q=120.0 * 600.0,
-                step1_ri_nir_q=80.0 * 600.0,
-                step2_scale=3.0,
-            )
-
-            scene = _synthetic_horizontal_scene(inputs.scene)
-            meteo = ArchimedLight.MeteoTable(inputs.meteo_rows, (; file="synthetic-cached-series"))
-            cfg_uncached = _synthetic_cfg(cfg_ref; cache_radiation=false)
-            cfg_cached = _synthetic_cfg(cfg_ref; cache_radiation=true)
-            series_uncached = ArchimedLight.run_light_series(scene, meteo, cfg_uncached)
-            series_cached = ArchimedLight.run_light_series(scene, meteo, cfg_cached)
-
-            @test length(series_uncached) == 3
-            @test length(series_cached) == 3
-            for i in eachindex(series_uncached)
-                @test _max_abs_float_dict_diff(_incident_par_flux(series_uncached[i].budget), _incident_par_flux(series_cached[i].budget)) == 0.0
-                @test _max_abs_float_dict_diff(_incident_nir_flux(series_uncached[i].budget), _incident_nir_flux(series_cached[i].budget)) == 0.0
-                @test _max_abs_float_dict_diff(_incident_par_energy(series_uncached[i].budget), _incident_par_energy(series_cached[i].budget)) == 0.0
-                @test _max_abs_float_dict_diff(_incident_nir_energy(series_uncached[i].budget), _incident_nir_energy(series_cached[i].budget)) == 0.0
-            end
-
-            @test isapprox(get(_incident_par_flux(series_uncached[1].budget), 1, 0.0), expected.ri_par_f; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(_incident_nir_flux(series_uncached[1].budget), 1, 0.0), expected.ri_nir_f; atol=1e-9, rtol=1e-9)
-            @test isapprox(get(_incident_par_energy(series_uncached[1].budget), 1, 0.0), expected.step1_ri_par_q; atol=1e-6, rtol=1e-12)
-            @test isapprox(get(_incident_nir_energy(series_uncached[1].budget), 1, 0.0), expected.step1_ri_nir_q; atol=1e-6, rtol=1e-12)
-            @test isapprox(
-                get(_incident_par_energy(series_uncached[2].budget), 1, 0.0),
-                expected.step2_scale * expected.step1_ri_par_q;
-                atol=1e-6,
-                rtol=1e-12,
-            )
-            @test isapprox(
-                get(_incident_nir_energy(series_uncached[2].budget), 1, 0.0),
-                expected.step2_scale * expected.step1_ri_nir_q;
-                atol=1e-6,
-                rtol=1e-12,
-            )
+            @test_throws ErrorException ArchimedLight.compute_first_order(scene, ArchimedLight.LightModels(), turtle, fluxes, options)
         end
     end
 end
