@@ -4,21 +4,11 @@ using BenchmarkTools
 using Dates
 using GeometryBasics
 using StaticArrays: SVector
-import PlantGeom
 import LinearAlgebra: cross, norm
 
 const PKG_ROOT = dirname(dirname(pathof(ArchimedLight)))
 const FAST_FIXTURE_ROOT = joinpath(PKG_ROOT, "test", "fast_fixtures")
 const SUITE = BenchmarkGroup()
-
-# Manual legacy Java reference, kept only as a rough comparison point:
-# - Measured once on 2026-03-16 with Temurin OpenJDK 1.8.0_442.
-# - Workload: archived Java CLI fixture `java_implementation/archimed-lib-2018/tests/test-hitcount/config.yml`.
-# - Timing method: `/usr/bin/time -l java -jar example_1/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar ...`
-# - Result: 3.52 s wall clock, 161.5 MB max RSS.
-# - Java self-reported: 2.767 s simulation time, 72.33 MB maximum memory usage.
-# This measures end-to-end CLI startup + file output, so it is not directly comparable to
-# the ASV benchmark leaves below. But a julia run for the same thing takes 2.27 seconds with the current implementation, so it is in the same ballpark already.
 
 function _fixture_paths(name::String)
     root = joinpath(FAST_FIXTURE_ROOT, name, "input")
@@ -31,32 +21,39 @@ end
 
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
-    cfg = ArchimedLight.read_light_config(paths.config)
-    scene = ArchimedLight.read_scene(cfg.paths.scene)
-    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
-    rows = ArchimedLight.prepare_meteo(meteo, cfg).rows
-    return (paths=paths, cfg=cfg, scene=scene, meteo=meteo, rows=rows)
-end
+    raw = ArchimedLight._load_yaml_ordered(paths.config)
+    scene = ArchimedLight.read_scene(normpath(joinpath(paths.root, string(raw["scene"]))))
+    models = ArchimedLight.read_models(paths.config)
+    options = ArchimedLight.read_options(paths.config)
+    meteo = ArchimedLight.read_meteo(normpath(joinpath(paths.root, string(raw["meteo"]))))
 
-function _override_cfg(cfg0::ArchimedLight.LightConfig; kwargs...)
-    cfg = deepcopy(cfg0)
-    for (k, v) in kwargs
-        if k == :pixel_size_m
-            cfg.general.pixel_size = Float64(v)
-        elseif k == :toricity
-            cfg.general.toricity = Bool(v)
-        elseif k == :scattering
-            cfg.general.scattering = Bool(v)
-        elseif k == :cache_radiation
-            cfg.general.cache_radiation = Bool(v)
-        elseif k == :cache_pixel_table
-            cfg.general.cache_pixel_table = Bool(v)
-        else
-            setproperty!(cfg.general, k, v)
+    paving_count = 0
+    for group_model in values(models.groups)
+        for type_model in values(group_model.types)
+            if haskey(type_model.extras, "plot_paving")
+                paving_count = max(paving_count, Int(type_model.extras["plot_paving"]))
+            end
         end
     end
-    cfg.outputs.output_directory = mktempdir()
-    return cfg
+    if paving_count > 0
+        n = max(1, round(Int, sqrt(paving_count)))
+        ArchimedLight.add_ground!(scene; nx=n, ny=n, z=0.005)
+    end
+
+    rows = ArchimedLight.prepare_meteo(meteo, options).rows
+    return (paths=paths, scene=scene, models=models, options=options, meteo=meteo, rows=rows)
+end
+
+function _override_options(options0::ArchimedLight.LightOptions; kwargs...)
+    params = Dict{Symbol,Any}()
+    for (k, v) in kwargs
+        if k == :pixel_size_m
+            params[:pixel_size] = Float64(v)
+        else
+            params[k] = v
+        end
+    end
+    return ArchimedLight.LightOptions(options0; params...)
 end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
@@ -141,8 +138,24 @@ function _synthetic_meteo_row(;
     )
 end
 
+function _default_synthetic_models()
+    ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "*";
+            types=ArchimedLight.OrderedDict(
+                "*" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.0,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
+end
+
 function _synthetic_fixture()
-    cfg_ref = ArchimedLight.read_light_config(joinpath(FAST_FIXTURE_ROOT, "simpleplant_16_notoric", "input", "config.yml"))
     scene = _synthetic_quad_scene([
         (
             p1=(0.0, 0.0, 1.0),
@@ -161,8 +174,10 @@ function _synthetic_fixture()
             type="plate",
         ),
     ])
+    models = _default_synthetic_models()
+    options = ArchimedLight.LightOptions()
     meteo = _synthetic_meteo_row(; ri_par_f=100.0, ri_nir_f=50.0)
-    return (cfg_ref=cfg_ref, scene=scene, meteo=meteo)
+    return (scene=scene, models=models, options=options, meteo=meteo)
 end
 
 const SIMPLEPLANT = _load_fixture("simpleplant_16_notoric")
@@ -170,72 +185,80 @@ const SKY_DIRECT = _load_fixture("sky_46_direct")
 const SYNTHETIC = _synthetic_fixture()
 
 SUITE["IO"] = BenchmarkGroup()
-SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_light_config($(SIMPLEPLANT.paths.config))
-SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene($(SIMPLEPLANT.cfg.paths.scene)) evals = 1
-SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.cfg.paths.meteo))
+SUITE["IO"]["read models"]["simpleplant"] = @benchmarkable ArchimedLight.read_models($(SIMPLEPLANT.paths.config))
+SUITE["IO"]["read options"]["simpleplant"] = @benchmarkable ArchimedLight.read_options($(SIMPLEPLANT.paths.config))
+SUITE["IO"]["read scene"]["simpleplant"] = @benchmarkable ArchimedLight.read_scene(joinpath($(SIMPLEPLANT.paths.root), "scene", "simple.ops")) evals = 1
+SUITE["IO"]["read meteo"]["simpleplant"] = @benchmarkable ArchimedLight.read_meteo($(SIMPLEPLANT.paths.meteo))
 
 SUITE["Run light"] = BenchmarkGroup()
 SUITE["Run light"]["step"] = BenchmarkGroup()
 SUITE["Run light"]["series"] = BenchmarkGroup()
 
 SUITE["Run light"]["step"]["simpleplant default"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, row, cfg) setup = (
+    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options) setup = (
         scene = SIMPLEPLANT.scene;
-        cfg = SIMPLEPLANT.cfg;
+        models = SIMPLEPLANT.models;
+        options = SIMPLEPLANT.options;
         row = first(SIMPLEPLANT.rows)
     ) evals = 1
 
 SUITE["Run light"]["step"]["simpleplant toric + coarse pixels"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, row, cfg) setup = (
+    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options) setup = (
         scene = SIMPLEPLANT.scene;
-        cfg = _override_cfg(SIMPLEPLANT.cfg; toricity=true, pixel_size_m=0.40);
-        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, cfg).rows)
+        models = SIMPLEPLANT.models;
+        options = _override_options(SIMPLEPLANT.options; toricity=true, pixel_size_m=0.40);
+        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options).rows)
     ) evals = 1
 
 SUITE["Run light"]["step"]["simpleplant scattering links"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, row, cfg; scattering_mode=:links) setup = (
+    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options; scattering_mode=:links) setup = (
         scene = SIMPLEPLANT.scene;
-        cfg = _override_cfg(SIMPLEPLANT.cfg; scattering=true, pixel_size_m=0.05);
-        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, cfg).rows)
+        models = SIMPLEPLANT.models;
+        options = _override_options(SIMPLEPLANT.options; scattering=true, pixel_size_m=0.05);
+        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options).rows)
     ) evals = 1
 
 SUITE["Run light"]["step"]["sky direct fixture"] =
     @benchmarkable begin
-        sky = ArchimedLight.compute_sky(row, cfg)
-        turtle = ArchimedLight.build_turtle(cfg, sky)
-        ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+        sky = ArchimedLight.compute_sky(row, options)
+        turtle = ArchimedLight.build_turtle(options, sky)
+        ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
     end setup = (
-        cfg = SKY_DIRECT.cfg;
+        options = SKY_DIRECT.options;
         row = first(SKY_DIRECT.rows)
     ) evals = 1
 
 SUITE["Run light"]["series"]["simpleplant uncached"] =
-    @benchmarkable ArchimedLight.run_light_series(scene, meteo, cfg) setup = (
+    @benchmarkable ArchimedLight.run_light_series(scene, models, meteo, options) setup = (
         scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
         meteo = SIMPLEPLANT.meteo;
-        cfg = _override_cfg(SIMPLEPLANT.cfg; cache_radiation=false, scattering=false)
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=false, scattering=false)
     ) evals = 1
 
 SUITE["Run light"]["series"]["simpleplant cached"] =
-    @benchmarkable ArchimedLight.run_light_series(scene, meteo, cfg) setup = (
+    @benchmarkable ArchimedLight.run_light_series(scene, models, meteo, options) setup = (
         scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
         meteo = SIMPLEPLANT.meteo;
-        cfg = _override_cfg(SIMPLEPLANT.cfg; cache_radiation=true, scattering=false)
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false)
     ) evals = 1
 
 SUITE["Synthetic"] = BenchmarkGroup()
 SUITE["Synthetic"]["first order stacked plates"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, meteo, cfg) setup = (
+    @benchmarkable ArchimedLight.run_light_step(scene, models, meteo_row, options) setup = (
         scene = SYNTHETIC.scene;
-        meteo = SYNTHETIC.meteo;
-        cfg = _override_cfg(SYNTHETIC.cfg_ref; sky_sectors=46, all_in_turtle=false, scattering=false, pixel_size_m=0.01)
+        models = SYNTHETIC.models;
+        meteo_row = SYNTHETIC.meteo;
+        options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=false, pixel_size=0.01)
     ) evals = 1
 
 SUITE["Synthetic"]["stacked plates with scattering"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, meteo, cfg; scattering_mode=:raycast) setup = (
+    @benchmarkable ArchimedLight.run_light_step(scene, models, meteo_row, options; scattering_mode=:raycast) setup = (
         scene = SYNTHETIC.scene;
-        meteo = SYNTHETIC.meteo;
-        cfg = _override_cfg(SYNTHETIC.cfg_ref; sky_sectors=46, all_in_turtle=false, scattering=true, pixel_size_m=0.01)
+        models = SYNTHETIC.models;
+        meteo_row = SYNTHETIC.meteo;
+        options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=true, pixel_size=0.01)
     ) evals = 1
 
 function _leaf_benchmarks(group, prefix=String[])

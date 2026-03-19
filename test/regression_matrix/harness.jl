@@ -13,6 +13,7 @@ import PlantGeom
 
 include(joinpath(@__DIR__, "common.jl"))
 include(joinpath(@__DIR__, "synthetic_support.jl"))
+include(joinpath(@__DIR__, "..", "support.jl"))
 
 struct RegressionScenario
     id::String
@@ -29,7 +30,6 @@ struct RegressionCase
 end
 
 const _FAST_FIXTURE_CACHE = Dict{String,Any}()
-const _SYNTHETIC_CFG_REF = Ref{Union{Nothing,ArchimedLight.LightConfig}}(nothing)
 const _KNOWN_OPTION_COLUMNS = [
     "sky_mode",
     "toricity",
@@ -95,10 +95,10 @@ function _sky_mode_params(mode::AbstractString)
     error("Unsupported sky_mode $(repr(mode))")
 end
 
-function _apply_case_options(cfg0::ArchimedLight.LightConfig, options::OrderedDict{String,Any})
+function _apply_case_options(options0::ArchimedLight.LightOptions, options::OrderedDict{String,Any})
     sky = _sky_mode_params(String(options["sky_mode"]))
-    cfg = _synthetic_cfg(
-        cfg0;
+    ArchimedLight.LightOptions(
+        options0;
         sectors=sky.sectors,
         all_in_turtle=sky.all_in_turtle,
         scattering=Bool(options["scattering"]),
@@ -112,8 +112,6 @@ function _apply_case_options(cfg0::ArchimedLight.LightConfig, options::OrderedDi
         nir_scattering=Bool(options["nir_scattering"]),
         java_logged_turtle_dirs=Bool(options["java_logged_turtle_dirs"]),
     )
-    cfg.outputs.output_directory = mktempdir()
-    return cfg
 end
 
 function _scattering_mode(options::OrderedDict{String,Any})
@@ -121,22 +119,11 @@ function _scattering_mode(options::OrderedDict{String,Any})
     return value isa Symbol ? value : Symbol(value)
 end
 
-function _synthetic_cfg_ref()
-    if _SYNTHETIC_CFG_REF[] === nothing
-        _SYNTHETIC_CFG_REF[] = ArchimedLight.read_light_config(
-            joinpath(@__DIR__, "..", "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"),
-        )
-    end
-    return _SYNTHETIC_CFG_REF[]::ArchimedLight.LightConfig
-end
-
 function _fast_fixture_source(source_id::String)
     get!(_FAST_FIXTURE_CACHE, source_id) do
         case_root = joinpath(@__DIR__, "..", "fast_fixtures", source_id)
-        cfg0 = ArchimedLight.read_light_config(joinpath(case_root, "input", "config.yml"))
-        scene = ArchimedLight.read_scene(cfg0.paths.scene)
-        meteo = ArchimedLight.read_meteo(cfg0.paths.meteo)
-        (case_root=case_root, cfg0=cfg0, scene=scene, meteo=meteo)
+        fixture = load_fixture_inputs(joinpath(case_root, "input"))
+        merge((case_root=case_root,), fixture)
     end
 end
 
@@ -320,19 +307,17 @@ function _synthetic_meteo_for_source(source_id::String)
 end
 
 function _compute_synthetic_case(case::RegressionCase)
-    cfg_ref = _synthetic_cfg_ref()
     scene = _synthetic_scene_for_source(case.scenario.source_id)
-    cfg = _apply_case_options(cfg_ref, case.options)
+    models = _default_synthetic_models()
+    options = _apply_case_options(ArchimedLight.LightOptions(), case.options)
     scattering_mode = _scattering_mode(case.options)
 
     if case.scenario.source_id == "cached_series_parity"
         meteo = _synthetic_meteo_for_source(case.scenario.source_id)
-        cfg_uncached = deepcopy(cfg)
-        cfg_uncached.general.cache_radiation = false
-        cfg_cached = deepcopy(cfg)
-        cfg_cached.general.cache_radiation = true
-        series_uncached = ArchimedLight.run_light_series(scene, meteo, cfg_uncached; scattering_mode=scattering_mode)
-        series_cached = ArchimedLight.run_light_series(scene, meteo, cfg_cached; scattering_mode=scattering_mode)
+        options_uncached = ArchimedLight.LightOptions(options; cache_radiation=false)
+        options_cached = ArchimedLight.LightOptions(options; cache_radiation=true)
+        series_uncached = ArchimedLight.run_light_series(scene, models, meteo, options_uncached; scattering_mode=scattering_mode)
+        series_cached = ArchimedLight.run_light_series(scene, models, meteo, options_cached; scattering_mode=scattering_mode)
         diffs = OrderedDict{String,Float64}()
         for i in eachindex(series_uncached)
             diffs["step$(i)_ri_par_f"] = _max_abs_float_dict_diff(series_uncached[i].budget.incident_flux.total.par, series_cached[i].budget.incident_flux.total.par)
@@ -344,7 +329,8 @@ function _compute_synthetic_case(case::RegressionCase)
         return (
             kind=:scene_outputs,
             scene=scene,
-            cfg=cfg_cached,
+            models=models,
+            options=options_cached,
             series=series_cached,
             meteo_rows=meteo.rows,
             figure=nothing,
@@ -354,7 +340,7 @@ function _compute_synthetic_case(case::RegressionCase)
     end
 
     meteo_row = _synthetic_meteo_for_source(case.scenario.source_id)
-    step = ArchimedLight.run_light_step(scene, meteo_row, cfg; scattering_mode=scattering_mode)
+    step = ArchimedLight.run_light_step(scene, models, meteo_row, options; scattering_mode=scattering_mode)
     strict_result = _synthetic_exact_check(
         case.scenario.source_id,
         (step=step, meta=OrderedDict{String,Any}("toricity" => case.options["toricity"], "scattering" => case.options["scattering"])),
@@ -362,7 +348,8 @@ function _compute_synthetic_case(case::RegressionCase)
     return (
         kind=:scene_outputs,
         scene=scene,
-        cfg=cfg,
+        models=models,
+        options=options,
         series=[step],
         meteo_rows=[meteo_row],
         figure=nothing,
@@ -373,19 +360,19 @@ end
 
 function _compute_fast_fixture_case(case::RegressionCase)
     src = _fast_fixture_source(case.scenario.source_id)
-    cfg = _apply_case_options(src.cfg0, case.options)
+    options = _apply_case_options(src.options, case.options)
     scattering_mode = _scattering_mode(case.options)
     if startswith(case.scenario.source_id, "sky_")
-        row = first(ArchimedLight.prepare_meteo(src.meteo, cfg).rows)
-        sky = ArchimedLight.compute_sky(row, cfg)
-        turtle = ArchimedLight.build_turtle(cfg, sky)
-        fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, cfg)
+        row = first(ArchimedLight.prepare_meteo(src.meteo, options).rows)
+        sky = ArchimedLight.compute_sky(row, options)
+        turtle = ArchimedLight.build_turtle(options, sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
         strict_ok =
             isapprox(sum(fluxes.par), sky.ri_par_f; atol=1e-6, rtol=1e-6) &&
             isapprox(sum(fluxes.nir), sky.ri_nir_f; atol=1e-6, rtol=1e-6)
         return (
             kind=:sky_outputs,
-            cfg=cfg,
+            options=options,
             sky=sky,
             turtle=turtle,
             fluxes=fluxes,
@@ -396,14 +383,15 @@ function _compute_fast_fixture_case(case::RegressionCase)
         )
     end
 
-    selected = ArchimedLight.prepare_meteo(src.meteo, cfg)
-    series = ArchimedLight.run_light_series(src.scene, src.meteo, cfg; scattering_mode=scattering_mode)
-    figure = case.visual ? _render_ri_par_f_figure(src.scene, first(series), cfg; title="$(case.scenario.source_id) | $(case.id)") : nothing
+    selected = ArchimedLight.prepare_meteo(src.meteo, options)
+    series = ArchimedLight.run_light_series(src.scene, src.models, src.meteo, options; scattering_mode=scattering_mode)
+    figure = case.visual ? _render_ri_par_f_figure(src.scene, src.models, options, first(series); title="$(case.scenario.source_id) | $(case.id)") : nothing
     strict_result = (ok=true, detail="")
     return (
         kind=:scene_outputs,
         scene=src.scene,
-        cfg=cfg,
+        models=src.models,
+        options=options,
         series=series,
         meteo_rows=selected.rows,
         figure=figure,
@@ -445,31 +433,11 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
 
     if data.kind == :scene_outputs
         comp_path = joinpath(observed_dir, "component_values.csv")
-        _write_component_series_csv(comp_path, data.scene, data.series, data.cfg, data.meteo_rows)
+        _write_component_series_csv(comp_path, data.scene, data.series, data.options, data.meteo_rows)
         files["component_values.csv"] = comp_path
 
         scene_path = joinpath(observed_dir, "scene_values.csv")
-        ArchimedLight.write_scene_values_csv(
-            scene_path,
-            data.scene,
-            data.series,
-            data.cfg;
-            meteo_rows=data.meteo_rows,
-            start_step_number=0,
-            columns=[
-                "step_number",
-                "date",
-                "hour_start",
-                "hour_end",
-                "RI_PAR_f",
-                "RI_NIR_f",
-                "RI_SW_f",
-                "plot_area",
-                "sun_elevation",
-                "sun_azimut",
-            ],
-            strict=false,
-        )
+        _write_scene_series_csv(scene_path, data.scene, data.series, data.meteo_rows)
         files["scene_values.csv"] = scene_path
 
         if data.figure !== nothing
@@ -477,7 +445,7 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
         end
     elseif data.kind == :sky_outputs
         sky_summary_path = joinpath(observed_dir, "sky_summary.csv")
-        _write_sky_summary_csv(sky_summary_path, data.sky, data.turtle, data.fluxes, data.cfg; step_number=0, sky_mode=data.sky_mode)
+        _write_sky_summary_csv(sky_summary_path, data.sky, data.turtle, data.fluxes, data.options; step_number=0, sky_mode=data.sky_mode)
         files["sky_summary.csv"] = sky_summary_path
         sector_path = joinpath(observed_dir, "sector_flux.csv")
         _write_sector_flux_csv(sector_path, data.turtle, data.fluxes; step_number=0)

@@ -684,7 +684,7 @@ end
     run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
 
 Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
-response reuse when `cfg.general.cache_radiation` is enabled.
+response reuse when `LightOptions(cache_radiation=true)` is enabled.
 """
 function run_light_series(
     scene::SceneGeometry,

@@ -1,10 +1,10 @@
 using Dates
 using GeometryBasics
 using LinearAlgebra: cross, norm
+using OrderedCollections: OrderedDict
 using StaticArrays: SVector
 
-function _synthetic_cfg(
-    cfg::ArchimedLight.LightConfig;
+function _synthetic_options(;
     sectors::Int=1,
     all_in_turtle::Bool=false,
     scattering::Bool=false,
@@ -18,20 +18,37 @@ function _synthetic_cfg(
     nir_scattering::Bool=true,
     java_logged_turtle_dirs::Bool=false,
 )
-    out = deepcopy(cfg)
-    out.general.all_in_turtle = all_in_turtle
-    out.general.turtle_sectors = sectors
-    out.general.scattering = scattering
-    out.general.pixel_size = pixel_size_m
-    out.general.toricity = toricity
-    out.general.area_ratio = area_ratio
-    out.general.cache_radiation = cache_radiation
-    out.general.cache_pixel_table = cache_pixel_table
-    out.general.radiation_timestep_minutes = radiation_timestep
-    out.general.nir_interception = nir_interception
-    out.general.nir_scattering = nir_scattering
-    out.general.java_logged_turtle_dirs = java_logged_turtle_dirs
-    return out
+    ArchimedLight.LightOptions(
+        turtle_sectors=sectors,
+        all_in_turtle=all_in_turtle,
+        scattering=scattering,
+        pixel_size=pixel_size_m,
+        toricity=toricity,
+        area_ratio=area_ratio,
+        cache_radiation=cache_radiation,
+        cache_pixel_table=cache_pixel_table,
+        radiation_timestep_minutes=radiation_timestep,
+        nir_interception=nir_interception,
+        nir_scattering=nir_scattering,
+        java_logged_turtle_dirs=java_logged_turtle_dirs,
+    )
+end
+
+function _default_synthetic_models()
+    ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "*";
+            types=OrderedDict(
+                "*" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.0,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
 end
 
 function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
@@ -137,36 +154,6 @@ end
 
 function _max_abs_float_dict_diff(a::Dict{Int,Float64}, b::Dict{Int,Float64})
     maximum(abs(get(a, id, 0.0) - get(b, id, 0.0)) for id in union(keys(a), keys(b)); init=0.0)
-end
-
-function _component_row_by_object(rows)
-    Dict(Int(r.object_id) => r for r in rows)
-end
-
-function _synthetic_step_rows(scene, step, cfg, meteo_row)
-    ArchimedLight.component_values_table(
-        scene,
-        step,
-        cfg;
-        meteo_row=meteo_row,
-        step_number=0,
-        columns=[
-            "step_number",
-            "node_id",
-            "source_topology_id",
-            "object_id",
-            "area",
-            "Ri_PAR_0_q",
-            "Ri_NIR_0_q",
-            "Ra_PAR_0_q",
-            "Ra_NIR_0_q",
-            "Ri_PAR_q",
-            "Ri_NIR_q",
-            "Ra_PAR_q",
-            "Ra_NIR_q",
-        ],
-        strict=false,
-    ).rows
 end
 
 function _synthetic_exact_check(source_id::String, result)::NamedTuple

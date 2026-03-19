@@ -26,10 +26,7 @@ const _FIXTURE_MANIFEST_PATH = joinpath(_RELEASE_DATA_ROOT, "fixtures_manifest.t
 const _DEFAULT_NUMERIC_FILES = String[
     "component_values.csv",
     "scene_values.csv",
-    "summary.csv",
     "meteo.csv",
-    "log-sun-position.csv",
-    "log-iteration-scat-par.csv",
 ]
 
 function _manifest_data(path::AbstractString=_FIXTURE_MANIFEST_PATH)
@@ -96,26 +93,28 @@ function fixture_numeric_reference_paths(fx::JuliaFixture; existing_only::Bool=t
 end
 
 function fixture_runtime_data(fx::JuliaFixture)
-    cfg0 = ArchimedLight.read_light_config(fx.config_path)
-    cfg = deepcopy(cfg0)
-    if fx.scene_override !== nothing
-        scene_path = normpath(joinpath(dirname(fx.config_path), fx.scene_override))
-        cfg.paths.scene = scene_path
-    end
-    if fx.meteo_override !== nothing
-        meteo_path = normpath(joinpath(dirname(fx.config_path), fx.meteo_override))
-        cfg.paths.meteo = meteo_path
-    end
-    scattering = fx.force_scattering === nothing ? cfg.general.scattering : Bool(fx.force_scattering)
-    cfg.general.scattering = scattering
-    ArchimedLight.refresh_light_config!(cfg)
+    raw = ArchimedLight._load_yaml_ordered(fx.config_path)
+    base = dirname(fx.config_path)
+    scene_path =
+        fx.scene_override === nothing ?
+        normpath(joinpath(base, string(raw["scene"]))) :
+        normpath(joinpath(base, fx.scene_override))
+    meteo_path =
+        fx.meteo_override === nothing ?
+        normpath(joinpath(base, string(raw["meteo"]))) :
+        normpath(joinpath(base, fx.meteo_override))
 
-    scene = ArchimedLight.read_scene(cfg.paths.scene)
-    meteo = ArchimedLight.read_meteo(cfg.paths.meteo)
-    selected = ArchimedLight.prepare_meteo(meteo, cfg)
-    series = ArchimedLight.run_light_series(scene, meteo, cfg)
+    scene = ArchimedLight.read_scene(scene_path)
+    models = ArchimedLight.read_models(fx.config_path)
+    options = ArchimedLight.read_options(fx.config_path)
+    if fx.force_scattering !== nothing
+        options = ArchimedLight.LightOptions(options; scattering=Bool(fx.force_scattering))
+    end
+    meteo = ArchimedLight.read_meteo(meteo_path)
+    selected = ArchimedLight.prepare_meteo(meteo, options)
+    series = ArchimedLight.run_light_series(scene, models, meteo, options)
     length(series) == length(selected.rows) || error("fixture $(fx.id): meteo/series length mismatch")
-    return (cfg=cfg, scene=scene, meteo=selected, series=series)
+    return (scene=scene, models=models, options=options, meteo=selected, series=series)
 end
 
 function _rows_to_csv(path::AbstractString, rows)
@@ -125,42 +124,45 @@ function _rows_to_csv(path::AbstractString, rows)
     return path
 end
 
-function _write_component_series_csv(path::AbstractString, scene, series, cfg, meteo_rows)
-    mkpath(dirname(path))
-    first_write = true
-    cols = [
-        "step_number",
-        "node_id",
-        "source_topology_id",
-        "object_id",
-        "group",
-        "type",
-        "area",
-        "barycentre_z",
-        "sky_fraction",
-        "Ri_PAR_0_f",
-        "Ri_NIR_0_f",
-        "Ri_PAR_0_q",
-        "Ri_NIR_0_q",
-        "Ra_PAR_0_q",
-        "Ra_NIR_0_q",
-    ]
-    if cfg.general.scattering
-        append!(cols, ["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"])
-    end
-    for i in eachindex(series)
-        t = ArchimedLight.component_values_table(
-            scene,
-            series[i],
-            cfg;
-            meteo_row=meteo_rows[i],
-            step_number=i - 1,
-            columns=cols,
-            strict=false,
+function _component_rows_for_step(scene, step, step_number::Int)
+    rows = OrderedDict{String,Any}[]
+    for nid in sort(collect(keys(scene.nodes)))
+        node = scene.nodes[nid]
+        row = OrderedDict{String,Any}(
+            "step_number" => step_number,
+            "node_id" => nid,
+            "source_topology_id" => node.source_topology_id,
+            "object_id" => node.object_id,
+            "group" => node.group,
+            "type" => node.type,
+            "area" => node.area,
+            "Ri_PAR_0_f" => get(step.budget.incident_flux.initial.par, nid, 0.0),
+            "Ri_NIR_0_f" => get(step.budget.incident_flux.initial.nir, nid, 0.0),
+            "Ri_PAR_0_q" => get(step.budget.incident_energy.initial.par, nid, 0.0),
+            "Ri_NIR_0_q" => get(step.budget.incident_energy.initial.nir, nid, 0.0),
+            "Ra_PAR_0_q" => get(step.budget.absorbed_energy.initial.par, nid, 0.0),
+            "Ra_NIR_0_q" => get(step.budget.absorbed_energy.initial.nir, nid, 0.0),
         )
-        CSV.write(path, t.rows; delim=';', append=!first_write, writeheader=first_write)
-        first_write = false
+        if step.scattering !== nothing
+            row["Ri_PAR_f"] = get(step.budget.incident_flux.total.par, nid, 0.0)
+            row["Ri_NIR_f"] = get(step.budget.incident_flux.total.nir, nid, 0.0)
+            row["Ri_PAR_q"] = get(step.budget.incident_energy.total.par, nid, 0.0)
+            row["Ri_NIR_q"] = get(step.budget.incident_energy.total.nir, nid, 0.0)
+            row["Ra_PAR_q"] = get(step.budget.absorbed_energy.total.par, nid, 0.0)
+            row["Ra_NIR_q"] = get(step.budget.absorbed_energy.total.nir, nid, 0.0)
+        end
+        push!(rows, row)
     end
+    return rows
+end
+
+function _write_component_series_csv(path::AbstractString, scene, series, options, meteo_rows)
+    mkpath(dirname(path))
+    rows = OrderedDict{String,Any}[]
+    for i in eachindex(series)
+        append!(rows, _component_rows_for_step(scene, series[i], i - 1))
+    end
+    CSV.write(path, rows; delim=';')
     return path
 end
 
@@ -176,87 +178,44 @@ function _meteo_rows_with_step(rows)
     out
 end
 
+function _write_scene_series_csv(path::AbstractString, scene, series, meteo_rows)
+    rows = OrderedDict{String,Any}[]
+    for i in eachindex(series)
+        row = meteo_rows[i]
+        step = series[i]
+        push!(
+            rows,
+            OrderedDict{String,Any}(
+                "step_number" => i - 1,
+                "date" => get(row, :date, missing),
+                "hour_start" => get(row, :hour_start, missing),
+                "hour_end" => get(row, :hour_end, missing),
+                "RI_PAR_f" => step.sky.ri_par_f,
+                "RI_NIR_f" => step.sky.ri_nir_f,
+                "RI_SW_f" => step.sky.ri_global_f,
+                "plot_area" => scene.scene_xy_bounds === nothing ? missing :
+                    (scene.scene_xy_bounds[3] - scene.scene_xy_bounds[1]) * (scene.scene_xy_bounds[4] - scene.scene_xy_bounds[2]),
+                "sun_elevation" => step.sky.sun_elevation,
+                "sun_azimut" => step.sky.sun_azimut,
+            ),
+        )
+    end
+    CSV.write(path, rows; delim=';')
+    return path
+end
+
 function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractString; data=nothing)
     data === nothing && (data = fixture_runtime_data(fx))
     mkpath(out_root)
     files = Dict{String,String}()
 
     comp_path = joinpath(out_root, "component_values.csv")
-    _write_component_series_csv(comp_path, data.scene, data.series, data.cfg, data.meteo.rows)
+    _write_component_series_csv(comp_path, data.scene, data.series, data.options, data.meteo.rows)
     files["component_values.csv"] = comp_path
 
     scene_path = joinpath(out_root, "scene_values.csv")
-    ArchimedLight.write_scene_values_csv(
-        scene_path,
-        data.scene,
-        data.series,
-        data.cfg;
-        meteo_rows=data.meteo.rows,
-        start_step_number=0,
-        columns=[
-            "step_number",
-            "date",
-            "hour_start",
-            "hour_end",
-            "RI_PAR_f",
-            "RI_NIR_f",
-            "RI_SW_f",
-            "plot_area",
-            "sun_elevation",
-            "sun_azimut",
-        ],
-        strict=false,
-    )
+    _write_scene_series_csv(scene_path, data.scene, data.series, data.meteo.rows)
     files["scene_values.csv"] = scene_path
-
-    summary_path = joinpath(out_root, "summary.csv")
-    try
-        ArchimedLight.write_summary_csv(
-            summary_path,
-            data.scene,
-            data.series,
-            data.cfg;
-            meteo_rows=data.meteo.rows,
-            start_step_number=0,
-            columns=[
-                "step_number",
-                "date",
-                "hour_start",
-                "hour_end",
-                "group",
-                "type",
-                "object_id",
-                "area",
-                "Ri_q",
-                "Ra_q",
-            ],
-        )
-        files["summary.csv"] = summary_path
-    catch
-        # Some fixtures intentionally exclude summary fields; keep regression runnable without summary.
-    end
-
-    sun_path = joinpath(out_root, "log-sun-position.csv")
-    ArchimedLight.write_sun_position_log_csv(sun_path, data.series, data.meteo.rows; start_step_number=0)
-    files["log-sun-position.csv"] = sun_path
-
-    if data.cfg.general.scattering
-        scat_path = joinpath(out_root, "log-iteration-scat-par.csv")
-        first_write = true
-        for i in eachindex(data.series)
-            t = ArchimedLight.scattering_iteration_log_table(
-                data.scene,
-                data.series[i],
-                data.cfg;
-                meteo_row=data.meteo.rows[i],
-                step_number=i - 1,
-                band="PAR",
-            )
-            CSV.write(scat_path, t.rows; delim=';', append=!first_write, writeheader=first_write)
-            first_write = false
-        end
-        files["log-iteration-scat-par.csv"] = scat_path
-    end
 
     meteo_path = joinpath(out_root, "meteo.csv")
     _rows_to_csv(meteo_path, _meteo_rows_with_step(data.meteo.rows))
@@ -329,7 +288,7 @@ end
 
 function render_fixture_montage(fx::JuliaFixture; data=nothing)
     data === nothing && (data = fixture_runtime_data(fx))
-    geometry = ArchimedLight._scene_geometry_for_interception(data.scene, data.cfg)
+    geometry = ArchimedLight._scene_geometry_for_interception(data.scene, data.models, data.options)
 
     step_values = Vector{Vector{Float64}}(undef, length(data.series))
     allvals = Float64[]
