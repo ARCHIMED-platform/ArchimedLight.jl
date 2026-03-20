@@ -299,3 +299,144 @@ struct LightStepResult
     budget::LightBudget
     extra_band_irradiance::Dict{String,Float64}
 end
+
+function _format_decimal(value::Real; digits::Int=3)
+    x = round(Float64(value); digits=digits)
+    s = string(x)
+    occursin('e', s) && return s
+    occursin('E', s) && return s
+    s = replace(s, r"0+$" => "")
+    s = replace(s, r"\.$" => "")
+    return s
+end
+
+function _format_scaled_quantity(value::Real, unit::AbstractString)
+    x = Float64(value)
+    ax = abs(x)
+    if unit == "J"
+        if ax >= 1.0e6
+            return _format_decimal(x / 1.0e6) * " MJ"
+        elseif ax >= 1.0e3
+            return _format_decimal(x / 1.0e3) * " kJ"
+        end
+    elseif unit == "W m^-2"
+        if ax >= 1.0e3
+            return _format_decimal(x / 1.0e3) * " kW m^-2"
+        end
+    end
+    return _format_decimal(x) * " " * unit
+end
+
+@inline _format_degrees(value::Real) = _format_decimal(value; digits=1) * "°"
+@inline _format_percent(value::Real) = _format_decimal(100.0 * Float64(value); digits=1) * "%"
+
+function _light_step_energy_totals(step::LightStepResult)
+    budget = step.budget
+    incident_par_total = sum(values(budget.incident_energy.total.par))
+    incident_nir_total = sum(values(budget.incident_energy.total.nir))
+    incident_par_initial = sum(values(budget.incident_energy.initial.par))
+    incident_nir_initial = sum(values(budget.incident_energy.initial.nir))
+    absorbed_par_total = sum(values(budget.absorbed_energy.total.par))
+    absorbed_nir_total = sum(values(budget.absorbed_energy.total.nir))
+    (
+        incident_par_total=incident_par_total,
+        incident_nir_total=incident_nir_total,
+        incident_par_added=incident_par_total - incident_par_initial,
+        incident_nir_added=incident_nir_total - incident_nir_initial,
+        absorbed_par_total=absorbed_par_total,
+        absorbed_nir_total=absorbed_nir_total,
+    )
+end
+
+function _light_step_sector_counts(step::LightStepResult)
+    sky_count = count(sector -> sector.source == :sky, step.turtle.sectors)
+    sun_count = count(sector -> sector.source == :sun, step.turtle.sectors)
+    other_count = length(step.turtle.sectors) - sky_count - sun_count
+    return (sky=sky_count, sun=sun_count, other=other_count)
+end
+
+function _light_step_extra_bands_summary(step::LightStepResult)
+    isempty(step.extra_band_irradiance) && return ""
+    parts = String[]
+    for band in sort!(collect(keys(step.extra_band_irradiance)))
+        push!(parts, uppercase(band) * " " * _format_scaled_quantity(step.extra_band_irradiance[band], "W m^-2"))
+    end
+    return join(parts, " | ")
+end
+
+function Base.show(io::IO, step::LightStepResult)
+    totals = _light_step_energy_totals(step)
+    sector_counts = _light_step_sector_counts(step)
+    scattering_summary =
+        if step.scattering === nothing
+            "off"
+        else
+            iter = step.scattering.iterations
+            status = step.scattering.converged ? "converged" : "maxiter"
+            "$(iter) iters, $(status)"
+        end
+    print(
+        io,
+        "LightStepResult(",
+        "PAR=", _format_scaled_quantity(totals.incident_par_total, "J"),
+        ", NIR=", _format_scaled_quantity(totals.incident_nir_total, "J"),
+        ", sky=", _format_scaled_quantity(step.sky.ri_par_f, "W m^-2"), " PAR",
+        " / ", _format_scaled_quantity(step.sky.ri_nir_f, "W m^-2"), " NIR",
+        ", sectors=", length(step.turtle.sectors),
+        " [sky=", sector_counts.sky, ", sun=", sector_counts.sun,
+        sector_counts.other > 0 ? ", other=$(sector_counts.other)" : "",
+        "]",
+        ", scattering=", scattering_summary,
+        ")",
+    )
+end
+
+function Base.show(io::IO, ::MIME"text/plain", step::LightStepResult)
+    totals = _light_step_energy_totals(step)
+    sector_counts = _light_step_sector_counts(step)
+    println(io, "LightStepResult")
+    println(
+        io,
+        "  sky: PAR ", _format_scaled_quantity(step.sky.ri_par_f, "W m^-2"),
+        " | NIR ", _format_scaled_quantity(step.sky.ri_nir_f, "W m^-2"),
+        " | SW ", _format_scaled_quantity(step.sky.ri_sw_f, "W m^-2"),
+    )
+    println(
+        io,
+        "  sun: azimuth ", _format_degrees(step.sky.sun_azimuth_deg),
+        " | elevation ", _format_degrees(step.sky.sun_elevation_deg),
+        " | direct ", _format_percent(step.sky.direct_fraction),
+        " | diffuse ", _format_percent(step.sky.diffuse_fraction),
+    )
+    println(
+        io,
+        "  turtle: ", length(step.turtle.sectors), " sectors",
+        " (sky=", sector_counts.sky,
+        ", sun=", sector_counts.sun,
+        sector_counts.other > 0 ? ", other=$(sector_counts.other)" : "",
+        ")",
+    )
+    println(
+        io,
+        "  scene incident energy: PAR ", _format_scaled_quantity(totals.incident_par_total, "J"),
+        " | NIR ", _format_scaled_quantity(totals.incident_nir_total, "J"),
+    )
+    println(
+        io,
+        "  scene absorbed energy: PAR ", _format_scaled_quantity(totals.absorbed_par_total, "J"),
+        " | NIR ", _format_scaled_quantity(totals.absorbed_nir_total, "J"),
+    )
+    if step.scattering === nothing
+        println(io, "  scattering: off")
+    else
+        println(
+            io,
+            "  scattering: on | iterations ", step.scattering.iterations,
+            " | converged ", step.scattering.converged,
+            " | added PAR ", _format_scaled_quantity(totals.incident_par_added, "J"),
+            " | added NIR ", _format_scaled_quantity(totals.incident_nir_added, "J"),
+        )
+    end
+    extra_summary = _light_step_extra_bands_summary(step)
+    isempty(extra_summary) || println(io, "  extra bands: ", extra_summary)
+end

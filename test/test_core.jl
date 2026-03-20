@@ -8,6 +8,16 @@
     @test length(series) == length(selected.rows)
     @test !isempty(series[1].budget.incident_energy.total.par)
     @test length(series[1].turtle.sectors) == 17
+    step_summary = sprint(show, series[1])
+    step_pretty = sprint(show, MIME"text/plain"(), series[1])
+    @test occursin("LightStepResult(", step_summary)
+    @test occursin("sectors=17", step_summary)
+    @test occursin("LightStepResult", step_pretty)
+    @test occursin("sky:", step_pretty)
+    @test occursin("scene incident energy:", step_pretty)
+    @test occursin("scene absorbed energy:", step_pretty)
+    @test occursin("turtle: 17 sectors", step_pretty)
+    @test occursin("scattering:", step_pretty)
 
     options2, scene2, meteo2, models2 = ArchimedLight.read_config(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"))
     @test options2.turtle_sectors == fixture.options.turtle_sectors
