@@ -62,7 +62,7 @@ For every meteo row:
 series = run_light_series(scene, models, meteo, options)
 ```
 
-When `LightOptions(cache_radiation=true)` is enabled, `run_light_series` can reuse directional responses between meteo rows on the same scene.
+When `LightOptions(cache_radiation=true)` is enabled, `run_light_series` can reuse directional responses between meteo rows on the same scene, which improves performance a lot.
 
 ## Step 3: Inspect The Budget
 
@@ -78,12 +78,16 @@ Common reading patterns are:
 
 - first-order only: `budget.incident_flux.initial.par`
 - with scattering: `budget.incident_flux.total.par`
-- per-step energy: `budget.incident_energy.total.par`
+- incident energy: `budget.incident_energy.total.par`
 - absorbed quantities: `budget.absorbed_flux.total.par`
+
+Incident light is the light that arrives on the object. This light can then be absorbed, transmitted, or reflected. Absorbed light is the portion of the incident light that is absorbed by the object, while transmitted light is the portion that passes through the object, and reflected light is the portion that bounces off the surface of the object. Both incident and absorbed quantities are important for understanding the energy balance and photosynthetic activity of plants. Incident flux is more relevant for visualisation and export, while absorbed energy is more relevant for photosynthesis and energy balance.
+
+Flux values are in `W m^-2` and energy values are in `J` per component per step. The wavebands are `par` for photosynthetically active radiation, `nir` for near-infrared, and any extra shortwave bands present in the meteo file.
 
 ## Step 4: Write Results Back Onto The Scene
 
-Attach the values you want to inspect:
+After computing the light interception, you can attach the results back onto the scene for visualization or export. This is done with the `attach_light_step!` function, which takes the scene, the light step result, and a list of fields to attach.
 
 ```julia
 attach_light_step!(
@@ -103,21 +107,11 @@ This keeps the historical ARCHIMED attribute names on the nodes:
 
 ![Simple plant coloured by intercepted PAR](assets/example_simpleplant_scene_ri_par_q.png)
 
-## Step 5: Use The Example Script When You Want More
-
-`example_1/full_featured_example.jl` goes further than the minimal workflow:
-
-- it runs the stage API explicitly
-- it renders the scene with `PlantGeom`
-- it compares Julia outputs against a Java `component_values.csv` when one is present
-
-That script is a good template when you want a reproducible end-to-end example rather than an interactive session.
-
 ## Reading The Input Files Together
 
 The file workflow is easiest to understand when you see the four inputs as one linked dataset:
 
-1. `config.yml` selects the scene, meteo file, and model files, and defines global runtime options such as `sky_sectors`, `pixel_size`, and `toricity`.
+1. `config.yml` selects the scene, meteo file, and model files, and defines global runtime options such as `sky_sectors`, `pixel_size`, and `toricity` based on the files content.
 2. `simple.ops` places the plant object into the plot and assigns it to the functional group `simple_plant`.
 3. `model_simple.yml` says how `simple_plant` components intercept and scatter PAR, NIR, and the custom waveband.
 4. `meteo.csv` provides the forcing for the simulation step.

@@ -24,7 +24,6 @@ config =  joinpath(dirname(dirname(pathof(ArchimedLight))), "example_2", "config
 options, scene, meteo, models = read_config(config)
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)
-total_absorbed_par = sum(values(step.budget.absorbed_energy.total.par))
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -53,6 +52,24 @@ The attached node attributes use the standard ARCHIMED names:
 - `:incident_par_flux` -> `Ri_PAR_f`
 - `:incident_par_energy` -> `Ri_PAR_q`
 - `:absorbed_par_energy` -> `Ra_PAR_q`
+
+
+# Plotting the results
+
+You can plot the results using `PlantGeom.jl` + `Makie.jl`:
+
+```julia
+using PlantGeom, CairoMakie
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    figure=(size=(980, 700),),
+)
+
+PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
+fig
+```
 
 ## What To Read Next
 
