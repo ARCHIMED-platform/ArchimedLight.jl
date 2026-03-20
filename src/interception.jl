@@ -27,6 +27,19 @@ struct InterceptionSceneData
     node_type::Dict{Int,String}
 end
 
+struct PreparedInterceptionData
+    geometry::InterceptionSceneData
+    virtual_nodes::Set{Int}
+    upper_hit::Bool
+    cache_ctx::Union{Nothing,ProjectionCacheContext}
+    emitter_par_power_per_node::Dict{Int,Float64}
+    emitter_nir_power_per_node::Dict{Int,Float64}
+    emitter_nodes::Set{Int}
+    component_area_per_node::Union{Nothing,Dict{Int,Float64}}
+    absorption_par_per_node::Union{Nothing,Dict{Int,Float64}}
+    absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
+end
+
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -341,6 +354,52 @@ function _emitter_transfer_weights(
         weights[(to, src)] = c / n
     end
     weights
+end
+
+function _emitter_transfer_weights_from_projections(
+    projections::AbstractVector{DirectionProjectionResult},
+    turtle::TurtleGrid,
+    emitter_nodes::Set{Int},
+)
+    isempty(emitter_nodes) && return Dict{Tuple{Int,Int},Float64}()
+
+    pair_counts = Dict{Tuple{Int,Int},Int}()
+    total_from = Dict{Int,Int}()
+
+    for i in eachindex(turtle.sectors)
+        turtle.sectors[i].source == :sun && continue
+        projection = projections[i]
+
+        for stack in values(projection.pixel_hits)
+            length(stack) <= 1 && continue
+            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+
+            for j in eachindex(stack)
+                src = stack[j][2]
+                src in emitter_nodes || continue
+
+                to = 0
+                for k in (j + 1):length(stack)
+                    nid = stack[k][2]
+                    nid in emitter_nodes && continue
+                    to = nid
+                    break
+                end
+                to == 0 && continue
+
+                pair_counts[(to, src)] = get(pair_counts, (to, src), 0) + 1
+                total_from[src] = get(total_from, src, 0) + 1
+            end
+        end
+    end
+
+    weights = Dict{Tuple{Int,Int},Float64}()
+    for ((to, src), c) in pair_counts
+        n = get(total_from, src, 0)
+        n > 0 || continue
+        weights[(to, src)] = c / n
+    end
+    return weights
 end
 
 function _cfg_cache_pixel_table(options::LightOptions)
@@ -826,6 +885,85 @@ end
 @inline _hit_height(hit) = hit[1]
 @inline _hit_node(hit) = hit[2]
 
+function _visible_area_from_projection(
+    projection::DirectionProjectionResult,
+    options::LightOptions,
+    plotbox,
+    virtual_nodes::Set{Int},
+)
+    ratios =
+        if options.area_ratio
+            out = Dict{Int,Float64}()
+            for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
+                ppa = get(projection.projected_pixels_area, nid, 0.0)
+                out[nid] = ppa > 0.0 ? get(projection.projected_mesh_area, nid, 0.0) / ppa : 1.0
+            end
+            out
+        else
+            nothing
+        end
+
+    visible_area = Dict{Int,Float64}()
+    for stack in values(projection.pixel_hits)
+        isempty(stack) && continue
+        sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+
+        non_virtual_seen = false
+        first_non_virtual = 0
+        for hit in stack
+            nid = _hit_node(hit)
+            if nid in virtual_nodes
+                if !non_virtual_seen
+                    ratio = ratios === nothing ? 1.0 : get(ratios, nid, 1.0)
+                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * ratio
+                end
+            else
+                first_non_virtual = nid
+                non_virtual_seen = true
+                break
+            end
+        end
+        if first_non_virtual != 0
+            ratio = ratios === nothing ? 1.0 : get(ratios, first_non_virtual, 1.0)
+            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * ratio
+        end
+    end
+
+    return visible_area
+end
+
+function _prepared_direction_projection(
+    prepared::PreparedInterceptionData,
+    direction,
+    options::LightOptions,
+)
+    geometry = prepared.geometry
+    strict_java_float = _strict_java_float(options)
+    return _direction_projection_cached(
+        geometry.vertices,
+        geometry.faces,
+        geometry.face2node,
+        direction,
+        options,
+        geometry.plotbox,
+        prepared.cache_ctx;
+        upper_hit=prepared.upper_hit,
+        strict_java_float=strict_java_float,
+    )
+end
+
+function _build_direction_projections(
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    options::LightOptions,
+)
+    projections = Vector{DirectionProjectionResult}(undef, length(turtle.sectors))
+    for i in eachindex(turtle.sectors)
+        projections[i] = _prepared_direction_projection(prepared, turtle.sectors[i].direction, options)
+    end
+    return projections
+end
+
 function _rasterize_direction_java(
     vertices,
     faces,
@@ -840,44 +978,7 @@ function _rasterize_direction_java(
     strict_java_float = _strict_java_float(options)
     projection =
         _direction_projection_cached(vertices, faces, face2node, direction, options, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
-
-    ratios = Dict{Int,Float64}()
-    for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
-        if !options.area_ratio
-            ratios[nid] = 1.0
-        else
-            ppa = get(projection.projected_pixels_area, nid, 0.0)
-            ratios[nid] = ppa > 0.0 ? get(projection.projected_mesh_area, nid, 0.0) / ppa : 1.0
-        end
-    end
-
-    visible_area = Dict{Int,Float64}()
-    for stack in values(projection.pixel_hits)
-        isempty(stack) && continue
-        # Java uses a stable sort for hit heights; preserve insertion order on ties.
-        sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
-
-        # VirtualSensor nodes are transparent: they receive without occluding other nodes.
-        non_virtual_seen = false
-        first_non_virtual = 0
-        for hit in stack
-            nid = _hit_node(hit)
-            if nid in virtual_nodes
-                if !non_virtual_seen
-                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * get(ratios, nid, 1.0)
-                end
-            else
-                first_non_virtual = nid
-                non_virtual_seen = true
-                break
-            end
-        end
-        if first_non_virtual != 0
-            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * get(ratios, first_non_virtual, 1.0)
-        end
-    end
-
-    return visible_area, projection.node_hits
+    return _visible_area_from_projection(projection, options, plotbox, virtual_nodes), projection.node_hits
 end
 
 function _direction_projection(vertices, faces, face2node, direction, options::LightOptions, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
@@ -1056,6 +1157,86 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
     return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group, node_type)
 end
 
+function _interception_area_per_node_from_geometry(geometry::InterceptionSceneData)
+    area = Dict{Int,Float64}(nid => 0.0 for nid in geometry.node_ids)
+    @inbounds for i in eachindex(geometry.faces)
+        f = geometry.faces[i]
+        nid = geometry.face2node[i]
+        a = _triangle_area3d(geometry.vertices[f[1]], geometry.vertices[f[2]], geometry.vertices[f[3]])
+        area[nid] = get(area, nid, 0.0) + a
+    end
+    return area
+end
+
+function _node_absorptance_per_band_from_geometry(
+    scene::SceneGeometry,
+    models::LightModels,
+    options::LightOptions,
+    geometry::InterceptionSceneData,
+    virtual_nodes::Set{Int},
+    band::String,
+)
+    coeffs_by_group_type = _group_optical_coeffs(models)
+    b = uppercase(band)
+    sf_default = _default_scattering_factor_local(options, b)
+    out = Dict{Int,Float64}()
+    for nid in geometry.node_ids
+        group = get(geometry.node_group, nid, _scene_group(scene, nid, ""))
+        if nid in virtual_nodes
+            out[nid] = 0.0
+            continue
+        end
+        default_type = group == "pavement" ? "Cobblestone" : ""
+        typ = _scene_type(scene, nid, default_type)
+        coeffs = get(
+            coeffs_by_group_type,
+            (group, typ),
+            get(coeffs_by_group_type, (group, "*"), Dict{String,Float64}()),
+        )
+        sf = get(coeffs, b, sf_default)
+        out[nid] = clamp(1.0 - sf, 0.0, 1.0)
+    end
+    return out
+end
+
+function _prepare_interception_data(
+    scene::SceneGeometry,
+    models::LightModels,
+    options::LightOptions;
+    include_budget_maps::Bool=false,
+)
+    geometry = _scene_geometry_for_interception(scene, models, options)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
+    upper_hit = _use_upper_hit_pixel_table(models, options)
+    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
+    emit_par, emit_nir = _emitter_power_per_node(scene, models)
+    emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
+
+    component_area_per_node =
+        include_budget_maps ? _interception_area_per_node_from_geometry(geometry) : nothing
+    absorption_par_per_node =
+        include_budget_maps ?
+        _node_absorptance_per_band_from_geometry(scene, models, options, geometry, virtual_nodes, "PAR") :
+        nothing
+    absorption_nir_per_node =
+        include_budget_maps ?
+        _node_absorptance_per_band_from_geometry(scene, models, options, geometry, virtual_nodes, "NIR") :
+        nothing
+
+    return PreparedInterceptionData(
+        geometry,
+        virtual_nodes,
+        upper_hit,
+        cache_ctx,
+        emit_par,
+        emit_nir,
+        emitter_nodes,
+        component_area_per_node,
+        absorption_par_per_node,
+        absorption_nir_per_node,
+    )
+end
+
 function _interception_output_keys(scene::SceneGeometry, models::LightModels, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
@@ -1118,11 +1299,17 @@ function compute_first_order(
     options::LightOptions,
     ::RasterCPUBackend,
 )
+    prepared = _prepare_interception_data(scene, models, options)
+    return _compute_first_order(prepared, turtle, fluxes, options)
+end
 
-    geometry = _scene_geometry_for_interception(scene, models, options)
-    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
-    upper_hit = _use_upper_hit_pixel_table(models, options)
-    cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
+function _compute_first_order(
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    options::LightOptions,
+)
+    geometry = prepared.geometry
 
     projected_area_per_node = Dict(id => 0.0 for id in geometry.node_ids)
     incident_power = SpectralNodeValues(
@@ -1140,9 +1327,9 @@ function compute_first_order(
                 sector.direction,
                 options,
                 geometry.plotbox;
-                cache_ctx=cache_ctx,
-                virtual_nodes=virtual_nodes,
-                upper_hit=upper_hit,
+                cache_ctx=prepared.cache_ctx,
+                virtual_nodes=prepared.virtual_nodes,
+                upper_hit=prepared.upper_hit,
             )
 
         for (nid, h) in node_hits
@@ -1163,9 +1350,7 @@ function compute_first_order(
         end
     end
 
-    emit_par, emit_nir = _emitter_power_per_node(scene, models)
-    emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
-    if !isempty(emitter_nodes)
+    if !isempty(prepared.emitter_nodes)
         w = _emitter_transfer_weights(
             geometry.vertices,
             geometry.faces,
@@ -1173,12 +1358,12 @@ function compute_first_order(
             turtle,
             options,
             geometry.plotbox,
-            emitter_nodes,
-            cache_ctx,
+            prepared.emitter_nodes,
+            prepared.cache_ctx,
         )
         for ((to, src), ww) in w
-            incident_power.par[to] = get(incident_power.par, to, 0.0) + ww * get(emit_par, src, 0.0)
-            incident_power.nir[to] = get(incident_power.nir, to, 0.0) + ww * get(emit_nir, src, 0.0)
+            incident_power.par[to] = get(incident_power.par, to, 0.0) + ww * get(prepared.emitter_par_power_per_node, src, 0.0)
+            incident_power.nir[to] = get(incident_power.nir, to, 0.0) + ww * get(prepared.emitter_nir_power_per_node, src, 0.0)
         end
     end
 

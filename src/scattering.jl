@@ -2,6 +2,15 @@ function _dict_zero(node_ids)
     Dict{Int,Float64}(nid => 0.0 for nid in node_ids)
 end
 
+struct ScatteringTopologyCache
+    pair_counts::Dict{Tuple{Int,Int},Int}
+    sun_hits::Dict{Int,Int}
+    node_ids::Vector{Int}
+    node_group::Dict{Int,String}
+    node_type::Dict{Int,String}
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+end
+
 function _copy_node_values(source::Dict{Int,Float64}, node_ids)
     Dict{Int,Float64}(nid => get(source, nid, 0.0) for nid in node_ids)
 end
@@ -105,6 +114,63 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
     return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
 end
 
+function _pair_counts_from_projections(
+    turtle::TurtleGrid,
+    projections::AbstractVector{DirectionProjectionResult},
+    virtual_nodes::Set{Int},
+    node_group::Dict{Int,String},
+)
+    pair_counts = Dict{Tuple{Int,Int},Int}()
+    sun_hits = Dict{Int,Int}()
+
+    for i in eachindex(turtle.sectors)
+        sector = turtle.sectors[i]
+        projection = projections[i]
+
+        if sector.source == :sun
+            for (nid, h) in projection.node_hits
+                sun_hits[nid] = get(sun_hits, nid, 0) + h
+            end
+            continue
+        end
+
+        for stack in values(projection.pixel_hits)
+            length(stack) <= 1 && continue
+            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+
+            n_hits = length(stack)
+            node_ids_stack = Vector{Int}(undef, n_hits)
+            @inbounds for j in 1:n_hits
+                node_ids_stack[j] = stack[j][2]
+            end
+
+            scatt_up = Vector{Int}(undef, n_hits)
+            up = 0
+            @inbounds for h in n_hits:-1:1
+                nid = node_ids_stack[h]
+                if !(nid in virtual_nodes)
+                    up = nid
+                end
+                scatt_up[h] = up
+            end
+
+            scatt_down = Vector{Int}(undef, n_hits)
+            down = 0
+            @inbounds for h in 1:n_hits
+                nid = node_ids_stack[h]
+                if !(nid in virtual_nodes)
+                    down = nid
+                end
+                scatt_down[h] = down
+            end
+
+            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, node_group)
+        end
+    end
+
+    return pair_counts, sun_hits
+end
+
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, options::LightOptions, node_ids)
     all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
     if !options.all_in_turtle
@@ -160,6 +226,68 @@ struct ScatteringSceneContext
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    projections::AbstractVector{DirectionProjectionResult},
+)
+    pair_counts, sun_hits = _pair_counts_from_projections(
+        turtle,
+        projections,
+        prepared.virtual_nodes,
+        prepared.geometry.node_group,
+    )
+    group_type_coeffs = _group_optical_coeffs(models)
+    node_ids = copy(prepared.geometry.node_ids)
+    node_type = Dict{Int,String}()
+    for nid in node_ids
+        g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
+        default_type = g == "pavement" ? "Cobblestone" : ""
+        node_type[nid] = _scene_type(scene, nid, default_type)
+    end
+    return ScatteringTopologyCache(
+        pair_counts,
+        sun_hits,
+        node_ids,
+        prepared.geometry.node_group,
+        node_type,
+        group_type_coeffs,
+    )
+end
+
+function _node_ids_for_scattering(topology::ScatteringTopologyCache, first::FirstOrderResult)
+    node_set = Set{Int}()
+    for nid in topology.node_ids
+        push!(node_set, nid)
+    end
+    for nid in keys(first.incident_power.par)
+        push!(node_set, nid)
+    end
+    for nid in keys(first.incident_power.nir)
+        push!(node_set, nid)
+    end
+    return collect(node_set)
+end
+
+function _transfer_graph_from_topology(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+)
+    node_ids = _node_ids_for_scattering(topology, first)
+    all_hits = _all_dir_hits_for_scattering(first, topology.sun_hits, options, node_ids)
+    return ScatteringTransferGraph(
+        topology.pair_counts,
+        all_hits,
+        node_ids,
+        topology.node_group,
+        topology.node_type,
+        topology.group_type_coeffs,
+    )
 end
 
 function _scattering_context(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, first::FirstOrderResult, options::LightOptions)
@@ -236,15 +364,10 @@ function build_scattering_transfer_graph(
     options::LightOptions,
     ::RaycastScatteringBackend,
 )
-    context = _scattering_context(scene, models, turtle, first, options)
-    return ScatteringTransferGraph(
-        context.pair_counts,
-        context.all_hits,
-        context.node_ids,
-        context.node_group,
-        context.node_type,
-        context.group_type_coeffs,
-    )
+    prepared = _prepare_interception_data(scene, models, options)
+    projections = _build_direction_projections(prepared, turtle, options)
+    topology = _build_scattering_topology_cache(scene, models, prepared, turtle, projections)
+    return _transfer_graph_from_topology(topology, first, options)
 end
 
 function build_scattering_transfer_graph(
@@ -257,6 +380,35 @@ function build_scattering_transfer_graph(
 )
     # CPU reference currently uses the same transfer-graph construction for both modes.
     return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    return build_scattering_transfer_graph(topology, first, options, b)
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::RaycastScatteringBackend,
+)
+    return _transfer_graph_from_topology(topology, first, options)
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::LinksScatteringBackend,
+)
+    return build_scattering_transfer_graph(topology, first, options, RaycastScatteringBackend())
 end
 
 function _default_band_coeff(options::LightOptions, band_key::String)
@@ -452,6 +604,29 @@ function compute_scattering_band(
     )
 end
 
+function compute_scattering_band(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(topology, first, options, b)
+    return compute_scattering_band(
+        graph,
+        first,
+        options,
+        b;
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
+end
+
 """
     compute_scattering(scene, models, turtle, first, options; mode=:raycast, backend=nothing)::ScatteringResult
     compute_scattering(graph, first, options; mode=:raycast, backend=nothing)::ScatteringResult
@@ -519,5 +694,17 @@ function compute_scattering(
 )
     b = _resolve_scattering_backend(mode, backend)
     graph = build_scattering_transfer_graph(scene, models, turtle, first, options, b)
+    return compute_scattering(graph, first, options, b)
+end
+
+function compute_scattering(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(topology, first, options, b)
     return compute_scattering(graph, first, options, b)
 end
