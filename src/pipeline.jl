@@ -505,14 +505,14 @@ end
 
 function _node_absorptance_per_band(scene::SceneGeometry, models::LightModels, options::LightOptions, band::String)
     coeffs_by_group_type = _group_optical_coeffs(models)
-    virtual_groups = _virtual_sensor_groups(models)
     b = uppercase(band)
     sf_default = _default_scattering_factor_local(options, b)
     out = Dict{Int,Float64}()
     geometry = _scene_geometry_for_interception(scene, models, options)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     for nid in geometry.node_ids
         group = get(geometry.node_group, nid, _scene_group(scene, nid, ""))
-        if group in virtual_groups
+        if nid in virtual_nodes
             out[nid] = 0.0
             continue
         end

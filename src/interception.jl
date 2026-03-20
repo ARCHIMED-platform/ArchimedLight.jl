@@ -24,6 +24,7 @@ struct InterceptionSceneData
     node_ids::Vector{Int}
     plotbox
     node_group::Dict{Int,String}
+    node_type::Dict{Int,String}
 end
 
 function _as_bool_local(x, default::Bool)
@@ -71,31 +72,33 @@ function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_
     projected_pixels_area[top_nid] = max(0.0, get(projected_pixels_area, top_nid, 0.0) - plotbox.pixel_area)
 end
 
-function _virtual_sensor_groups(models::LightModels)
-    out = Set{String}()
-    for group_model in values(models)
-        group = _normalize_group_name_local(group_model.group)
-        isempty(group) && continue
-        for type_model in values(group_model.types)
-            interception = type_model.interception
-            interception === nothing && continue
-            if lowercase(strip(interception.model)) == "virtualsensor"
-                push!(out, group)
-                break
-            end
-        end
+function _is_sensor_interception(interception::InterceptionModel)
+    interception.sensor || return lowercase(strip(interception.model)) == "virtualsensor"
+    return true
+end
+
+function _virtual_sensor_node_ids(node_group::Dict{Int,String}, node_type::Dict{Int,String}, models::LightModels)
+    out = Set{Int}()
+    for (nid, g) in node_group
+        type_model = _type_model(models, _normalize_group_name_local(g), strip(get(node_type, nid, "")))
+        type_model === nothing && continue
+        interception = type_model.interception
+        interception === nothing && continue
+        _is_sensor_interception(interception) || continue
+        push!(out, nid)
     end
     out
 end
 
-function _virtual_sensor_node_ids(node_group::Dict{Int,String}, models::LightModels)
-    groups = _virtual_sensor_groups(models)
-    isempty(groups) && return Set{Int}()
-    out = Set{Int}()
-    for (nid, g) in node_group
-        _normalize_group_name_local(g) in groups && push!(out, nid)
+function _has_sensor_models(models::LightModels)
+    for group_model in values(models)
+        for type_model in values(group_model.types)
+            interception = type_model.interception
+            interception === nothing && continue
+            _is_sensor_interception(interception) && return true
+        end
     end
-    out
+    return false
 end
 
 function _ignored_group_types(models::LightModels)
@@ -248,7 +251,7 @@ function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
     if options.scattering
         return false
     end
-    isempty(_virtual_sensor_groups(models)) || return false
+    _has_sensor_models(models) && return false
     isempty(_group_light_emitters(models)) || return false
     return true
 end
@@ -1048,8 +1051,9 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
 
     node_ids = unique(face2node)
     node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
+    node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
 
-    return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group)
+    return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group, node_type)
 end
 
 function _interception_output_keys(scene::SceneGeometry, models::LightModels, options::LightOptions)
@@ -1116,7 +1120,7 @@ function compute_first_order(
 )
 
     geometry = _scene_geometry_for_interception(scene, models, options)
-    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, models)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     upper_hit = _use_upper_hit_pixel_table(models, options)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
 

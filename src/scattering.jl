@@ -49,7 +49,7 @@ end
 
 function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
-    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, models)
+    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
@@ -129,12 +129,17 @@ function _group_optical_coeffs(models::LightModels)
             interception === nothing && continue
 
             coeff =
-                if lowercase(strip(interception.model)) == "virtualsensor"
+                if _is_sensor_interception(interception)
                     Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
                 else
                     props = interception.optical_properties
                     props === nothing && continue
-                    Dict{String,Float64}("PAR" => props.par, "NIR" => props.nir)
+                    band_coeffs = Dict{String,Float64}()
+                    has_par = get(props.extras, "__has_par", true)
+                    has_nir = get(props.extras, "__has_nir", true)
+                    has_par && (band_coeffs["PAR"] = props.par)
+                    has_nir && (band_coeffs["NIR"] = props.nir)
+                    band_coeffs
                 end
 
             coeffs[(group, type_name)] = coeff

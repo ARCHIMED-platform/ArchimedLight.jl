@@ -44,6 +44,34 @@ import MultiScaleTreeGraph
         @test isapprox(read_back["plant"].types["Leaf"].interception.transparency, 0.1; atol=1e-12)
     end
 
+    @testset "Missing NIR optical property falls back to runtime defaults" begin
+        tmp = mktempdir()
+        model_path = joinpath(tmp, "plant.yml")
+        write(
+            model_path,
+            join(
+                [
+                    "Group: plant",
+                    "Type:",
+                    "  Leaf:",
+                    "    Interception:",
+                    "      model: Translucent",
+                    "      optical_properties:",
+                    "        PAR: 0.15",
+                ],
+                "\n",
+            ) * "\n",
+        )
+
+        read_back = ArchimedLight.read_models(model_path)
+        props = read_back["plant"].types["Leaf"].interception.optical_properties
+        @test isapprox(props.par, 0.15; atol=1e-12)
+        @test isapprox(props.nir, 0.0; atol=1e-12)
+        coeffs = ArchimedLight._group_optical_coeffs(read_back)
+        @test coeffs[("plant", "Leaf")]["PAR"] == 0.15
+        @test !haskey(coeffs[("plant", "Leaf")], "NIR")
+    end
+
     @testset "Scene write round-trip keeps attached attrs" begin
         fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
         row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
