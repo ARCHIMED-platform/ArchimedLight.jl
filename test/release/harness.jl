@@ -104,13 +104,20 @@ function fixture_runtime_data(fx::JuliaFixture)
         normpath(joinpath(base, string(raw["meteo"]))) :
         normpath(joinpath(base, fx.meteo_override))
 
-    scene = ArchimedLight.read_scene(scene_path)
-    models = ArchimedLight.read_models(fx.config_path)
-    options = ArchimedLight.read_options(fx.config_path)
+    options, scene, meteo, models = ArchimedLight.read_config(fx.config_path)
+    if fx.scene_override !== nothing
+        scene = ArchimedLight.read_scene(scene_path)
+        ground = ArchimedLight._config_ground_spec(models)
+        if ground.count > 0 && !ArchimedLight._scene_has_group_type(scene, ground.group, ground.type)
+            ArchimedLight._materialize_paving!(scene, ground.count; group=ground.group, type=ground.type)
+        end
+    end
+    if fx.meteo_override !== nothing
+        meteo = ArchimedLight.read_meteo(meteo_path)
+    end
     if fx.force_scattering !== nothing
         options = ArchimedLight.LightOptions(options; scattering=Bool(fx.force_scattering))
     end
-    meteo = ArchimedLight.read_meteo(meteo_path)
     selected = ArchimedLight.prepare_meteo(meteo, options)
     series = ArchimedLight.run_light_series(scene, models, meteo, options)
     length(series) == length(selected.rows) || error("fixture $(fx.id): meteo/series length mismatch")
@@ -192,11 +199,11 @@ function _write_scene_series_csv(path::AbstractString, scene, series, meteo_rows
                 "hour_end" => get(row, :hour_end, missing),
                 "RI_PAR_f" => step.sky.ri_par_f,
                 "RI_NIR_f" => step.sky.ri_nir_f,
-                "RI_SW_f" => step.sky.ri_global_f,
+                "RI_SW_f" => step.sky.ri_sw_f,
                 "plot_area" => scene.scene_xy_bounds === nothing ? missing :
                     (scene.scene_xy_bounds[3] - scene.scene_xy_bounds[1]) * (scene.scene_xy_bounds[4] - scene.scene_xy_bounds[2]),
-                "sun_elevation" => step.sky.sun_elevation,
-                "sun_azimut" => step.sky.sun_azimut,
+                "sun_elevation" => step.sky.sun_elevation_deg,
+                "sun_azimut" => step.sky.sun_azimuth_deg,
             ),
         )
     end

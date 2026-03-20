@@ -99,15 +99,15 @@ function _apply_case_options(options0::ArchimedLight.LightOptions, options::Orde
     sky = _sky_mode_params(String(options["sky_mode"]))
     ArchimedLight.LightOptions(
         options0;
-        sectors=sky.sectors,
+        turtle_sectors=sky.sectors,
         all_in_turtle=sky.all_in_turtle,
         scattering=Bool(options["scattering"]),
-        pixel_size_m=Float64(options["pixel_size_m"]),
+        pixel_size=Float64(options["pixel_size_m"]),
         toricity=Bool(options["toricity"]),
         area_ratio=Bool(options["area_ratio"]),
         cache_radiation=Bool(options["cache_radiation"]),
         cache_pixel_table=Bool(options["cache_pixel_table"]),
-        radiation_timestep=Int(options["radiation_timestep"]),
+        radiation_timestep_minutes=Float64(options["radiation_timestep"]),
         nir_interception=Bool(options["nir_interception"]),
         nir_scattering=Bool(options["nir_scattering"]),
         java_logged_turtle_dirs=Bool(options["java_logged_turtle_dirs"]),

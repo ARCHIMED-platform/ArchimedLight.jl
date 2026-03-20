@@ -160,15 +160,25 @@ function _group_light_emitters(models::LightModels)
     out
 end
 
+function _resolved_type_key(group_model::GroupModel, type_name::AbstractString)
+    key = String(type_name)
+    haskey(group_model.types, key) && return key
+    haskey(group_model.types, "*") && return "*"
+
+    stripped = lowercase(strip(key))
+    if length(group_model.types) == 1 && (isempty(stripped) || stripped == "mesh")
+        return first(keys(group_model.types))
+    end
+
+    return nothing
+end
+
 function _type_model(models::LightModels, group::AbstractString, type_name::AbstractString)
     for group_key in (String(group), "*")
         haskey(models, group_key) || continue
         group_model = models[group_key]
-        haskey(group_model.types, String(type_name)) && return group_model.types[String(type_name)]
-        haskey(group_model.types, "*") && return group_model.types["*"]
-        if isempty(strip(String(type_name))) && length(group_model.types) == 1
-            return first(values(group_model.types))
-        end
+        resolved = _resolved_type_key(group_model, type_name)
+        resolved === nothing || return group_model.types[resolved]
     end
     return nothing
 end

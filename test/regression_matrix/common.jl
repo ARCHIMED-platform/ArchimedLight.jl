@@ -335,11 +335,11 @@ function _write_scene_series_csv(path::AbstractString, scene, series, meteo_rows
                 "hour_end" => get(row, :hour_end, missing),
                 "RI_PAR_f" => step.sky.ri_par_f,
                 "RI_NIR_f" => step.sky.ri_nir_f,
-                "RI_SW_f" => step.sky.ri_global_f,
+                "RI_SW_f" => step.sky.ri_sw_f,
                 "plot_area" => scene.scene_xy_bounds === nothing ? missing :
                     (scene.scene_xy_bounds[3] - scene.scene_xy_bounds[1]) * (scene.scene_xy_bounds[4] - scene.scene_xy_bounds[2]),
-                "sun_elevation" => step.sky.sun_elevation,
-                "sun_azimut" => step.sky.sun_azimut,
+                "sun_elevation" => step.sky.sun_elevation_deg,
+                "sun_azimut" => step.sky.sun_azimuth_deg,
             ),
         )
     end
