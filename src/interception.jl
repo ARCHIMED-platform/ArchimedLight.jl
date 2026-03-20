@@ -10,8 +10,19 @@ struct ProjectionCacheContext
     scene_key::UInt64
 end
 
-struct DirectionProjectionResult
-    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}}
+"""
+    DensePixelHits
+
+Dense storage for per-pixel hit stacks. This avoids hashing pixel indices during
+projection when the plotbox is small enough that a flat table is cheaper than a
+`Dict`.
+"""
+struct DensePixelHits
+    stacks::Vector{Union{Nothing,Vector{Tuple{Float64,Int}}}}
+end
+
+struct DirectionProjectionResult{PH}
+    pixel_hits::PH
     node_hits::Dict{Int,Int}
     projected_mesh_area::Dict{Int,Float64}
     projected_pixels_area::Dict{Int,Float64}
@@ -43,6 +54,31 @@ struct PreparedInterceptionData
 end
 
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+
+const _DENSE_PIXEL_HITS_MAX_CELLS = 250_000
+
+DensePixelHits(n::Int) = DensePixelHits(fill(nothing, n))
+
+Base.get(pixel_hits::DensePixelHits, idx::Int, default) =
+    (1 <= idx <= length(pixel_hits.stacks) && pixel_hits.stacks[idx] !== nothing) ? pixel_hits.stacks[idx] : default
+
+function Base.get!(f::F, pixel_hits::DensePixelHits, idx::Int) where {F}
+    stack = pixel_hits.stacks[idx]
+    if stack === nothing
+        stack = f()
+        pixel_hits.stacks[idx] = stack
+    end
+    return stack
+end
+
+function Base.delete!(pixel_hits::DensePixelHits, idx::Int)
+    1 <= idx <= length(pixel_hits.stacks) && (pixel_hits.stacks[idx] = nothing)
+    return pixel_hits
+end
+
+Base.values(pixel_hits::DensePixelHits) = (stack for stack in pixel_hits.stacks if stack !== nothing)
+
+@inline _use_dense_pixel_hits(plotbox) = (plotbox.nx * plotbox.ny) <= _DENSE_PIXEL_HITS_MAX_CELLS
 
 function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
     out = Dict{Int,Float64}()
@@ -749,7 +785,7 @@ function _wrap_index(i::Int, n::Int)
 end
 
 function _project_triangle!(
-    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
+    pixel_hits,
     node_hits::Vector{Int},
     projected_mesh_area::Vector{Float64},
     projected_pixels_area::Vector{Float64},
@@ -796,7 +832,7 @@ function _project_triangle!(
 end
 
 function _project_triangle!(
-    pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
+    pixel_hits,
     node_hits::Vector{Int},
     projected_mesh_area::Vector{Float64},
     projected_pixels_area::Vector{Float64},
@@ -913,6 +949,17 @@ end
 @inline _hit_height(hit) = hit[1]
 @inline _hit_node(hit) = hit[2]
 
+@inline function _projection_area_ratio(
+    projection::DirectionProjectionResult,
+    options::LightOptions,
+    node_id::Int,
+)
+    options.area_ratio || return 1.0
+    projected_pixels = get(projection.projected_pixels_area, node_id, 0.0)
+    projected_pixels > 0.0 || return 1.0
+    return get(projection.projected_mesh_area, node_id, 0.0) / projected_pixels
+end
+
 function _visible_area_from_projection(
     projection::DirectionProjectionResult,
     options::LightOptions,
@@ -920,18 +967,6 @@ function _visible_area_from_projection(
     virtual_nodes::Set{Int},
     stacks_sorted::Bool=false,
 )
-    ratios =
-        if options.area_ratio
-            out = Dict{Int,Float64}()
-            for nid in union(keys(projection.projected_mesh_area), keys(projection.projected_pixels_area))
-                ppa = get(projection.projected_pixels_area, nid, 0.0)
-                out[nid] = ppa > 0.0 ? get(projection.projected_mesh_area, nid, 0.0) / ppa : 1.0
-            end
-            out
-        else
-            nothing
-        end
-
     visible_area = Dict{Int,Float64}()
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
@@ -943,7 +978,7 @@ function _visible_area_from_projection(
             nid = _hit_node(hit)
             if nid in virtual_nodes
                 if !non_virtual_seen
-                    ratio = ratios === nothing ? 1.0 : get(ratios, nid, 1.0)
+                    ratio = _projection_area_ratio(projection, options, nid)
                     visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * ratio
                 end
             else
@@ -953,7 +988,7 @@ function _visible_area_from_projection(
             end
         end
         if first_non_virtual != 0
-            ratio = ratios === nothing ? 1.0 : get(ratios, first_non_virtual, 1.0)
+            ratio = _projection_area_ratio(projection, options, first_non_virtual)
             visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * ratio
         end
     end
@@ -1010,13 +1045,17 @@ function _direction_projection_dense(
     options::LightOptions,
     plotbox;
     upper_hit::Union{Nothing,Bool}=nothing,
+    dense_pixel_hits::Bool=true,
 )
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
     strict_java_float = _strict_java_float(options)
     unit_scale = Float32(_projection_unit_scale(options))
 
-    pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
+    pixel_hits =
+        dense_pixel_hits && _use_dense_pixel_hits(plotbox) ?
+        DensePixelHits(plotbox.nx * plotbox.ny) :
+        Dict{Int,Vector{Tuple{Float64,Int}}}()
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
     projected_pixels_area = zeros(Float64, length(node_ids))
@@ -1071,6 +1110,7 @@ function _direction_projection(vertices, faces, face2node, direction, options::L
         options,
         plotbox;
         upper_hit=upper_hit,
+        dense_pixel_hits=false,
     )
 end
 
@@ -1090,6 +1130,7 @@ function _direction_projection(
         options,
         geometry.plotbox;
         upper_hit=upper_hit,
+        dense_pixel_hits=true,
     )
 end
 
@@ -1119,7 +1160,18 @@ function _direction_projection_cached(
     strict_java_float::Bool=false,
 )
     if cache_ctx === nothing
-        return _direction_projection(geometry, direction, options; upper_hit=upper_hit)
+        return _direction_projection_dense(
+            geometry.vertices,
+            geometry.faces,
+            geometry.face2node,
+            geometry.face2node_index,
+            geometry.node_ids,
+            direction,
+            options,
+            geometry.plotbox;
+            upper_hit=upper_hit,
+            dense_pixel_hits=true,
+        )
     end
 
     path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
@@ -1129,7 +1181,18 @@ function _direction_projection_cached(
         rm(path; force=true)
     end
 
-    result = _direction_projection(geometry, direction, options; upper_hit=upper_hit)
+    result = _direction_projection_dense(
+        geometry.vertices,
+        geometry.faces,
+        geometry.face2node,
+        geometry.face2node_index,
+        geometry.node_ids,
+        direction,
+        options,
+        geometry.plotbox;
+        upper_hit=upper_hit,
+        dense_pixel_hits=false,
+    )
     _write_projection_cache(path, result)
     return result
 end

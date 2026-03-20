@@ -119,14 +119,49 @@ function integrate_light(
     )
 end
 
+struct DenseNodeMap{T}
+    node_ids::Vector{Int}
+    values::Vector{T}
+end
+
+Base.eltype(::Type{DenseNodeMap{T}}) where {T} = Pair{Int,T}
+
+function Base.iterate(map::DenseNodeMap{T}, state::Int=1) where {T}
+    i = state
+    while i <= length(map.values)
+        v = map.values[i]
+        if !iszero(v)
+            return ((map.node_ids[i], v), i + 1)
+        end
+        i += 1
+    end
+    return nothing
+end
+
 struct SectorResponsesCache
     prepared::PreparedInterceptionData
     projections::Union{Nothing,Vector{DirectionProjectionResult}}
-    projected_area_per_sector::Vector{Dict{Int,Float64}}
-    hits_per_sector::Vector{Dict{Int,Int}}
+    projected_area_per_sector::Vector{DenseNodeMap{Float64}}
+    hits_per_sector::Vector{DenseNodeMap{Int}}
     node_ids::Vector{Int}
     emitter_weights::Dict{Tuple{Int,Int},Float64}
     scattering_topology::Union{Nothing,ScatteringTopologyCache}
+end
+
+function _dense_sector_float(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
+    out = zeros(Float64, length(geometry.node_ids))
+    for (nid, v) in values
+        out[geometry.node_index[nid]] = v
+    end
+    return DenseNodeMap(geometry.node_ids, out)
+end
+
+function _dense_sector_int(values::Dict{Int,Int}, geometry::InterceptionSceneData)
+    out = zeros(Int, length(geometry.node_ids))
+    for (nid, v) in values
+        out[geometry.node_index[nid]] = v
+    end
+    return DenseNodeMap(geometry.node_ids, out)
 end
 
 function _turtle_cache_key(turtle::TurtleGrid, options::LightOptions)
@@ -147,14 +182,18 @@ function _build_sector_responses(
 )
     n = length(turtle.sectors)
     geometry = prepared.geometry
-    pa_by_sector = Vector{Dict{Int,Float64}}(undef, n)
-    hits_by_sector = Vector{Dict{Int,Int}}(undef, n)
+    pa_by_sector = Vector{DenseNodeMap{Float64}}(undef, n)
+    hits_by_sector = Vector{DenseNodeMap{Int}}(undef, n)
     keep_projections = options.scattering || !isempty(prepared.emitter_nodes)
     projections = keep_projections ? Vector{DirectionProjectionResult}(undef, n) : nothing
     for i in 1:n
         projection = _prepared_direction_projection(prepared, turtle.sectors[i].direction, options)
-        pa_by_sector[i] = _visible_area_from_projection(projection, options, geometry.plotbox, prepared.virtual_nodes)
-        hits_by_sector[i] = projection.node_hits
+        pa_by_sector[i] =
+            _dense_sector_float(
+                _visible_area_from_projection(projection, options, geometry.plotbox, prepared.virtual_nodes),
+                geometry,
+            )
+        hits_by_sector[i] = _dense_sector_int(projection.node_hits, geometry)
         keep_projections && (projections[i] = projection)
     end
     emitter_weights =
@@ -178,47 +217,47 @@ function _combine_sector_responses(
     responses::SectorResponsesCache,
     fluxes::DirectionalFluxes,
 )
-    node_ids = Set{Int}()
-    for k in responses.node_ids
-        push!(node_ids, k)
-    end
-    for d in responses.projected_area_per_sector
-        for k in keys(d)
-            push!(node_ids, k)
-        end
-    end
-
-    projected_area_per_node = Dict{Int,Float64}(id => 0.0 for id in node_ids)
-    incident_power = _zero_spectral_node_values(node_ids)
-    hits_per_node = Dict{Int,Int}(id => 0 for id in node_ids)
+    node_ids = responses.node_ids
+    projected_area_per_node = zeros(Float64, length(node_ids))
+    incident_power_par = zeros(Float64, length(node_ids))
+    incident_power_nir = zeros(Float64, length(node_ids))
+    hits_per_node = zeros(Int, length(node_ids))
 
     for i in eachindex(responses.projected_area_per_sector)
         pf = fluxes.par[i]
         nf = fluxes.nir[i]
         active_flux = (pf != 0.0) || (nf != 0.0)
 
-        for (nid, pa) in responses.projected_area_per_sector[i]
-            if active_flux
-                projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-                if pf != 0.0
-                    incident_power.par[nid] = get(incident_power.par, nid, 0.0) + pf * pa
-                end
-                if nf != 0.0
-                    incident_power.nir[nid] = get(incident_power.nir, nid, 0.0) + nf * pa
-                end
+        sector_area = responses.projected_area_per_sector[i].values
+        if active_flux
+            @inbounds for j in eachindex(sector_area)
+                pa = sector_area[j]
+                pa <= 0.0 && continue
+                projected_area_per_node[j] += pa
+                pf != 0.0 && (incident_power_par[j] += pf * pa)
+                nf != 0.0 && (incident_power_nir[j] += nf * pa)
             end
         end
-        for (nid, h) in responses.hits_per_sector[i]
-            hits_per_node[nid] = get(hits_per_node, nid, 0) + h
+        sector_hits = responses.hits_per_sector[i].values
+        @inbounds for j in eachindex(sector_hits)
+            hits_per_node[j] += sector_hits[j]
         end
     end
 
     for ((to, src), w) in responses.emitter_weights
-        incident_power.par[to] = get(incident_power.par, to, 0.0) + w * get(responses.prepared.emitter_par_power_per_node, src, 0.0)
-        incident_power.nir[to] = get(incident_power.nir, to, 0.0) + w * get(responses.prepared.emitter_nir_power_per_node, src, 0.0)
+        idx = responses.prepared.geometry.node_index[to]
+        incident_power_par[idx] += w * get(responses.prepared.emitter_par_power_per_node, src, 0.0)
+        incident_power_nir[idx] += w * get(responses.prepared.emitter_nir_power_per_node, src, 0.0)
     end
 
-    FirstOrderResult(projected_area_per_node, incident_power, hits_per_node)
+    return FirstOrderResult(
+        _all_dense_float_node_map(node_ids, projected_area_per_node),
+        SpectralNodeValues(
+            _all_dense_float_node_map(node_ids, incident_power_par),
+            _all_dense_float_node_map(node_ids, incident_power_nir),
+        ),
+        _all_dense_int_node_map(node_ids, hits_per_node),
+    )
 end
 
 function _row_number_local(row, name::Symbol, default::Float64=0.0)
