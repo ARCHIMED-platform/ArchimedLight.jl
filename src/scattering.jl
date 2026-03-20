@@ -3,7 +3,7 @@ function _dict_zero(node_ids)
 end
 
 struct ScatteringTopologyCache
-    pair_counts::Dict{Tuple{Int,Int},Int}
+    pair_counts::ScatteringPairCounts
     sun_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
@@ -23,8 +23,53 @@ function _sum_dict_values(d::Dict{Int,Float64})
     s
 end
 
-function _add_pair_count!(pair_counts::Dict{Tuple{Int,Int},Int}, to::Int, from::Int)
-    pair_counts[(to, from)] = get(pair_counts, (to, from), 0) + 1
+"""
+    _pack_scattering_edge(to, from) -> UInt64
+
+Pack one scattering edge `(to, from)` into a single 64-bit key.
+
+We reserve 32 bits for each node id:
+
+    [to ........ 32 bits][from ...... 32 bits]
+
+The explicit `UInt32` conversion constrains each id to one half of the packed key, and the
+`UInt64` widening makes the shift/OR operations safe. This is cheaper to hash in the topology
+builder than a `Tuple{Int,Int}` key.
+"""
+@inline function _pack_scattering_edge(to::Int, from::Int)
+    return (UInt64(UInt32(to)) << 32) | UInt64(UInt32(from))
+end
+
+# Recover the upper and lower 32-bit halves of a packed `(to, from)` edge key.
+@inline _unpack_scattering_to(edge::UInt64) = Int(UInt32(edge >> 32))
+@inline _unpack_scattering_from(edge::UInt64) = Int(UInt32(edge & 0xffffffff))
+
+function _edge_counts_from_packed(edge_counts::Dict{UInt64,Int})
+    isempty(edge_counts) && return ScatteringPairCounts(Int[], Int[], Int[])
+
+    # Sort once when materializing the final graph so iteration order is deterministic.
+    packed_edges = sort!(collect(keys(edge_counts)))
+    to_nodes = Int[]
+    from_nodes = Int[]
+    counts = Int[]
+    sizehint!(to_nodes, length(packed_edges))
+    sizehint!(from_nodes, length(packed_edges))
+    sizehint!(counts, length(packed_edges))
+
+    for edge in packed_edges
+        count = edge_counts[edge]
+        if count > 0
+            push!(to_nodes, _unpack_scattering_to(edge))
+            push!(from_nodes, _unpack_scattering_from(edge))
+            push!(counts, count)
+        end
+    end
+    return ScatteringPairCounts(to_nodes, from_nodes, counts)
+end
+
+@inline function _add_packed_edge_count!(edge_counts::Dict{UInt64,Int}, to::Int, from::Int)
+    edge = _pack_scattering_edge(to, from)
+    edge_counts[edge] = get(edge_counts, edge, 0) + 1
     return nothing
 end
 
@@ -39,7 +84,7 @@ end
 ScatteringStackScratch() = ScatteringStackScratch(Int[])
 
 function _stack_transfer_pairs!(
-    pair_counts::Dict{Tuple{Int,Int},Int},
+    edge_counts::Dict{UInt64,Int},
     stack::Vector{Tuple{Float64,Int}},
     virtual_nodes::Set{Int},
     scratch::ScatteringStackScratch,
@@ -67,20 +112,20 @@ function _stack_transfer_pairs!(
 
         from_below = below[h + 1]
         if from_below != 0 && _accept_scattering_link(node_group, to_above, from_below)
-            _add_pair_count!(pair_counts, to_above, from_below)
+            _add_packed_edge_count!(edge_counts, to_above, from_below)
         end
 
         to_below = _hit_node(stack[h + 1])
         from_above = nearest_above
         if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
-            _add_pair_count!(pair_counts, to_below, from_above)
+            _add_packed_edge_count!(edge_counts, to_below, from_above)
         end
     end
     return nothing
 end
 
 function _accumulate_scattering_counts!(
-    pair_counts::Dict{Tuple{Int,Int},Int},
+    edge_counts::Dict{UInt64,Int},
     sun_hits::Dict{Int,Int},
     sector::TurtleSector,
     projection::DirectionProjectionResult,
@@ -99,7 +144,7 @@ function _accumulate_scattering_counts!(
     for stack in values(projection.pixel_hits)
         length(stack) <= 1 && continue
         stacks_sorted || _sort_hit_stack!(stack)
-        _stack_transfer_pairs!(pair_counts, stack, virtual_nodes, scratch, node_group)
+        _stack_transfer_pairs!(edge_counts, stack, virtual_nodes, scratch, node_group)
     end
     return nothing
 end
@@ -108,7 +153,7 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
     geometry = _scene_geometry_for_interception(scene, models, options)
     virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
-    pair_counts = Dict{Tuple{Int,Int},Int}()
+    edge_counts = Dict{UInt64,Int}()
     sun_hits = Dict{Int,Int}()
     scratch = ScatteringStackScratch()
 
@@ -116,7 +161,7 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
         projection =
             _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, options, geometry.plotbox, cache_ctx)
         _accumulate_scattering_counts!(
-            pair_counts,
+            edge_counts,
             sun_hits,
             sector,
             projection,
@@ -126,7 +171,7 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
         )
     end
 
-    return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
+    return _edge_counts_from_packed(edge_counts), sun_hits, geometry.node_ids, geometry.node_group
 end
 
 function _pair_counts_from_projections(
@@ -136,13 +181,13 @@ function _pair_counts_from_projections(
     node_group::Dict{Int,String},
     stacks_sorted::Bool=false,
 )
-    pair_counts = Dict{Tuple{Int,Int},Int}()
+    edge_counts = Dict{UInt64,Int}()
     sun_hits = Dict{Int,Int}()
     scratch = ScatteringStackScratch()
 
     for i in eachindex(turtle.sectors)
         _accumulate_scattering_counts!(
-            pair_counts,
+            edge_counts,
             sun_hits,
             turtle.sectors[i],
             projections[i],
@@ -153,7 +198,7 @@ function _pair_counts_from_projections(
         )
     end
 
-    return pair_counts, sun_hits
+    return _edge_counts_from_packed(edge_counts), sun_hits
 end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, options::LightOptions, node_ids)
@@ -205,7 +250,7 @@ function _group_optical_coeffs(models::LightModels)
 end
 
 struct ScatteringSceneContext
-    pair_counts::Dict{Tuple{Int,Int},Int}
+    pair_counts::ScatteringPairCounts
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}

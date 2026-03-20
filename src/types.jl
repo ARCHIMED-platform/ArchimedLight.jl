@@ -272,13 +272,71 @@ struct ScatteringResult
     converged::Bool
 end
 
+"""
+    ScatteringPairCounts
+
+Compact transfer-edge storage for scattering graphs.
+
+The hot topology builder accumulates counts with packed integer keys, then materializes this
+container once so downstream code can still iterate edges as `((to, from), count)` pairs
+without keeping tuple-key dictionaries in the graph.
+"""
+struct ScatteringPairCounts
+    to_nodes::Vector{Int}
+    from_nodes::Vector{Int}
+    counts::Vector{Int}
+end
+
+Base.length(pair_counts::ScatteringPairCounts) = length(pair_counts.counts)
+Base.isempty(pair_counts::ScatteringPairCounts) = isempty(pair_counts.counts)
+Base.eltype(::Type{ScatteringPairCounts}) = Pair{Tuple{Int,Int},Int}
+
+function Base.iterate(pair_counts::ScatteringPairCounts, state::Int=1)
+    state > length(pair_counts.counts) && return nothing
+    item = ((pair_counts.to_nodes[state], pair_counts.from_nodes[state]), pair_counts.counts[state])
+    return item, state + 1
+end
+
+function ScatteringPairCounts(pair_counts::Dict{Tuple{Int,Int},Int})
+    to_nodes = Int[]
+    from_nodes = Int[]
+    counts = Int[]
+    sizehint!(to_nodes, length(pair_counts))
+    sizehint!(from_nodes, length(pair_counts))
+    sizehint!(counts, length(pair_counts))
+    for ((to, from), count) in pair_counts
+        push!(to_nodes, to)
+        push!(from_nodes, from)
+        push!(counts, count)
+    end
+    return ScatteringPairCounts(to_nodes, from_nodes, counts)
+end
+
 struct ScatteringTransferGraph
-    pair_counts::Dict{Tuple{Int,Int},Int}
+    pair_counts::ScatteringPairCounts
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+end
+
+function ScatteringTransferGraph(
+    pair_counts::Dict{Tuple{Int,Int},Int},
+    all_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+)
+    return ScatteringTransferGraph(
+        ScatteringPairCounts(pair_counts),
+        all_hits,
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+    )
 end
 
 struct LightBudget
