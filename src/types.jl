@@ -21,6 +21,7 @@ OpticalProperties(par::Real=0.0, nir::Real=0.0) = OpticalProperties(Float64(par)
 mutable struct InterceptionModel
     use::Union{Nothing,String}
     model::String
+    sensor::Bool
     transparency::Float64
     optical_properties::Union{Nothing,OpticalProperties}
     variants::OrderedDict{String,OrderedDict{String,Any}}
@@ -29,6 +30,7 @@ end
 
 function InterceptionModel(;
     model::AbstractString="Translucent",
+    sensor::Bool=false,
     transparency::Real=0.0,
     optical_properties::Union{Nothing,OpticalProperties}=nothing,
     use::Union{Nothing,AbstractString}=nothing,
@@ -38,6 +40,7 @@ function InterceptionModel(;
     InterceptionModel(
         use === nothing ? nothing : String(use),
         String(model),
+        sensor,
         Float64(transparency),
         optical_properties,
         variants,

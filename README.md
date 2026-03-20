@@ -45,6 +45,16 @@ File exports and attached MTG attributes keep the ARCHIMED names:
 - `*_f`: irradiance (`W m^-2`)
 - `*_q`: per-component energy per timestep (`J`)
 
+Band coefficients come from the model definition when present. If a model omits one band in
+`optical_properties`, the runtime falls back to the global option for that band:
+- `PAR` fallback: `LightOptions(scattering_coeff_par=...)`
+- `NIR` fallback: `LightOptions(scattering_coeff_nir=...)`
+
+With the default options, that means:
+- missing model `PAR` coefficient falls back to `0.15`
+- missing model `NIR` coefficient falls back to `0.30`
+- the corresponding default absorptances used in the final budget are `1 - coeff`
+
 ## Short pipeline
 ```julia
 options, scene, meteo, models = read_config("config.yml")
@@ -88,6 +98,7 @@ julia --project=. example_1/full_featured_example.jl
 - `cache_pixel_table=true` enables an on-disk direction projection cache under the interception cache directory.
 - `build_turtle` follows the canonical ARCHIMED sector counts `1, 6, 16, 46, 136, 406`.
 - `add_ground!(scene; ...)` is an explicit scene-editing step, so inspectable ground is ordinary geometry in the exported MTG.
+- Virtual sensors are declared on the interception model (`sensor=true`, or legacy `model: VirtualSensor` in YAML). They receive light but stay transparent and non-absorbing in the simulation.
 
 ## Testing
 Run the default fast suite:

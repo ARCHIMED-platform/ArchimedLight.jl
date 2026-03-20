@@ -57,10 +57,14 @@ end
 function _parse_optical_properties(raw)
     raw isa AbstractDict || return nothing
     values = _ordered_string_dict(raw)
+    has_par = haskey(values, "PAR")
+    has_nir = haskey(values, "NIR")
     par = _as_float(get(values, "PAR", 0.0), 0.0)
     nir = _as_float(get(values, "NIR", 0.0), 0.0)
     delete!(values, "PAR")
     delete!(values, "NIR")
+    values["__has_par"] = has_par
+    values["__has_nir"] = has_nir
     OpticalProperties(par, nir, values)
 end
 
@@ -92,12 +96,17 @@ function _parse_interception_model(raw)
         delete!(extras, key)
     end
     delete!(extras, "model")
+    delete!(extras, "sensor")
     delete!(extras, "transparency")
     delete!(extras, "optical_properties")
 
+    model_name = string(get(selected, "model", ""))
+    sensor_flag = _as_bool(get(selected, "sensor", nothing), false) || lowercase(strip(model_name)) == "virtualsensor"
+
     InterceptionModel(
         use=use_name,
-        model=string(get(selected, "model", "")),
+        model=model_name,
+        sensor=sensor_flag,
         transparency=_as_float(get(selected, "transparency", 0.0), 0.0),
         optical_properties=_parse_optical_properties(get(selected, "optical_properties", nothing)),
         variants=variants,

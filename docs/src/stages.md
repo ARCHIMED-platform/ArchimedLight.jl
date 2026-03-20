@@ -28,6 +28,20 @@ budget.absorbed_flux.total.par
 
 In Julia code, light results are accessed through grouped `LightBudget` fields. Exported files and attached visualization attributes keep ARCHIMED names such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.
 
+## Model Coefficients And Option Fallbacks
+
+Model-defined optical properties are used first. When a model omits one band in
+`optical_properties`, the runtime falls back to the matching global option:
+
+- missing `PAR` coefficient -> `options.scattering_coeff_par`
+- missing `NIR` coefficient -> `options.scattering_coeff_nir`
+
+For example, with `LightOptions()`, a missing model `NIR` coefficient uses `0.30`, and the
+default absorbed fraction used in the final budget becomes `1 - 0.30 = 0.70`.
+
+Virtual sensors are declared on the interception model (`sensor=true`, or legacy
+`model: VirtualSensor` in YAML). They receive light, but remain transparent and non-absorbing.
+
 ## Single-Call Pipeline
 
 ```julia
