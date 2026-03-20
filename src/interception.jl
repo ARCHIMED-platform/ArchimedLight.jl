@@ -21,7 +21,9 @@ struct InterceptionSceneData
     vertices
     faces::Vector{PlantGeom.Face3}
     face2node::Vector{Int}
+    face2node_index::Vector{Int}
     node_ids::Vector{Int}
+    node_index::Dict{Int,Int}
     plotbox
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
@@ -41,6 +43,32 @@ struct PreparedInterceptionData
 end
 
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+
+function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
+    out = Dict{Int,Float64}()
+    @inbounds for i in eachindex(node_ids)
+        v = values[i]
+        v == 0.0 && continue
+        out[node_ids[i]] = v
+    end
+    return out
+end
+
+function _dense_int_node_map(node_ids::Vector{Int}, values::Vector{Int})
+    out = Dict{Int,Int}()
+    @inbounds for i in eachindex(node_ids)
+        v = values[i]
+        v == 0 && continue
+        out[node_ids[i]] = v
+    end
+    return out
+end
+
+_all_dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64}) =
+    Dict{Int,Float64}(node_ids[i] => values[i] for i in eachindex(node_ids))
+
+_all_dense_int_node_map(node_ids::Vector{Int}, values::Vector{Int}) =
+    Dict{Int,Int}(node_ids[i] => values[i] for i in eachindex(node_ids))
 
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
@@ -713,10 +741,11 @@ end
 
 function _project_triangle!(
     pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
-    node_hits::Dict{Int,Int},
-    projected_mesh_area::Dict{Int,Float64},
-    projected_pixels_area::Dict{Int,Float64},
+    node_hits::Vector{Int},
+    projected_mesh_area::Vector{Float64},
+    projected_pixels_area::Vector{Float64},
     node_id::Int,
+    node_idx::Int,
     p1,
     p2,
     p3,
@@ -738,6 +767,7 @@ function _project_triangle!(
         projected_mesh_area,
         projected_pixels_area,
         node_id,
+        node_idx,
         p1,
         p2,
         p3,
@@ -758,10 +788,11 @@ end
 
 function _project_triangle!(
     pixel_hits::Dict{Int,Vector{Tuple{Float64,Int}}},
-    node_hits::Dict{Int,Int},
-    projected_mesh_area::Dict{Int,Float64},
-    projected_pixels_area::Dict{Int,Float64},
+    node_hits::Vector{Int},
+    projected_mesh_area::Vector{Float64},
+    projected_pixels_area::Vector{Float64},
     node_id::Int,
+    node_idx::Int,
     p1,
     p2,
     p3,
@@ -825,7 +856,7 @@ function _project_triangle!(
 
     tri_proj_area = _triangle_area_xy(projected1, projected2, projected3)
     nb_hits = 0
-    node_hit_count = get(node_hits, node_id, 0)
+    node_hit_count = node_hits[node_idx]
     @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
         zi = z0 - slopeX_f32 * Float32(ni)
@@ -865,9 +896,9 @@ function _project_triangle!(
         end
     end
 
-    node_hits[node_id] = node_hit_count
-    projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + tri_proj_area
-    projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
+    node_hits[node_idx] = node_hit_count
+    projected_mesh_area[node_idx] += tri_proj_area
+    projected_pixels_area[node_idx] += nb_hits * pixel_area
 end
 
 @inline _hit_height(hit) = hit[1]
@@ -928,17 +959,7 @@ function _prepared_direction_projection(
 )
     geometry = prepared.geometry
     strict_java_float = _strict_java_float(options)
-    return _direction_projection_cached(
-        geometry.vertices,
-        geometry.faces,
-        geometry.face2node,
-        direction,
-        options,
-        geometry.plotbox,
-        prepared.cache_ctx;
-        upper_hit=prepared.upper_hit,
-        strict_java_float=strict_java_float,
-    )
+    return _direction_projection_cached(geometry, direction, options, prepared.cache_ctx; upper_hit=prepared.upper_hit, strict_java_float=strict_java_float)
 end
 
 function _build_direction_projections(
@@ -970,26 +991,38 @@ function _rasterize_direction_java(
     return _visible_area_from_projection(projection, options, plotbox, virtual_nodes), projection.node_hits
 end
 
-function _direction_projection(vertices, faces, face2node, direction, options::LightOptions, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
+function _direction_projection_dense(
+    vertices,
+    faces,
+    face2node,
+    face2node_index::Vector{Int},
+    node_ids::Vector{Int},
+    direction,
+    options::LightOptions,
+    plotbox;
+    upper_hit::Union{Nothing,Bool}=nothing,
+)
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
     strict_java_float = _strict_java_float(options)
     unit_scale = Float32(_projection_unit_scale(options))
 
     pixel_hits = Dict{Int,Vector{Tuple{Float64,Int}}}()
-    node_hits = Dict{Int,Int}()
-    projected_mesh_area = Dict{Int,Float64}()
-    projected_pixels_area = Dict{Int,Float64}()
+    node_hits = zeros(Int, length(node_ids))
+    projected_mesh_area = zeros(Float64, length(node_ids))
+    projected_pixels_area = zeros(Float64, length(node_ids))
 
     @inbounds for fi in eachindex(faces)
         f = faces[fi]
         nid = face2node[fi]
+        node_idx = face2node_index[fi]
         _project_triangle!(
             pixel_hits,
             node_hits,
             projected_mesh_area,
             projected_pixels_area,
             nid,
+            node_idx,
             vertices[f[1]],
             vertices[f[2]],
             vertices[f[3]],
@@ -1008,8 +1041,47 @@ function _direction_projection(vertices, faces, face2node, direction, options::L
         )
     end
 
-    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options)
-    return DirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
+    node_hits_map = _dense_int_node_map(node_ids, node_hits)
+    projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
+    projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
+    _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
+    return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
+end
+
+function _direction_projection(vertices, faces, face2node, direction, options::LightOptions, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
+    node_ids = unique(face2node)
+    node_index = Dict{Int,Int}(nid => i for (i, nid) in enumerate(node_ids))
+    face2node_index = [node_index[nid] for nid in face2node]
+    return _direction_projection_dense(
+        vertices,
+        faces,
+        face2node,
+        face2node_index,
+        node_ids,
+        direction,
+        options,
+        plotbox;
+        upper_hit=upper_hit,
+    )
+end
+
+function _direction_projection(
+    geometry::InterceptionSceneData,
+    direction,
+    options::LightOptions;
+    upper_hit::Union{Nothing,Bool}=nothing,
+)
+    return _direction_projection_dense(
+        geometry.vertices,
+        geometry.faces,
+        geometry.face2node,
+        geometry.face2node_index,
+        geometry.node_ids,
+        direction,
+        options,
+        geometry.plotbox;
+        upper_hit=upper_hit,
+    )
 end
 
 function _direction_projection_cached(vertices, faces, face2node, direction, options::LightOptions, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
@@ -1025,6 +1097,30 @@ function _direction_projection_cached(vertices, faces, face2node, direction, opt
     end
 
     result = _direction_projection(vertices, faces, face2node, direction, options, plotbox; upper_hit=upper_hit)
+    _write_projection_cache(path, result)
+    return result
+end
+
+function _direction_projection_cached(
+    geometry::InterceptionSceneData,
+    direction,
+    options::LightOptions,
+    cache_ctx;
+    upper_hit::Bool=false,
+    strict_java_float::Bool=false,
+)
+    if cache_ctx === nothing
+        return _direction_projection(geometry, direction, options; upper_hit=upper_hit)
+    end
+
+    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
+    if isfile(path)
+        cached = _read_projection_cache(path)
+        cached !== nothing && return cached
+        rm(path; force=true)
+    end
+
+    result = _direction_projection(geometry, direction, options; upper_hit=upper_hit)
     _write_projection_cache(path, result)
     return result
 end
@@ -1140,10 +1236,12 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
     plotbox = _plotbox(scene, vertices, options.pixel_size)
 
     node_ids = unique(face2node)
+    node_index = Dict{Int,Int}(nid => i for (i, nid) in enumerate(node_ids))
+    face2node_index = [node_index[nid] for nid in face2node]
     node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
     node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
 
-    return InterceptionSceneData(vertices, faces, face2node, unique(node_ids), plotbox, node_group, node_type)
+    return InterceptionSceneData(vertices, faces, face2node, face2node_index, node_ids, node_index, plotbox, node_group, node_type)
 end
 
 function _interception_area_per_node_from_geometry(geometry::InterceptionSceneData)
@@ -1300,29 +1398,18 @@ function _compute_first_order(
 )
     geometry = prepared.geometry
 
-    projected_area_per_node = Dict(id => 0.0 for id in geometry.node_ids)
-    incident_power = SpectralNodeValues(
-        Dict(id => 0.0 for id in geometry.node_ids),
-        Dict(id => 0.0 for id in geometry.node_ids),
-    )
-    hits_per_node = Dict(id => 0 for id in geometry.node_ids)
+    projected_area_per_node = zeros(Float64, length(geometry.node_ids))
+    incident_power_par = zeros(Float64, length(geometry.node_ids))
+    incident_power_nir = zeros(Float64, length(geometry.node_ids))
+    hits_per_node = zeros(Int, length(geometry.node_ids))
 
     for (k, sector) in enumerate(turtle.sectors)
-        visible_area, node_hits =
-            _rasterize_direction_java(
-                geometry.vertices,
-                geometry.faces,
-                geometry.face2node,
-                sector.direction,
-                options,
-                geometry.plotbox;
-                cache_ctx=prepared.cache_ctx,
-                virtual_nodes=prepared.virtual_nodes,
-                upper_hit=prepared.upper_hit,
-            )
+        projection = _prepared_direction_projection(prepared, sector.direction, options)
+        visible_area = _visible_area_from_projection(projection, options, geometry.plotbox, prepared.virtual_nodes)
+        node_hits = projection.node_hits
 
         for (nid, h) in node_hits
-            hits_per_node[nid] = get(hits_per_node, nid, 0) + h
+            hits_per_node[geometry.node_index[nid]] += h
         end
 
         par_flux = fluxes.par[k]
@@ -1333,9 +1420,10 @@ function _compute_first_order(
 
         for (nid, pa) in visible_area
             pa <= 0.0 && continue
-            projected_area_per_node[nid] = get(projected_area_per_node, nid, 0.0) + pa
-            incident_power.par[nid] = get(incident_power.par, nid, 0.0) + par_flux * pa
-            incident_power.nir[nid] = get(incident_power.nir, nid, 0.0) + nir_flux * pa
+            idx = geometry.node_index[nid]
+            projected_area_per_node[idx] += pa
+            incident_power_par[idx] += par_flux * pa
+            incident_power_nir[idx] += nir_flux * pa
         end
     end
 
@@ -1351,15 +1439,19 @@ function _compute_first_order(
             prepared.cache_ctx,
         )
         for ((to, src), ww) in w
-            incident_power.par[to] = get(incident_power.par, to, 0.0) + ww * get(prepared.emitter_par_power_per_node, src, 0.0)
-            incident_power.nir[to] = get(incident_power.nir, to, 0.0) + ww * get(prepared.emitter_nir_power_per_node, src, 0.0)
+            idx = geometry.node_index[to]
+            incident_power_par[idx] += ww * get(prepared.emitter_par_power_per_node, src, 0.0)
+            incident_power_nir[idx] += ww * get(prepared.emitter_nir_power_per_node, src, 0.0)
         end
     end
 
-    FirstOrderResult(
-        projected_area_per_node,
-        incident_power,
-        hits_per_node,
+    return FirstOrderResult(
+        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
+        SpectralNodeValues(
+            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
+            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
+        ),
+        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
     )
 end
 
