@@ -258,19 +258,34 @@ function _release_regression_cases()
 end
 
 function _synthetic_scene_for_source(source_id::String)
+    with_ground(specs) = vcat(
+        specs,
+        [
+            (x0=0.0, x1=1.0 / 3.0, y0=0.0, y1=1.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=1.0 / 3.0, x1=2.0 / 3.0, y0=0.0, y1=1.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=2.0 / 3.0, x1=1.0, y0=0.0, y1=1.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=0.0, x1=1.0 / 3.0, y0=1.0 / 3.0, y1=2.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=1.0 / 3.0, x1=2.0 / 3.0, y0=1.0 / 3.0, y1=2.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=2.0 / 3.0, x1=1.0, y0=1.0 / 3.0, y1=2.0 / 3.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=0.0, x1=1.0 / 3.0, y0=2.0 / 3.0, y1=1.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=1.0 / 3.0, x1=2.0 / 3.0, y0=2.0 / 3.0, y1=1.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+            (x0=2.0 / 3.0, x1=1.0, y0=2.0 / 3.0, y1=1.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+        ],
+    )
+
     if source_id == "single_plate_direct"
-        return _synthetic_horizontal_scene([
+        return _synthetic_horizontal_scene(with_ground([
             (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
-        ])
+        ]))
     elseif source_id == "partial_overlap_direct"
-        return _synthetic_horizontal_scene([
+        return _synthetic_horizontal_scene(with_ground([
             (x0=0.0, x1=0.5, y0=0.0, y1=1.0, z=1.0, group="upper_half", type="plate", object_id=1),
             (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower_full", type="plate", object_id=2),
-        ])
+        ]))
     elseif source_id == "toricity_wraparound"
-        scene = _synthetic_horizontal_scene([
+        scene = _synthetic_horizontal_scene(with_ground([
             (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
-        ])
+        ]))
         return ArchimedLight.SceneGeometry(
             scene.mtg,
             scene.merged_mesh,
@@ -280,14 +295,14 @@ function _synthetic_scene_for_source(source_id::String)
             (0.0, 0.0, 1.0, 1.0),
         )
     elseif source_id == "stacked_scattering"
-        return _synthetic_horizontal_scene([
+        return _synthetic_horizontal_scene(with_ground([
             (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
             (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
-        ])
+        ]))
     elseif source_id == "cached_series_parity"
-        return _synthetic_horizontal_scene([
+        return _synthetic_horizontal_scene(with_ground([
             (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
-        ])
+        ]))
     end
     error("Unsupported synthetic source $(repr(source_id))")
 end
@@ -433,7 +448,7 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
 
     if data.kind == :scene_outputs
         comp_path = joinpath(observed_dir, "component_values.csv")
-        _write_component_series_csv(comp_path, data.scene, data.series, data.options, data.meteo_rows)
+        _write_component_series_csv(comp_path, data.scene, data.models, data.series, data.options, data.meteo_rows)
         files["component_values.csv"] = comp_path
 
         scene_path = joinpath(observed_dir, "scene_values.csv")

@@ -170,6 +170,52 @@ function _resolved_type_key(group_model::GroupModel, type_name::AbstractString)
         return first(keys(group_model.types))
     end
 
+    if stripped == "mesh"
+        first_key = nothing
+        first_sig = nothing
+        equivalent = true
+        for (type_key, type_model) in group_model.types
+            sig = (
+                interception=
+                    if type_model.interception === nothing
+                        nothing
+                    else
+                        interception = type_model.interception
+                        (
+                            interception.use,
+                            interception.model,
+                            interception.transparency,
+                            interception.optical_properties === nothing ? nothing :
+                            (
+                                interception.optical_properties.par,
+                                interception.optical_properties.nir,
+                            ),
+                        )
+                    end,
+                emitter=
+                    if type_model.light_emitter === nothing
+                        nothing
+                    else
+                        emitter = type_model.light_emitter
+                        (
+                            emitter.model,
+                            emitter.radiance,
+                            emitter.gamma.par,
+                            emitter.gamma.nir,
+                        )
+                    end,
+            )
+            if first_sig === nothing
+                first_key = type_key
+                first_sig = sig
+            elseif sig != first_sig
+                equivalent = false
+                break
+            end
+        end
+        equivalent && first_key !== nothing && return first_key
+    end
+
     return nothing
 end
 

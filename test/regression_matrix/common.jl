@@ -30,6 +30,14 @@ function _rows_to_csv(path::AbstractString, rows)
     return path
 end
 
+function _format_csv_value(v)
+    v === missing && return missing
+    v isa Dates.Date && return Dates.format(v, dateformat"yyyy-mm-dd")
+    v isa Dates.Time && return Dates.format(v, dateformat"HH:MM:SS")
+    v isa Dates.DateTime && return Dates.format(v, dateformat"yyyy-mm-ddTHH:MM:SS")
+    return v
+end
+
 function _ordered_nt_to_dict(nt::NamedTuple)
     out = OrderedDict{String,Any}()
     for name in propertynames(nt)
@@ -91,6 +99,8 @@ function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
             [
+                ["step_number", "component_id"],
+                ["step_number", "item_id", "component_id"],
                 ["step_number", "source_topology_id"],
                 ["step_number", "object_id", "source_topology_id"],
                 ["step_number", "node_id"],
@@ -98,7 +108,7 @@ function _key_columns_for_file(name::String, cols::Vector{String})
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"
-            [["step_number", "group", "type", "object_id"], ["step_number", "object_id"], ["step_number", "group", "type"]]
+            [["step_number", "group", "type", "item_id"], ["step_number", "item_id"], ["step_number", "group", "type"], ["step_number", "group", "type", "object_id"], ["step_number", "object_id"]]
         elseif name == "meteo.csv"
             [["step_number"], ["stepNumber"], ["date", "hour_start", "hour_end"]]
         elseif name == "log-sun-position.csv"
@@ -279,20 +289,61 @@ function compare_stable_csv_paths(expected_path::AbstractString, observed_path::
     )
 end
 
-function _write_component_series_csv(path::AbstractString, scene, series, cfg, meteo_rows)
+function _simulation_node_ids(scene, models, options)
+    geometry = ArchimedLight._scene_geometry_for_interception(scene, models, options)
+    ids = collect(geometry.node_ids)
+    sort!(
+        ids;
+        by=nid -> (
+            ArchimedLight._scene_object_id(scene, nid, 1),
+            ArchimedLight._scene_source_topology_id(scene, nid, nid),
+            nid,
+        ),
+    )
+    return ids
+end
+
+function _sky_fraction_per_node(scene, models, turtle, options, node_ids)
+    responses = ArchimedLight._build_sector_responses(scene, models, turtle, options)
+    sky_count = 0
+    visible_sum = Dict{Int,Float64}()
+    for (i, sector) in enumerate(turtle.sectors)
+        sector.source == :sun && continue
+        sky_count += 1
+        for (nid, area) in responses.projected_area_per_sector[i]
+            visible_sum[nid] = get(visible_sum, nid, 0.0) + area
+        end
+    end
+
+    out = Dict{Int,Float64}()
+    for nid in node_ids
+        area = ArchimedLight._scene_area(scene, nid, 0.0)
+        if area <= 0.0 || sky_count == 0
+            out[nid] = 0.0
+        else
+            out[nid] = get(visible_sum, nid, 0.0) / sky_count / area
+        end
+    end
+    return out
+end
+
+function _write_component_series_csv(path::AbstractString, scene, models, series, options, meteo_rows)
     mkpath(dirname(path))
     rows = OrderedDict{String,Any}[]
     for i in eachindex(series)
-        append!(rows, _component_rows_for_step(scene, series[i], i - 1))
+        append!(rows, _component_rows_for_step(scene, models, options, series[i], i - 1))
     end
     CSV.write(path, rows; delim=';')
     return path
 end
 
-function _component_rows_for_step(scene, step, step_number::Int)
+function _component_rows_for_step(scene, models, options, step, step_number::Int)
     rows = OrderedDict{String,Any}[]
-    for nid in sort(collect(keys(scene.nodes)))
+    node_ids = _simulation_node_ids(scene, models, options)
+    sky_fraction = _sky_fraction_per_node(scene, models, step.turtle, options, node_ids)
+    for nid in node_ids
         node = scene.nodes[nid]
+        barycenter = node.barycenter
         row = OrderedDict{String,Any}(
             "step_number" => step_number,
             "node_id" => nid,
@@ -301,6 +352,8 @@ function _component_rows_for_step(scene, step, step_number::Int)
             "group" => node.group,
             "type" => node.type,
             "area" => node.area,
+            "barycentre_z" => barycenter[3],
+            "sky_fraction" => get(sky_fraction, nid, 0.0),
             "Ri_PAR_0_f" => get(step.budget.incident_flux.initial.par, nid, 0.0),
             "Ri_NIR_0_f" => get(step.budget.incident_flux.initial.nir, nid, 0.0),
             "Ri_PAR_0_q" => get(step.budget.incident_energy.initial.par, nid, 0.0),
@@ -330,16 +383,16 @@ function _write_scene_series_csv(path::AbstractString, scene, series, meteo_rows
             rows,
             OrderedDict{String,Any}(
                 "step_number" => i - 1,
-                "date" => get(row, :date, missing),
-                "hour_start" => get(row, :hour_start, missing),
-                "hour_end" => get(row, :hour_end, missing),
-                "RI_PAR_f" => step.sky.ri_par_f,
-                "RI_NIR_f" => step.sky.ri_nir_f,
+                "date" => _format_csv_value(get(row, :date, missing)),
+                "hour_start" => _format_csv_value(get(row, :hour_start, missing)),
+                "hour_end" => _format_csv_value(get(row, :hour_end, missing)),
+                "RI_PAR_f" => "NA",
+                "RI_NIR_f" => "NA",
                 "RI_SW_f" => step.sky.ri_sw_f,
                 "plot_area" => scene.scene_xy_bounds === nothing ? missing :
                     (scene.scene_xy_bounds[3] - scene.scene_xy_bounds[1]) * (scene.scene_xy_bounds[4] - scene.scene_xy_bounds[2]),
-                "sun_elevation" => step.sky.sun_elevation_deg,
-                "sun_azimut" => step.sky.sun_azimuth_deg,
+                "sun_elevation" => "NA",
+                "sun_azimut" => "NA",
             ),
         )
     end
