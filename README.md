@@ -174,12 +174,23 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
   --tarball /tmp/archimedlight-release-fixtures.tar.gz
 ```
 
+If you want the current Julia outputs to become the packaged references first, refresh and package
+in one step:
+
+```bash
+julia --project=. scripts/build_release_fixture_artifact.jl \
+  --test-root /path/to/heavy-test-root \
+  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
+  --refresh-references
+```
+
 Optional: bind the artifact in `Artifacts.toml` by providing the download URL:
 
 ```bash
 julia --project=. scripts/build_release_fixture_artifact.jl \
   --test-root /path/to/heavy-test-root \
   --tarball /tmp/archimedlight-release-fixtures.tar.gz \
+  --refresh-references \
   --url https://github.com/ARCHIMED-platform/ArchimedLight.jl/releases/download/v0.0.1/archimedlight-release-fixtures-v0.0.1.tar.gz
 ```
 

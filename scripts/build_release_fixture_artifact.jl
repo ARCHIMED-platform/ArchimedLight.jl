@@ -1,5 +1,7 @@
 #!/usr/bin/env julia
 
+using ArchimedLight
+using Pkg
 using Pkg.Artifacts
 using SHA
 using Dates
@@ -19,6 +21,7 @@ function usage()
           --artifacts-toml <path>  Artifacts.toml to update (default: ./Artifacts.toml)
           --tarball <path>         Output tar.gz path (default: ./release-fixtures.tar.gz)
           --url <url>              Download URL used to bind artifact in Artifacts.toml
+          --refresh-references     Refresh numeric/image references in the source dataset before packaging
           --no-prune-output        Keep fixture output/ directories in bundle
           --no-prune-unused        Keep disabled/unreferenced fixtures, references, and images
           -h, --help               Show this help
@@ -34,6 +37,7 @@ function parse_args(args)
         "artifacts_toml" => joinpath(repo_root, "Artifacts.toml"),
         "tarball" => joinpath(repo_root, "release-fixtures.tar.gz"),
         "url" => "",
+        "refresh_references" => false,
         "prune_output" => true,
         "prune_unused" => true,
     )
@@ -58,6 +62,8 @@ function parse_args(args)
         elseif a == "--url"
             i += 1
             opt["url"] = args[i]
+        elseif a == "--refresh-references"
+            opt["refresh_references"] = true
         elseif a == "--no-prune-output"
             opt["prune_output"] = false
         elseif a == "--no-prune-unused"
@@ -245,18 +251,53 @@ function copy_release_dataset!(dst::AbstractString, src_root::AbstractString; pr
     end
 end
 
+function _refresh_release_references!(repo_root::AbstractString, dataset_root::AbstractString)
+    old_data_root = get(ENV, "ARCHIMEDLIGHT_RELEASE_DATA_ROOT", nothing)
+    old_project = Base.active_project()
+    ENV["ARCHIMEDLIGHT_RELEASE_DATA_ROOT"] = dataset_root
+    try
+        Pkg.activate(joinpath(repo_root, "test"); io=devnull)
+        include(joinpath(repo_root, "test", "release", "harness.jl"))
+        fixtures = Base.invokelatest(select_fixtures, Base.invokelatest(julia_fixtures))
+        isempty(fixtures) && error("No release fixtures selected for reference refresh.")
+        total = length(fixtures)
+        for (i, fx) in enumerate(fixtures)
+            @info "Refreshing release references" index=i total=total fixture=fx.id
+            data = Base.invokelatest(fixture_runtime_data, fx)
+            numeric = Base.invokelatest(write_fixture_numeric_references!, fx; out_root=nothing)
+            image = Base.invokelatest(write_fixture_reference_image!, fx; data=data)
+            @info "Refreshed release references" fixture=fx.id numeric_files=length(numeric) image=image
+        end
+    finally
+        old_project === nothing || Pkg.activate(dirname(old_project); io=devnull)
+        if old_data_root === nothing
+            delete!(ENV, "ARCHIMEDLIGHT_RELEASE_DATA_ROOT")
+        else
+            ENV["ARCHIMEDLIGHT_RELEASE_DATA_ROOT"] = old_data_root
+        end
+    end
+    return nothing
+end
+
 function main(args)
     opt = parse_args(args)
+    repo_root = normpath(joinpath(dirname(@__DIR__)))
     test_root = normpath(String(opt["test_root"]))
     artifacts_toml = normpath(String(opt["artifacts_toml"]))
     tarball = normpath(String(opt["tarball"]))
     artifact_name = String(opt["artifact_name"])
     url = strip(String(opt["url"]))
+    refresh_references = Bool(opt["refresh_references"])
     prune_output = Bool(opt["prune_output"])
     prune_unused = Bool(opt["prune_unused"])
 
     isdir(test_root) || error("test root does not exist: $(test_root)")
     mkpath(dirname(tarball))
+
+    if refresh_references
+        println("Refreshing release references in source dataset...")
+        _refresh_release_references!(repo_root, test_root)
+    end
 
     hash = create_artifact() do artdir
         copy_release_dataset!(artdir, test_root; prune_output=prune_output, prune_unused=prune_unused)
