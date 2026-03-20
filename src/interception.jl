@@ -40,6 +40,8 @@ struct PreparedInterceptionData
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
 end
 
+@inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -360,6 +362,7 @@ function _emitter_transfer_weights_from_projections(
     projections::AbstractVector{DirectionProjectionResult},
     turtle::TurtleGrid,
     emitter_nodes::Set{Int},
+    stacks_sorted::Bool=false,
 )
     isempty(emitter_nodes) && return Dict{Tuple{Int,Int},Float64}()
 
@@ -372,7 +375,7 @@ function _emitter_transfer_weights_from_projections(
 
         for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+            stacks_sorted || _sort_hit_stack!(stack)
 
             for j in eachindex(stack)
                 src = stack[j][2]
@@ -666,6 +669,16 @@ function _compute_normal_f32(points)
     StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
 end
 
+@inline function _project_vertex_to_ground_pixel(v, dirx::Float32, diry::Float32, dirz::Float32, ox::Float32, oy::Float32, pxs::Float32, pys::Float32, u::Float32)
+    pz = Float32(v[3]) * u
+    dz = -pz / dirz
+    xw = Float32(v[1]) * u + dirx * dz
+    yw = Float32(v[2]) * u + diry * dz
+    projected = StaticArrays.SVector{3,Float64}(Float64(xw / u), Float64(yw / u), 0.0)
+    pix = StaticArrays.SVector{3,Float64}(Float64((xw - ox) / pxs), Float64((yw - oy) / pys), Float64(pz))
+    return projected, pix
+end
+
 function _get_border_pixels(p1, p2, i_origin::Int, minY::Vector{Int}, maxY::Vector{Int})
     p_min, p_max = p1[1] < p2[1] ? (p1, p2) : (p2, p1)
     dx = Float32(p_max[1] - p_min[1])
@@ -765,9 +778,6 @@ function _project_triangle!(
     strict_java_float::Bool,
     unit_scale::Float32,
 )
-    v = (p1, p2, p3)
-    projected = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
-    pix_points = Vector{StaticArrays.SVector{3,Float64}}(undef, 3)
     u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
     ox = Float32(origin_x) * u
     oy = Float32(origin_y) * u
@@ -776,35 +786,18 @@ function _project_triangle!(
     dirx = Float32(direction[1])
     diry = Float32(direction[2])
     dirz = Float32(direction[3])
+    dirz == 0.0f0 && return
 
-    @inbounds for k in 1:3
-        dirz == 0.0f0 && return
-        pz = Float32(v[k][3]) * u
-        dz = -pz / dirz
-        xw = Float32(v[k][1]) * u + dirx * dz
-        yw = Float32(v[k][2]) * u + diry * dz
-        projected[k] = StaticArrays.SVector{3,Float64}(Float64(xw / u), Float64(yw / u), 0.0)
-        x = Float32((xw - ox) / pxs)
-        y = Float32((yw - oy) / pys)
-        z = pz
-        pix_points[k] = StaticArrays.SVector{3,Float64}(Float64(x), Float64(y), Float64(z))
-    end
+    projected1, pix1 = _project_vertex_to_ground_pixel(p1, dirx, diry, dirz, ox, oy, pxs, pys, u)
+    projected2, pix2 = _project_vertex_to_ground_pixel(p2, dirx, diry, dirz, ox, oy, pxs, pys, u)
+    projected3, pix3 = _project_vertex_to_ground_pixel(p3, dirx, diry, dirz, ox, oy, pxs, pys, u)
 
-    iMin = floor(Int, pix_points[1][1])
-    iMax = ceil(Int, pix_points[1][1])
-    jMin = floor(Int, pix_points[1][2])
-    jMax = ceil(Int, pix_points[1][2])
-    kMin = floor(Int, pix_points[1][3])
-    kMax = ceil(Int, pix_points[1][3])
-
-    @inbounds for k in 2:3
-        iMin = min(iMin, floor(Int, pix_points[k][1]))
-        iMax = max(iMax, ceil(Int, pix_points[k][1]))
-        jMin = min(jMin, floor(Int, pix_points[k][2]))
-        jMax = max(jMax, ceil(Int, pix_points[k][2]))
-        kMin = min(kMin, floor(Int, pix_points[k][3]))
-        kMax = max(kMax, ceil(Int, pix_points[k][3]))
-    end
+    iMin = min(floor(Int, pix1[1]), floor(Int, pix2[1]), floor(Int, pix3[1]))
+    iMax = max(ceil(Int, pix1[1]), ceil(Int, pix2[1]), ceil(Int, pix3[1]))
+    jMin = min(floor(Int, pix1[2]), floor(Int, pix2[2]), floor(Int, pix3[2]))
+    jMax = max(ceil(Int, pix1[2]), ceil(Int, pix2[2]), ceil(Int, pix3[2]))
+    kMin = min(floor(Int, pix1[3]), floor(Int, pix2[3]), floor(Int, pix3[3]))
+    kMax = max(ceil(Int, pix1[3]), ceil(Int, pix2[3]), ceil(Int, pix3[3]))
 
     iLength = (iMax - iMin) + 1
     iLength <= 0 && return
@@ -812,13 +805,11 @@ function _project_triangle!(
     minY = fill(jMax, iLength)
     maxY = fill(jMin, iLength)
 
-    @inbounds for k in 1:3
-        a = pix_points[k]
-        b = pix_points[k == 3 ? 1 : k + 1]
-        _get_border_pixels(a, b, iMin, minY, maxY)
-    end
+    _get_border_pixels(pix1, pix2, iMin, minY, maxY)
+    _get_border_pixels(pix2, pix3, iMin, minY, maxY)
+    _get_border_pixels(pix3, pix1, iMin, minY, maxY)
 
-    normal = strict_java_float ? _compute_normal_f32(pix_points) : _compute_normal(pix_points)
+    normal = strict_java_float ? _compute_normal_f32((pix1, pix2, pix3)) : _compute_normal((pix1, pix2, pix3))
     slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
@@ -828,13 +819,13 @@ function _project_triangle!(
             (dz * Float32(normal[1]), dz * Float32(normal[2]))
         end
 
-    z0 = Float32(pix_points[1][3])
-    z0 += slopeX_f32 * (Float32(pix_points[1][1]) - Float32(iMin))
-    z0 += slopeY_f32 * (Float32(pix_points[1][2]) - Float32(jMin))
+    z0 = Float32(pix1[3])
+    z0 += slopeX_f32 * (Float32(pix1[1]) - Float32(iMin))
+    z0 += slopeY_f32 * (Float32(pix1[2]) - Float32(jMin))
 
-    tri_proj_area = _triangle_area_xy(projected[1], projected[2], projected[3])
-    buffered_hits = Tuple{Int,Float64}[]
+    tri_proj_area = _triangle_area_xy(projected1, projected2, projected3)
     nb_hits = 0
+    node_hit_count = get(node_hits, node_id, 0)
     @inbounds for i in iMin:(iMax-1)
         ni = i - iMin
         zi = z0 - slopeX_f32 * Float32(ni)
@@ -857,27 +848,24 @@ function _project_triangle!(
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
                 zpix_f32 = Float64(zpix / u)
-                push!(buffered_hits, (idx, zpix_f32))
+                h = get!(pixel_hits, idx) do
+                    Vector{Tuple{Float64,Int}}()
+                end
+                if upper_hit
+                    if isempty(h)
+                        push!(h, (zpix_f32, node_id))
+                    elseif zpix_f32 > h[1][1]
+                        h[1] = (zpix_f32, node_id)
+                    end
+                else
+                    push!(h, (zpix_f32, node_id))
+                end
+                node_hit_count += 1
             end
         end
     end
 
-    for (idx, zpix_f32) in buffered_hits
-        h = get!(pixel_hits, idx) do
-            Vector{Tuple{Float64,Int}}()
-        end
-        if upper_hit
-            if isempty(h)
-                push!(h, (zpix_f32, node_id))
-            elseif zpix_f32 > h[1][1]
-                h[1] = (zpix_f32, node_id)
-            end
-        else
-            push!(h, (zpix_f32, node_id))
-        end
-        node_hits[node_id] = get(node_hits, node_id, 0) + 1
-    end
-
+    node_hits[node_id] = node_hit_count
     projected_mesh_area[node_id] = get(projected_mesh_area, node_id, 0.0) + tri_proj_area
     projected_pixels_area[node_id] = get(projected_pixels_area, node_id, 0.0) + nb_hits * pixel_area
 end
@@ -890,6 +878,7 @@ function _visible_area_from_projection(
     options::LightOptions,
     plotbox,
     virtual_nodes::Set{Int},
+    stacks_sorted::Bool=false,
 )
     ratios =
         if options.area_ratio
@@ -906,7 +895,7 @@ function _visible_area_from_projection(
     visible_area = Dict{Int,Float64}()
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
-        sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+        stacks_sorted || _sort_hit_stack!(stack)
 
         non_virtual_seen = false
         first_non_virtual = 0

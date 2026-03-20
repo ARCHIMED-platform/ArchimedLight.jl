@@ -32,26 +32,74 @@ function _accept_scattering_link(node_group::Dict{Int,String}, to::Int, from::In
     !(get(node_group, to, "") == "pavement" && get(node_group, from, "") == "pavement")
 end
 
+mutable struct ScatteringStackScratch
+    nearest_nonvirtual_below::Vector{Int}
+end
+
+ScatteringStackScratch() = ScatteringStackScratch(Int[])
+
 function _stack_transfer_pairs!(
     pair_counts::Dict{Tuple{Int,Int},Int},
-    node_ids_stack::Vector{Int},
-    scatt_up::Vector{Int},
-    scatt_down::Vector{Int},
+    stack::Vector{Tuple{Float64,Int}},
+    virtual_nodes::Set{Int},
+    scratch::ScatteringStackScratch,
     node_group::Dict{Int,String},
 )
-    n_hits = length(node_ids_stack)
-    @inbounds for h in (n_hits - 1):-1:1
-        to_above = node_ids_stack[h]
-        from_below = scatt_up[h + 1]
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        nid = _hit_node(stack[h])
+        if !(nid in virtual_nodes)
+            nearest_below = nid
+        end
+        below[h] = nearest_below
+    end
+
+    nearest_above = 0
+    @inbounds for h in 1:(n_hits - 1)
+        to_above = _hit_node(stack[h])
+        if !(to_above in virtual_nodes)
+            nearest_above = to_above
+        end
+
+        from_below = below[h + 1]
         if from_below != 0 && _accept_scattering_link(node_group, to_above, from_below)
             _add_pair_count!(pair_counts, to_above, from_below)
         end
 
-        to_below = node_ids_stack[h + 1]
-        from_above = scatt_down[h]
+        to_below = _hit_node(stack[h + 1])
+        from_above = nearest_above
         if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
             _add_pair_count!(pair_counts, to_below, from_above)
         end
+    end
+    return nothing
+end
+
+function _accumulate_scattering_counts!(
+    pair_counts::Dict{Tuple{Int,Int},Int},
+    sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DirectionProjectionResult,
+    virtual_nodes::Set{Int},
+    node_group::Dict{Int,String},
+    scratch::ScatteringStackScratch;
+    stacks_sorted::Bool=false,
+)
+    if sector.source == :sun
+        for (nid, h) in projection.node_hits
+            sun_hits[nid] = get(sun_hits, nid, 0) + h
+        end
+        return nothing
+    end
+
+    for stack in values(projection.pixel_hits)
+        length(stack) <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        _stack_transfer_pairs!(pair_counts, stack, virtual_nodes, scratch, node_group)
     end
     return nothing
 end
@@ -62,53 +110,20 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
 
     for sector in turtle.sectors
         projection =
             _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, options, geometry.plotbox, cache_ctx)
-
-        if sector.source == :sun
-            for (nid, h) in projection.node_hits
-                sun_hits[nid] = get(sun_hits, nid, 0) + h
-            end
-            continue
-        end
-
-        for stack in values(projection.pixel_hits)
-            length(stack) <= 1 && continue
-            # Java PixelTable uses a stable height sort (Collections.sort on comparator).
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
-
-            n_hits = length(stack)
-            node_ids_stack = Vector{Int}(undef, n_hits)
-            @inbounds for i in 1:n_hits
-                node_ids_stack[i] = stack[i][2]
-            end
-
-            # Mirror EnergyTransferTask: carry nearest non-virtual diffuser upward/downward
-            # across virtual sensors, then transfer between adjacent stack positions.
-            scatt_up = Vector{Int}(undef, n_hits)
-            up = 0
-            @inbounds for h in n_hits:-1:1
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    up = nid
-                end
-                scatt_up[h] = up
-            end
-
-            scatt_down = Vector{Int}(undef, n_hits)
-            down = 0
-            @inbounds for h in 1:n_hits
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    down = nid
-                end
-                scatt_down[h] = down
-            end
-
-            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, geometry.node_group)
-        end
+        _accumulate_scattering_counts!(
+            pair_counts,
+            sun_hits,
+            sector,
+            projection,
+            virtual_nodes,
+            geometry.node_group,
+            scratch,
+        )
     end
 
     return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
@@ -119,53 +134,23 @@ function _pair_counts_from_projections(
     projections::AbstractVector{DirectionProjectionResult},
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
+    stacks_sorted::Bool=false,
 )
     pair_counts = Dict{Tuple{Int,Int},Int}()
     sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
 
     for i in eachindex(turtle.sectors)
-        sector = turtle.sectors[i]
-        projection = projections[i]
-
-        if sector.source == :sun
-            for (nid, h) in projection.node_hits
-                sun_hits[nid] = get(sun_hits, nid, 0) + h
-            end
-            continue
-        end
-
-        for stack in values(projection.pixel_hits)
-            length(stack) <= 1 && continue
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
-
-            n_hits = length(stack)
-            node_ids_stack = Vector{Int}(undef, n_hits)
-            @inbounds for j in 1:n_hits
-                node_ids_stack[j] = stack[j][2]
-            end
-
-            scatt_up = Vector{Int}(undef, n_hits)
-            up = 0
-            @inbounds for h in n_hits:-1:1
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    up = nid
-                end
-                scatt_up[h] = up
-            end
-
-            scatt_down = Vector{Int}(undef, n_hits)
-            down = 0
-            @inbounds for h in 1:n_hits
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    down = nid
-                end
-                scatt_down[h] = down
-            end
-
-            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, node_group)
-        end
+        _accumulate_scattering_counts!(
+            pair_counts,
+            sun_hits,
+            turtle.sectors[i],
+            projections[i],
+            virtual_nodes,
+            node_group,
+            scratch;
+            stacks_sorted=stacks_sorted,
+        )
     end
 
     return pair_counts, sun_hits
@@ -234,12 +219,14 @@ function _build_scattering_topology_cache(
     prepared::PreparedInterceptionData,
     turtle::TurtleGrid,
     projections::AbstractVector{DirectionProjectionResult},
+    stacks_sorted::Bool=false,
 )
     pair_counts, sun_hits = _pair_counts_from_projections(
         turtle,
         projections,
         prepared.virtual_nodes,
         prepared.geometry.node_group,
+        stacks_sorted,
     )
     group_type_coeffs = _group_optical_coeffs(models)
     node_ids = copy(prepared.geometry.node_ids)

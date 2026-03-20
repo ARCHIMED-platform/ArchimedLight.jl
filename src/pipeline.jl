@@ -159,10 +159,10 @@ function _build_sector_responses(
     end
     emitter_weights =
         projections === nothing ? Dict{Tuple{Int,Int},Float64}() :
-        _emitter_transfer_weights_from_projections(projections, turtle, prepared.emitter_nodes)
+        _emitter_transfer_weights_from_projections(projections, turtle, prepared.emitter_nodes, true)
     scattering_topology =
         if options.scattering && projections !== nothing
-            _build_scattering_topology_cache(scene, models, prepared, turtle, projections)
+            _build_scattering_topology_cache(scene, models, prepared, turtle, projections, true)
         else
             nothing
         end
