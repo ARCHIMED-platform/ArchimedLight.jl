@@ -333,6 +333,25 @@ function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
     return par, nir
 end
 
+@inline function _pack_emitter_edge(to::Int, from::Int)
+    return (UInt64(UInt32(to)) << 32) | UInt64(UInt32(from))
+end
+
+@inline _unpack_emitter_to(edge::UInt64) = Int(UInt32(edge >> 32))
+@inline _unpack_emitter_from(edge::UInt64) = Int(UInt32(edge & 0xffffffff))
+
+function _emitter_weights_from_packed_counts(edge_counts::Dict{UInt64,Int}, total_from::Dict{Int,Int})
+    weights = Dict{Tuple{Int,Int},Float64}()
+    for (edge, count) in edge_counts
+        to = _unpack_emitter_to(edge)
+        src = _unpack_emitter_from(edge)
+        n = get(total_from, src, 0)
+        n > 0 || continue
+        weights[(to, src)] = count / n
+    end
+    return weights
+end
+
 function _emitter_transfer_weights(
     vertices,
     faces,
@@ -345,7 +364,7 @@ function _emitter_transfer_weights(
 )
     isempty(emitter_nodes) && return Dict{Tuple{Int,Int},Float64}()
 
-    pair_counts = Dict{Tuple{Int,Int},Int}()
+    edge_counts = Dict{UInt64,Int}()
     total_from = Dict{Int,Int}()
 
     for sector in turtle.sectors
@@ -371,19 +390,14 @@ function _emitter_transfer_weights(
                 end
                 to == 0 && continue
 
-                pair_counts[(to, src)] = get(pair_counts, (to, src), 0) + 1
+                edge = _pack_emitter_edge(to, src)
+                edge_counts[edge] = get(edge_counts, edge, 0) + 1
                 total_from[src] = get(total_from, src, 0) + 1
             end
         end
     end
 
-    weights = Dict{Tuple{Int,Int},Float64}()
-    for ((to, src), c) in pair_counts
-        n = get(total_from, src, 0)
-        n > 0 || continue
-        weights[(to, src)] = c / n
-    end
-    weights
+    return _emitter_weights_from_packed_counts(edge_counts, total_from)
 end
 
 function _emitter_transfer_weights_from_projections(
@@ -394,7 +408,7 @@ function _emitter_transfer_weights_from_projections(
 )
     isempty(emitter_nodes) && return Dict{Tuple{Int,Int},Float64}()
 
-    pair_counts = Dict{Tuple{Int,Int},Int}()
+    edge_counts = Dict{UInt64,Int}()
     total_from = Dict{Int,Int}()
 
     for i in eachindex(turtle.sectors)
@@ -418,19 +432,14 @@ function _emitter_transfer_weights_from_projections(
                 end
                 to == 0 && continue
 
-                pair_counts[(to, src)] = get(pair_counts, (to, src), 0) + 1
+                edge = _pack_emitter_edge(to, src)
+                edge_counts[edge] = get(edge_counts, edge, 0) + 1
                 total_from[src] = get(total_from, src, 0) + 1
             end
         end
     end
 
-    weights = Dict{Tuple{Int,Int},Float64}()
-    for ((to, src), c) in pair_counts
-        n = get(total_from, src, 0)
-        n > 0 || continue
-        weights[(to, src)] = c / n
-    end
-    return weights
+    return _emitter_weights_from_packed_counts(edge_counts, total_from)
 end
 
 function _cfg_cache_pixel_table(options::LightOptions)
