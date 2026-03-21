@@ -1136,6 +1136,8 @@ function _visible_area_from_projection(
     stacks_sorted::Bool=false,
 )
     visible_area = Dict{Int,Float64}()
+    sizehint!(visible_area, length(projection.node_hits))
+    pixel_area = plotbox.pixel_area
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
         stacks_sorted || _sort_hit_stack!(stack)
@@ -1147,7 +1149,7 @@ function _visible_area_from_projection(
             if nid in virtual_nodes
                 if !non_virtual_seen
                     ratio = _projection_area_ratio(projection, options, nid)
-                    visible_area[nid] = get(visible_area, nid, 0.0) + plotbox.pixel_area * ratio
+                    visible_area[nid] = get(visible_area, nid, 0.0) + pixel_area * ratio
                 end
             else
                 first_non_virtual = nid
@@ -1157,7 +1159,7 @@ function _visible_area_from_projection(
         end
         if first_non_virtual != 0
             ratio = _projection_area_ratio(projection, options, first_non_virtual)
-            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + plotbox.pixel_area * ratio
+            visible_area[first_non_virtual] = get(visible_area, first_non_virtual, 0.0) + pixel_area * ratio
         end
     end
 
@@ -1173,6 +1175,7 @@ function _visible_area_from_projection_dense(
     stacks_sorted::Bool=false,
 )
     visible_area = zeros(Float64, length(geometry.node_ids))
+    pixel_area = plotbox.pixel_area
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
         stacks_sorted || _sort_hit_stack!(stack)
@@ -1184,7 +1187,7 @@ function _visible_area_from_projection_dense(
             if nid in virtual_nodes
                 if !non_virtual_seen
                     ratio = _projection_area_ratio(projection, options, nid)
-                    visible_area[geometry.node_index[nid]] += plotbox.pixel_area * ratio
+                    visible_area[geometry.node_index[nid]] += pixel_area * ratio
                 end
             else
                 first_non_virtual = nid
@@ -1194,7 +1197,7 @@ function _visible_area_from_projection_dense(
         end
         if first_non_virtual != 0
             ratio = _projection_area_ratio(projection, options, first_non_virtual)
-            visible_area[geometry.node_index[first_non_virtual]] += plotbox.pixel_area * ratio
+            visible_area[geometry.node_index[first_non_virtual]] += pixel_area * ratio
         end
     end
 
