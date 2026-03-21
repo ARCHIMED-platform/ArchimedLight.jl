@@ -189,6 +189,26 @@ end
     return @inbounds stack.spill[i]
 end
 
+@inline _hit_sort_lt(a, b) = _hit_height(a) > _hit_height(b)
+
+@inline function _sort_hit_stack!(stack::SmallHitStack)
+    len = length(stack)
+    len <= 1 && return stack
+    if stack.spill === nothing
+        if _hit_height(stack.hit1) < _hit_height(stack.hit2)
+            stack.hit1, stack.hit2 = stack.hit2, stack.hit1
+        end
+        return stack
+    end
+    sort!(stack.spill; lt=_hit_sort_lt, alg=Base.Sort.MergeSort)
+    return stack
+end
+
+@inline function _sort_hit_stack!(stack::Vector{HitRecord})
+    sort!(stack; lt=_hit_sort_lt, alg=Base.Sort.MergeSort)
+    return stack
+end
+
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
