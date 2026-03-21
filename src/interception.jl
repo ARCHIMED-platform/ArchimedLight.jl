@@ -66,6 +66,7 @@ mutable struct FlatPixelHits
     starts::Vector{Int}
     counts::Vector{Int}
     occupied::Vector{Int}
+    sorted::BitVector
     heights::Vector{Float64}
     nodes::Vector{Int}
 end
@@ -278,17 +279,33 @@ end
 end
 
 @inline function _sort_hit_stack!(stack::FlatPixelHitStack)
+    stack.parent.sorted[stack.pixel_idx] && return stack
     len = length(stack)
-    len <= 1 && return stack
-    if len <= 8
-        return _sort_small_hit_stack!(stack)
+    if len <= 1
+        stack.parent.sorted[stack.pixel_idx] = true
+        return stack
     end
-    return _sort_small_hit_stack!(stack)
+    if len <= 8
+        _sort_small_hit_stack!(stack)
+        stack.parent.sorted[stack.pixel_idx] = true
+        return stack
+    end
+    _sort_small_hit_stack!(stack)
+    stack.parent.sorted[stack.pixel_idx] = true
+    return stack
 end
 
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
+@inline function _stack_hit_height(stack::FlatPixelHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    return @inbounds stack.parent.heights[_flat_stack_start(stack) + i - 1]
+end
+@inline function _stack_hit_node(stack::FlatPixelHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    return @inbounds stack.parent.nodes[_flat_stack_start(stack) + i - 1]
+end
 
 # Dense tables avoid hash traffic on packed canopies, but above this size the empty-cell
 # overhead starts to outweigh the benefit on sparse scenes.
@@ -333,6 +350,7 @@ function Base.setindex!(stack::FlatPixelHitStack, hit::HitRecord, i::Int)
     idx = _flat_stack_start(stack) + i - 1
     stack.parent.heights[idx] = hit[1]
     stack.parent.nodes[idx] = hit[2]
+    stack.parent.sorted[stack.pixel_idx] = false
     return stack
 end
 
@@ -354,7 +372,10 @@ Base.get(pixel_hits::FlatPixelHits, idx::Int, default) =
     (1 <= idx <= length(pixel_hits.counts) && pixel_hits.counts[idx] > 0) ? FlatPixelHitStack(pixel_hits, idx) : default
 
 function Base.delete!(pixel_hits::FlatPixelHits, idx::Int)
-    1 <= idx <= length(pixel_hits.counts) && (pixel_hits.counts[idx] = 0)
+    if 1 <= idx <= length(pixel_hits.counts)
+        pixel_hits.counts[idx] = 0
+        pixel_hits.sorted[idx] = false
+    end
     return pixel_hits
 end
 
@@ -486,7 +507,7 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
             pos = builder.next[pos]
         end
     end
-    return FlatPixelHits(starts, copy(builder.counts), occupied, heights, nodes)
+    return FlatPixelHits(starts, copy(builder.counts), occupied, falses(n_pixels), heights, nodes)
 end
 
 function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
