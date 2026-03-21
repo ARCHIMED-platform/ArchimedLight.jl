@@ -10,6 +10,35 @@ struct ProjectionCacheContext
     scene_key::UInt64
 end
 
+const HitRecord = Tuple{Float64,Int}
+
+"""
+    SmallHitStack
+
+Compact per-pixel hit stack optimized for the common short-stack case.
+
+The first two hits are stored directly in the struct, so pixels with 0-2 hits
+do not allocate a separate heap vector. When a third hit arrives, the stack
+"spills" to a regular `Vector{HitRecord}` stored in `spill`.
+
+This is a tradeoff:
+- small inline capacity keeps each occupied pixel stack compact
+- larger inline capacity would reduce spills in dense canopies, but would make
+  every stack heavier even when it only contains one or two hits
+
+The current inline capacity of 2 is a conservative default, not a universal
+optimum. Users can override the storage mode with
+`LightOptions(pixel_hit_stack_mode=...)`.
+"""
+mutable struct SmallHitStack <: AbstractVector{HitRecord}
+    len::UInt8
+    hit1::HitRecord
+    hit2::HitRecord
+    spill::Union{Nothing,Vector{HitRecord}}
+end
+
+SmallHitStack() = SmallHitStack(0x00, (0.0, 0), (0.0, 0), nothing)
+
 """
     DensePixelHits
 
@@ -17,8 +46,8 @@ Dense storage for per-pixel hit stacks. This avoids hashing pixel indices during
 projection when the plotbox is small enough that a flat table is cheaper than a
 `Dict`.
 """
-struct DensePixelHits
-    stacks::Vector{Union{Nothing,Vector{Tuple{Float64,Int}}}}
+struct DensePixelHits{S}
+    stacks::Vector{Union{Nothing,S}}
 end
 
 struct DirectionProjectionResult{PH}
@@ -53,11 +82,110 @@ struct PreparedInterceptionData
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
 end
 
+Base.IndexStyle(::Type{<:SmallHitStack}) = IndexLinear()
+Base.size(stack::SmallHitStack) = (Int(stack.len),)
+Base.length(stack::SmallHitStack) = Int(stack.len)
+
+function Base.getindex(stack::SmallHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    if stack.spill === nothing
+        return i == 1 ? stack.hit1 : stack.hit2
+    end
+    return stack.spill[i]
+end
+
+function Base.setindex!(stack::SmallHitStack, hit::HitRecord, i::Int)
+    @boundscheck checkbounds(stack, i)
+    if stack.spill === nothing
+        if i == 1
+            stack.hit1 = hit
+        else
+            stack.hit2 = hit
+        end
+    else
+        stack.spill[i] = hit
+    end
+    return stack
+end
+
+function Base.push!(stack::SmallHitStack, hit::HitRecord)
+    len = length(stack)
+    if len == 0
+        stack.hit1 = hit
+    elseif len == 1
+        stack.hit2 = hit
+    elseif len == 2
+        stack.spill = HitRecord[stack.hit1, stack.hit2, hit]
+    else
+        push!(stack.spill, hit)
+    end
+    stack.len = UInt8(len + 1)
+    return stack
+end
+
+function Base.deleteat!(stack::SmallHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    len = length(stack)
+    if stack.spill === nothing
+        if len == 1
+            stack.hit1 = (0.0, 0)
+        elseif i == 1
+            stack.hit1 = stack.hit2
+            stack.hit2 = (0.0, 0)
+        else
+            stack.hit2 = (0.0, 0)
+        end
+    else
+        deleteat!(stack.spill, i)
+        if len - 1 == 2
+            stack.hit1 = stack.spill[1]
+            stack.hit2 = stack.spill[2]
+            stack.spill = nothing
+        elseif len - 1 == 1
+            stack.hit1 = stack.spill[1]
+            stack.hit2 = (0.0, 0)
+            stack.spill = nothing
+        elseif len - 1 == 0
+            stack.hit1 = (0.0, 0)
+            stack.hit2 = (0.0, 0)
+            stack.spill = nothing
+        end
+    end
+    stack.len = UInt8(len - 1)
+    return stack
+end
+
+function Base.sort!(stack::SmallHitStack; by=identity, rev::Bool=false, alg=Base.DEFAULT_STABLE)
+    len = length(stack)
+    len <= 1 && return stack
+    if stack.spill === nothing
+        a = by(stack.hit1)
+        b = by(stack.hit2)
+        swap = rev ? (a < b) : (a > b)
+        if swap
+            stack.hit1, stack.hit2 = stack.hit2, stack.hit1
+        end
+        return stack
+    end
+    sort!(stack.spill; by=by, rev=rev, alg=alg)
+    return stack
+end
+
+@inline _stack_hit(stack, i::Int) = stack[i]
+@inline function _stack_hit(stack::SmallHitStack, i::Int)
+    if stack.spill === nothing
+        return i == 1 ? stack.hit1 : stack.hit2
+    end
+    return @inbounds stack.spill[i]
+end
+
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+@inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
+@inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
 
 const _DENSE_PIXEL_HITS_MAX_CELLS = 250_000
 
-DensePixelHits(n::Int) = DensePixelHits(fill(nothing, n))
+DensePixelHits(::Type{S}, n::Int) where {S} = DensePixelHits{S}(fill(nothing, n))
 
 Base.get(pixel_hits::DensePixelHits, idx::Int, default) =
     (1 <= idx <= length(pixel_hits.stacks) && pixel_hits.stacks[idx] !== nothing) ? pixel_hits.stacks[idx] : default
@@ -79,6 +207,44 @@ end
 Base.values(pixel_hits::DensePixelHits) = (stack for stack in pixel_hits.stacks if stack !== nothing)
 
 @inline _use_dense_pixel_hits(plotbox) = (plotbox.nx * plotbox.ny) <= _DENSE_PIXEL_HITS_MAX_CELLS
+
+"""
+    _pixel_hit_stack_mode(options)
+
+Normalize the user-facing pixel-hit stack storage selector.
+
+Accepted values are:
+- `"auto"`: current validated optimized default
+- `"small"`: force `SmallHitStack`
+- `"vector"`: force the legacy `Vector{HitRecord}` representation
+
+`"auto"` currently resolves to the same path as `"small"`. This keeps the best
+default we have validated so far while still giving users a manual escape hatch
+for scene classes where they know deeper pixel stacks are common.
+"""
+function _pixel_hit_stack_mode(options::LightOptions)
+    mode = lowercase(strip(options.pixel_hit_stack_mode))
+    mode in ("auto", "small", "vector") || error(
+        "Unsupported pixel_hit_stack_mode=$(repr(options.pixel_hit_stack_mode)); " *
+        "supported values are \"auto\", \"small\", \"vector\".",
+    )
+    return mode
+end
+
+@inline function _pixel_hit_stack_type(options::LightOptions)
+    mode = _pixel_hit_stack_mode(options)
+    return mode == "vector" ? Vector{HitRecord} : SmallHitStack
+end
+
+@inline _new_hit_stack(::Type{SmallHitStack}) = SmallHitStack()
+@inline _new_hit_stack(::Type{Vector{HitRecord}}) = HitRecord[]
+
+function _pixel_hits_table(::Type{S}, dense::Bool, plotbox) where {S}
+    if dense
+        return DensePixelHits(S, plotbox.nx * plotbox.ny)
+    end
+    return Dict{Int,S}()
+end
 
 function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
     out = Dict{Int,Float64}()
@@ -137,9 +303,8 @@ function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_
     stack === nothing && return
     isempty(stack) && return
 
-    sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
-    top = stack[1]
-    top_nid = _hit_node(top)
+    _sort_hit_stack!(stack)
+    top_nid = _stack_hit_node(stack, 1)
     top_nid == spec.node_id || return
 
     deleteat!(stack, 1)
@@ -411,15 +576,15 @@ function _emitter_transfer_weights(
         for stack in values(projection.pixel_hits)
             length(stack) <= 1 && continue
             # Java uses a stable sort for hit heights; preserve insertion order on ties.
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+            _sort_hit_stack!(stack)
 
             for i in eachindex(stack)
-                src = stack[i][2]
+                src = _stack_hit_node(stack, i)
                 src in emitter_nodes || continue
 
                 to = 0
                 for j in (i+1):length(stack)
-                    nid = stack[j][2]
+                    nid = _stack_hit_node(stack, j)
                     nid in emitter_nodes && continue
                     to = nid
                     break
@@ -456,12 +621,12 @@ function _emitter_transfer_weights_from_projections(
             stacks_sorted || _sort_hit_stack!(stack)
 
             for j in eachindex(stack)
-                src = stack[j][2]
+                src = _stack_hit_node(stack, j)
                 src in emitter_nodes || continue
 
                 to = 0
                 for k in (j + 1):length(stack)
-                    nid = stack[k][2]
+                    nid = _stack_hit_node(stack, k)
                     nid in emitter_nodes && continue
                     to = nid
                     break
@@ -805,6 +970,7 @@ function _project_triangle!(
     toricity::Bool,
     upper_hit::Bool,
     strict_java_float::Bool,
+    stack_type::Type,
 )
     _project_triangle!(
         pixel_hits,
@@ -828,6 +994,7 @@ function _project_triangle!(
         upper_hit,
         strict_java_float,
         1.0f0,
+        stack_type,
     )
 end
 
@@ -853,6 +1020,7 @@ function _project_triangle!(
     upper_hit::Bool,
     strict_java_float::Bool,
     unit_scale::Float32,
+    stack_type::Type,
 )
     u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
     ox = Float32(origin_x) * u
@@ -925,12 +1093,12 @@ function _project_triangle!(
                 idx = ii + 1 + jj * nx
                 zpix_f32 = Float64(zpix / u)
                 h = get!(pixel_hits, idx) do
-                    Vector{Tuple{Float64,Int}}()
+                    _new_hit_stack(stack_type)
                 end
                 if upper_hit
                     if isempty(h)
                         push!(h, (zpix_f32, node_id))
-                    elseif zpix_f32 > h[1][1]
+                    elseif zpix_f32 > _stack_hit_height(h, 1)
                         h[1] = (zpix_f32, node_id)
                     end
                 else
@@ -1088,11 +1256,9 @@ function _direction_projection_dense(
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
     strict_java_float = _strict_java_float(options)
     unit_scale = Float32(_projection_unit_scale(options))
+    stack_type = _pixel_hit_stack_type(options)
 
-    pixel_hits =
-        dense_pixel_hits && _use_dense_pixel_hits(plotbox) ?
-        DensePixelHits(plotbox.nx * plotbox.ny) :
-        Dict{Int,Vector{Tuple{Float64,Int}}}()
+    pixel_hits = _pixel_hits_table(stack_type, dense_pixel_hits && _use_dense_pixel_hits(plotbox), plotbox)
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
     projected_pixels_area = zeros(Float64, length(node_ids))
@@ -1123,6 +1289,7 @@ function _direction_projection_dense(
             use_upper_hit,
             strict_java_float,
             unit_scale,
+            stack_type,
         )
     end
 

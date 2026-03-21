@@ -111,6 +111,17 @@ Base.keys(models::LightModels) = keys(models.groups)
 Base.haskey(models::LightModels, key) = haskey(models.groups, key)
 Base.getindex(models::LightModels, key) = models.groups[key]
 
+"""
+    LightOptions
+
+Runtime controls for interception, scattering, and caching.
+
+`pixel_hit_stack_mode` selects how per-pixel hit stacks are stored during raster
+projection:
+- `"auto"`: current default optimized path
+- `"small"`: force inline small stacks with spillover allocation
+- `"vector"`: force the legacy `Vector` stack representation
+"""
 Base.@kwdef struct LightOptions
     all_in_turtle::Bool = false
     turtle_sectors::Int = 46
@@ -123,6 +134,7 @@ Base.@kwdef struct LightOptions
     scattering_coeff_nir::Float64 = 0.30
     cache_radiation::Bool = false
     cache_pixel_table::Bool = false
+    pixel_hit_stack_mode::String = "auto"
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
     nir_interception::Bool = true
@@ -147,6 +159,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :scattering_coeff_nir => old.scattering_coeff_nir,
         :cache_radiation => old.cache_radiation,
         :cache_pixel_table => old.cache_pixel_table,
+        :pixel_hit_stack_mode => old.pixel_hit_stack_mode,
         :toricity => old.toricity,
         :radiation_timestep_minutes => old.radiation_timestep_minutes,
         :nir_interception => old.nir_interception,

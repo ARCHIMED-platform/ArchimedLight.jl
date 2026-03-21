@@ -85,7 +85,7 @@ ScatteringStackScratch() = ScatteringStackScratch(Int[])
 
 function _stack_transfer_pairs!(
     edge_counts::Dict{UInt64,Int},
-    stack::Vector{Tuple{Float64,Int}},
+    stack,
     virtual_nodes::Set{Int},
     scratch::ScatteringStackScratch,
     node_group::Dict{Int,String},
@@ -96,7 +96,7 @@ function _stack_transfer_pairs!(
 
     nearest_below = 0
     @inbounds for h in n_hits:-1:1
-        nid = _hit_node(stack[h])
+        nid = _stack_hit_node(stack, h)
         if !(nid in virtual_nodes)
             nearest_below = nid
         end
@@ -105,7 +105,7 @@ function _stack_transfer_pairs!(
 
     nearest_above = 0
     @inbounds for h in 1:(n_hits - 1)
-        to_above = _hit_node(stack[h])
+        to_above = _stack_hit_node(stack, h)
         if !(to_above in virtual_nodes)
             nearest_above = to_above
         end
@@ -115,7 +115,7 @@ function _stack_transfer_pairs!(
             _add_packed_edge_count!(edge_counts, to_above, from_below)
         end
 
-        to_below = _hit_node(stack[h + 1])
+        to_below = _stack_hit_node(stack, h + 1)
         from_above = nearest_above
         if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
             _add_packed_edge_count!(edge_counts, to_below, from_above)
