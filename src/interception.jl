@@ -183,7 +183,9 @@ end
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
 
-const _DENSE_PIXEL_HITS_MAX_CELLS = 250_000
+# Dense tables avoid hash traffic on packed canopies, but above this size the empty-cell
+# overhead starts to outweigh the benefit on sparse scenes.
+const _DENSE_PIXEL_HITS_MAX_CELLS = 500_000
 
 DensePixelHits(::Type{S}, n::Int) where {S} = DensePixelHits{S}(fill(nothing, n))
 
