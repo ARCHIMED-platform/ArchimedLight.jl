@@ -189,9 +189,15 @@ function _build_sector_responses(
     for i in 1:n
         projection = _prepared_direction_projection(prepared, turtle.sectors[i].direction, options)
         pa_by_sector[i] =
-            _dense_sector_float(
-                _visible_area_from_projection(projection, options, geometry.plotbox, prepared.virtual_nodes),
-                geometry,
+            DenseNodeMap(
+                geometry.node_ids,
+                _visible_area_from_projection_dense(
+                    projection,
+                    options,
+                    geometry.plotbox,
+                    prepared.virtual_nodes,
+                    geometry,
+                ),
             )
         hits_by_sector[i] = _dense_sector_int(projection.node_hits, geometry)
         keep_projections && (projections[i] = projection)

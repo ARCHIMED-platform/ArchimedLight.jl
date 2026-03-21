@@ -996,6 +996,43 @@ function _visible_area_from_projection(
     return visible_area
 end
 
+function _visible_area_from_projection_dense(
+    projection::DirectionProjectionResult,
+    options::LightOptions,
+    plotbox,
+    virtual_nodes::Set{Int},
+    geometry::InterceptionSceneData,
+    stacks_sorted::Bool=false,
+)
+    visible_area = zeros(Float64, length(geometry.node_ids))
+    for stack in values(projection.pixel_hits)
+        isempty(stack) && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+
+        non_virtual_seen = false
+        first_non_virtual = 0
+        for hit in stack
+            nid = _hit_node(hit)
+            if nid in virtual_nodes
+                if !non_virtual_seen
+                    ratio = _projection_area_ratio(projection, options, nid)
+                    visible_area[geometry.node_index[nid]] += plotbox.pixel_area * ratio
+                end
+            else
+                first_non_virtual = nid
+                non_virtual_seen = true
+                break
+            end
+        end
+        if first_non_virtual != 0
+            ratio = _projection_area_ratio(projection, options, first_non_virtual)
+            visible_area[geometry.node_index[first_non_virtual]] += plotbox.pixel_area * ratio
+        end
+    end
+
+    return visible_area
+end
+
 function _prepared_direction_projection(
     prepared::PreparedInterceptionData,
     direction,
@@ -1477,7 +1514,14 @@ function _compute_first_order(
 
     for (k, sector) in enumerate(turtle.sectors)
         projection = _prepared_direction_projection(prepared, sector.direction, options)
-        visible_area = _visible_area_from_projection(projection, options, geometry.plotbox, prepared.virtual_nodes)
+        visible_area =
+            _visible_area_from_projection_dense(
+                projection,
+                options,
+                geometry.plotbox,
+                prepared.virtual_nodes,
+                geometry,
+            )
         node_hits = projection.node_hits
 
         for (nid, h) in node_hits
@@ -1490,9 +1534,9 @@ function _compute_first_order(
             continue
         end
 
-        for (nid, pa) in visible_area
+        @inbounds for idx in eachindex(visible_area)
+            pa = visible_area[idx]
             pa <= 0.0 && continue
-            idx = geometry.node_index[nid]
             projected_area_per_node[idx] += pa
             incident_power_par[idx] += par_flux * pa
             incident_power_nir[idx] += nir_flux * pa
