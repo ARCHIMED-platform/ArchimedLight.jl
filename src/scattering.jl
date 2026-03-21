@@ -154,7 +154,7 @@ function _accumulate_scattering_counts!(
     edge_counts::Dict{UInt64,Int},
     sun_hits::Dict{Int,Int},
     sector::TurtleSector,
-    projection,
+    projection::DirectionProjectionResult,
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
     scratch::ScatteringStackScratch;
@@ -170,6 +170,70 @@ function _accumulate_scattering_counts!(
         length(stack) <= 1 && continue
         stacks_sorted || _sort_hit_stack!(stack)
         _stack_transfer_pairs!(edge_counts, stack, virtual_nodes, scratch, node_group)
+    end
+    return nothing
+end
+
+function _accumulate_scattering_counts!(
+    edge_counts::Dict{UInt64,Int},
+    sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DenseDirectionProjectionResult,
+    virtual_node_mask::Vector{Bool},
+    node_group_by_index::Vector{String},
+    scratch::ScatteringStackScratch;
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+    stacks_sorted::Bool=false,
+)
+    node_ids === nothing && error("DenseDirectionProjectionResult scattering accumulation requires node_ids")
+    if sector.source == :sun
+        _accumulate_sun_hits!(sun_hits, projection, node_ids)
+        return nothing
+    end
+
+    for stack in values(projection.pixel_hits)
+        n_hits = length(stack)
+        n_hits <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+
+        below = scratch.nearest_nonvirtual_below
+        resize!(below, n_hits)
+
+        nearest_below = 0
+        @inbounds for h in n_hits:-1:1
+            node_idx = _stack_hit_node(stack, h)
+            if !virtual_node_mask[node_idx]
+                nearest_below = node_idx
+            end
+            below[h] = nearest_below
+        end
+
+        nearest_above = 0
+        @inbounds for h in 1:(n_hits - 1)
+            to_above_idx = _stack_hit_node(stack, h)
+            if !virtual_node_mask[to_above_idx]
+                nearest_above = to_above_idx
+            end
+
+            from_below_idx = below[h + 1]
+            if from_below_idx != 0
+                to_above = node_ids[to_above_idx]
+                from_below = node_ids[from_below_idx]
+                if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
+                    _add_packed_edge_count!(edge_counts, to_above, from_below)
+                end
+            end
+
+            to_below_idx = _stack_hit_node(stack, h + 1)
+            from_above_idx = nearest_above
+            if from_above_idx != 0
+                to_below = node_ids[to_below_idx]
+                from_above = node_ids[from_above_idx]
+                if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
+                    _add_packed_edge_count!(edge_counts, to_below, from_above)
+                end
+            end
+        end
     end
     return nothing
 end
@@ -205,6 +269,8 @@ function _pair_counts_from_projections(
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
     node_ids::Union{Nothing,Vector{Int}}=nothing,
+    node_group_by_index::Union{Nothing,Vector{String}}=nothing,
+    virtual_node_mask::Union{Nothing,Vector{Bool}}=nothing,
     stacks_sorted::Bool=false,
 )
     edge_counts = Dict{UInt64,Int}()
@@ -212,17 +278,32 @@ function _pair_counts_from_projections(
     scratch = ScatteringStackScratch()
 
     for i in eachindex(turtle.sectors)
-        _accumulate_scattering_counts!(
-            edge_counts,
-            sun_hits,
-            turtle.sectors[i],
-            projections[i],
-            virtual_nodes,
-            node_group,
-            scratch;
-            node_ids=node_ids,
-            stacks_sorted=stacks_sorted,
-        )
+        projection = projections[i]
+        if projection isa DenseDirectionProjectionResult
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                turtle.sectors[i],
+                projection,
+                virtual_node_mask,
+                node_group_by_index,
+                scratch;
+                node_ids=node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        else
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                turtle.sectors[i],
+                projection,
+                virtual_nodes,
+                node_group,
+                scratch;
+                node_ids=node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        end
     end
 
     return _edge_counts_from_packed(edge_counts), sun_hits
@@ -240,17 +321,31 @@ function _pair_counts_from_streamed_projections(
 
     for sector in turtle.sectors
         projection = _prepared_direction_projection(prepared, sector.direction, options)
-        _accumulate_scattering_counts!(
-            edge_counts,
-            sun_hits,
-            sector,
-            projection,
-            prepared.virtual_nodes,
-            prepared.geometry.node_group,
-            scratch;
-            node_ids=prepared.geometry.node_ids,
-            stacks_sorted=stacks_sorted,
-        )
+        if projection isa DenseDirectionProjectionResult
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                sector,
+                projection,
+                prepared.virtual_node_mask,
+                prepared.geometry.node_group_by_index,
+                scratch;
+                node_ids=prepared.geometry.node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        else
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                sector,
+                projection,
+                prepared.virtual_nodes,
+                prepared.geometry.node_group,
+                scratch;
+                node_ids=prepared.geometry.node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        end
     end
 
     return _edge_counts_from_packed(edge_counts), sun_hits
@@ -352,6 +447,8 @@ function _build_scattering_topology_cache(
         prepared.virtual_nodes,
         prepared.geometry.node_group,
         prepared.geometry.node_ids,
+        prepared.geometry.node_group_by_index,
+        prepared.virtual_node_mask,
         stacks_sorted,
     )
     return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)

@@ -199,32 +199,57 @@ function _build_sector_responses(
                     projection,
                     options,
                     geometry.plotbox,
-                    prepared.virtual_nodes,
+                    prepared.virtual_node_mask,
                     geometry,
                 ),
             )
         hits_by_sector[i] = DenseNodeMap(geometry.node_ids, copy(_dense_projection_hits(projection, geometry)))
         if emitter_edge_counts !== nothing
-            _accumulate_emitter_transfer_counts!(
-                emitter_edge_counts,
-                emitter_total_from,
-                projection,
-                prepared.emitter_nodes;
-                stacks_sorted=true,
-            )
+            if projection isa DenseDirectionProjectionResult
+                _accumulate_emitter_transfer_counts!(
+                    emitter_edge_counts,
+                    emitter_total_from,
+                    projection,
+                    prepared.emitter_node_mask,
+                    geometry.node_ids;
+                    stacks_sorted=true,
+                )
+            else
+                _accumulate_emitter_transfer_counts!(
+                    emitter_edge_counts,
+                    emitter_total_from,
+                    projection,
+                    prepared.emitter_nodes;
+                    stacks_sorted=true,
+                )
+            end
         end
         if scattering_edge_counts !== nothing
-            _accumulate_scattering_counts!(
-                scattering_edge_counts,
-                scattering_sun_hits,
-                sector,
-                projection,
-                prepared.virtual_nodes,
-                geometry.node_group,
-                scattering_scratch;
-                node_ids=geometry.node_ids,
-                stacks_sorted=true,
-            )
+            if projection isa DenseDirectionProjectionResult
+                _accumulate_scattering_counts!(
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared.virtual_node_mask,
+                    geometry.node_group_by_index,
+                    scattering_scratch;
+                    node_ids=geometry.node_ids,
+                    stacks_sorted=true,
+                )
+            else
+                _accumulate_scattering_counts!(
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared.virtual_nodes,
+                    geometry.node_group,
+                    scattering_scratch;
+                    node_ids=geometry.node_ids,
+                    stacks_sorted=true,
+                )
+            end
         end
     end
     emitter_weights =
@@ -323,7 +348,7 @@ function _stream_first_order_with_scattering_topology(
                 projection,
                 options,
                 geometry.plotbox,
-                prepared.virtual_nodes,
+                prepared.virtual_node_mask,
                 geometry,
             )
 
@@ -342,25 +367,50 @@ function _stream_first_order_with_scattering_topology(
         end
 
         if emitter_edge_counts !== nothing
-            _accumulate_emitter_transfer_counts!(
-                emitter_edge_counts,
-                emitter_total_from,
+            if projection isa DenseDirectionProjectionResult
+                _accumulate_emitter_transfer_counts!(
+                    emitter_edge_counts,
+                    emitter_total_from,
+                    projection,
+                    prepared.emitter_node_mask,
+                    geometry.node_ids;
+                    stacks_sorted=true,
+                )
+            else
+                _accumulate_emitter_transfer_counts!(
+                    emitter_edge_counts,
+                    emitter_total_from,
+                    projection,
+                    prepared.emitter_nodes;
+                    stacks_sorted=true,
+                )
+            end
+        end
+        if projection isa DenseDirectionProjectionResult
+            _accumulate_scattering_counts!(
+                scattering_edge_counts,
+                scattering_sun_hits,
+                sector,
                 projection,
-                prepared.emitter_nodes;
+                prepared.virtual_node_mask,
+                geometry.node_group_by_index,
+                scattering_scratch;
+                node_ids=geometry.node_ids,
+                stacks_sorted=true,
+            )
+        else
+            _accumulate_scattering_counts!(
+                scattering_edge_counts,
+                scattering_sun_hits,
+                sector,
+                projection,
+                prepared.virtual_nodes,
+                geometry.node_group,
+                scattering_scratch;
+                node_ids=geometry.node_ids,
                 stacks_sorted=true,
             )
         end
-        _accumulate_scattering_counts!(
-            scattering_edge_counts,
-            scattering_sun_hits,
-            sector,
-            projection,
-            prepared.virtual_nodes,
-            geometry.node_group,
-            scattering_scratch;
-            node_ids=geometry.node_ids,
-            stacks_sorted=true,
-        )
     end
 
     if emitter_edge_counts !== nothing
