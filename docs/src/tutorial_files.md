@@ -3,8 +3,12 @@
 This tutorial is the standard ARCHIMED workflow: a scene on disk, one or more model files, a meteo CSV, and a `config.yml` that ties them together.
 
 It uses the deliberately small fixture under `example_1/`, because every file is compact enough to read directly.
+For the live figure in this page, the tutorial disables the dense automatic paving requested by `plot_paving: 80` and replaces it with a compact explicit ground patch, so the soil interception is visible and the plant does not disappear in a sea of tiny tiles.
 
-![Simple plant scene](assets/example_simpleplant_scene.png)
+```@setup file_workflow
+using CairoMakie
+CairoMakie.activate!(type = "png")
+```
 
 ## Directory Layout
 
@@ -32,11 +36,20 @@ The roles of those files are:
 
 ## Step 1: Load Everything From The Config
 
-```julia
+```@example file_workflow
 using ArchimedLight
 
-config = joinpath("example_1", "config.yml")
-options, scene, meteo, models = read_config(config)
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_1", "config.yml")
+options, scene, meteo, models = read_config(config; plot_paving_override=0)
+add_ground!(
+    scene;
+    nx=4,
+    ny=4,
+    xy_bounds=(-0.18, -0.18, 0.18, 0.18),
+    group="pavement",
+    type="Cobblestone",
+)
 rows = prepare_meteo(meteo, options).rows
 ```
 
@@ -47,13 +60,17 @@ At this point:
 - `meteo` is a `MeteoTable`
 - `models` is a `LightModels`
 
+The soil optics still come from `model_soil.yml`. The only thing changed here is how the paving geometry is materialized for the demonstration figure.
+
 ## Step 2: Run One Step Or A Whole Series
 
 For a single time step:
 
-```julia
+```@example file_workflow
 row = first(rows)
 step = run_light_step(scene, models, row, options)
+
+step
 ```
 
 For every meteo row:
@@ -62,11 +79,11 @@ For every meteo row:
 series = run_light_series(scene, models, meteo, options)
 ```
 
-When `LightOptions(cache_radiation=true)` is enabled, `run_light_series` can reuse directional responses between meteo rows on the same scene, which improves performance a lot.
+Enabling `LightOptions(cache_radiation=true)` allows `run_light_series` to reuse directional responses across meteo rows on the same scene, substantially improving performance.
 
 ## Step 3: Inspect The Budget
 
-```julia
+```@example file_workflow
 budget = step.budget
 
 budget.incident_flux.initial.par
@@ -89,23 +106,41 @@ Flux values are in `W m^-2` and energy values are in `J` per component per step.
 
 After computing the light interception, you can attach the results back onto the scene for visualization or export. This is done with the `attach_light_step!` function, which takes the scene, the light step result, and a list of fields to attach.
 
-```julia
+```@example file_workflow
 attach_light_step!(
     scene,
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
-)
-
-write_scene(joinpath("example_1", "output", "scene_with_light.opf"), scene)
+);
 ```
-
 This keeps the historical ARCHIMED attribute names on the nodes:
 
 - `Ri_PAR_f`
 - `Ri_PAR_q`
 - `Ra_PAR_q`
 
-![Simple plant coloured by intercepted PAR](assets/example_simpleplant_scene_ri_par_q.png)
+The figure below uses that attached `Ri_PAR_f` field, so you can verify that the ground really intercepts light too:
+
+```@example file_workflow
+using PlantGeom, CairoMakie
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    figure=(size=(900, 700),),
+)
+
+PlantGeom.colorbar(fig[1, 2], p, label="Intercepted PAR (W m⁻²)")
+fig
+```
+
+Then we can write the scene with attached results back to disk:
+
+```@example file_workflow
+out_path = joinpath(mktempdir(), "example_1_scene_with_light.ops")
+write_scene(out_path, scene)
+```
 
 ## Reading The Input Files Together
 
@@ -132,4 +167,4 @@ In particular:
 - scene, model, and meteo paths are active
 - the light options described on the configuration reference page are active
 - many Java-era output toggles remain as documentation or archival context
-- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime
+- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime, because they are delegated to [Plantiophysics.jl](https://github.com/VEZY/PlantBiophysics.jl).

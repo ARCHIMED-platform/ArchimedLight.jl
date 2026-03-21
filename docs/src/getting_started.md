@@ -16,14 +16,21 @@ It uses the bundled coffee example from `example_2/`, which is also the source o
 
 ## Minimal Run
 
-From the repository root:
+```@setup getting_started
+using ArchimedLight, PlantGeom, CairoMakie
+CairoMakie.activate!(type = "png")
+```
 
-```julia
+```@example getting_started
 using ArchimedLight
-config =  joinpath(dirname(dirname(pathof(ArchimedLight))), "example_2", "config.yml")
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
 options, scene, meteo, models = read_config(config)
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)
+
+step
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -37,14 +44,17 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 
 `ArchimedLight.jl` keeps the numeric results in Julia objects by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
-```julia
+```@example getting_started
 attach_light_step!(
     scene,
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
 )
 
-write_scene("output/coffee_step.opf", scene)
+out_path = joinpath(mktempdir(), "coffee_step.opf")
+write_scene(out_path, scene)
+
+out_path
 ```
 
 The attached node attributes use the standard ARCHIMED names:
@@ -58,8 +68,9 @@ The attached node attributes use the standard ARCHIMED names:
 
 You can plot the results using `PlantGeom.jl` + `Makie.jl`:
 
-```julia
+```@example getting_started
 using PlantGeom, CairoMakie
+
 fig, ax, p = plantviz(
     scene.mtg;
     color=:Ri_PAR_f,
@@ -70,6 +81,8 @@ fig, ax, p = plantviz(
 PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 fig
 ```
+
+By default, the `toricity` parameter is activated, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
 
 ## What To Read Next
 

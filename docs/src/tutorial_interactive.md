@@ -7,6 +7,11 @@ The key bridge is:
 - `PlantGeom` builds or edits an MTG with geometry
 - `prepare_scene` turns that MTG into the dense scene representation used by `ArchimedLight.jl`
 
+```@setup interactive_workflow
+using CairoMakie
+CairoMakie.activate!(type = "png")
+```
+
 ## When To Use This Workflow
 
 - you generate plants procedurally
@@ -16,8 +21,10 @@ The key bridge is:
 
 ## Minimal Example With The Growth API
 
-```julia
+```@example interactive_workflow
 using ArchimedLight
+using CairoMakie
+using Dates
 using GeometryBasics
 using MultiScaleTreeGraph
 using OrderedCollections: OrderedDict
@@ -88,6 +95,24 @@ scene = prepare_scene(
     source_path="interactive_growth.opf",
     scene_xy_bounds=(-0.5, -0.5, 0.5, 0.5),
 )
+
+println(length(scene.nodes))
+sort!(collect(keys(scene.nodes)))
+```
+
+## Inspect The Generated Plant
+
+Before running light, it is useful to verify that the procedural geometry looks right:
+
+```@example interactive_workflow
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:olivedrab3,
+    figure=(size=(900, 700),),
+)
+
+ax.show_axis[] = false
+fig
 ```
 
 A few details matter here:
@@ -100,7 +125,7 @@ A few details matter here:
 
 You do not need model files if you already know the optical parameters:
 
-```julia
+```@example interactive_workflow
 models = prepare_models([
     GroupModel(
         "coffee";
@@ -122,9 +147,48 @@ models = prepare_models([
         ),
     ),
 ])
+
+keys(models.groups) |> collect
 ```
 
 Wildcard models are also supported:
+
+```@example interactive_workflow
+wildcard_models = prepare_models([
+    GroupModel(
+        "*";
+        types=OrderedDict(
+            "*" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.30),
+                ),
+            ),
+        ),
+    ),
+])
+
+keys(wildcard_models.groups) |> collect
+```
+
+The wildcard `"*"` means “fallback for anything not matched more specifically”.
+You can use it at two levels:
+
+- group wildcard: `GroupModel("*", ...)` is a fallback for any functional group
+- type wildcard: `"*"` inside `types=...` is a fallback for any component type in that group
+
+This is useful when:
+
+- building synthetic scenes where many nodes share the same optical behavior
+- writing tests that should not depend on a long list of exact type names
+- prototyping an in-memory workflow before introducing a full ARCHIMED model file hierarchy
+- setting a default rule and later overriding only a few exact `(group, type)` pairs
+
+The previous example defines the broadest possible fallback: one optical model for any group and any type.
+More specific exact matches still take precedence when they exist.
+
+For example, you can mix exact rules and a fallback:
 
 ```julia
 models = prepare_models([
@@ -143,15 +207,15 @@ models = prepare_models([
 ])
 ```
 
-That pattern is convenient for synthetic scenes or tests.
+That pattern is convenient for synthetic scenes, tests, and gradual model setup.
 
 ## Run Light Without A Meteo File
 
 If you already know the sky state you want to test, you can bypass file I/O entirely:
 
-```julia
+```@example interactive_workflow
 options = LightOptions(
-    turtle_sectors=16,
+    turtle_sectors=6,
     pixel_size=0.01,
     toricity=false,
     scattering=true,
@@ -171,15 +235,49 @@ fluxes = compute_directional_fluxes(sky, turtle, options)
 first = compute_first_order(scene, models, turtle, fluxes, options)
 scat = compute_scattering(scene, models, turtle, first, options)
 budget = integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
+
+step = LightStepResult(sky, turtle, fluxes, first, scat, budget, Dict{String,Float64}())
+step
 ```
 
 This is the most direct way to couple a geometry generator and the light model.
+
+Once the step has been computed, you can attach light interception back onto the MTG and inspect it directly:
+
+```@example interactive_workflow
+attach_light_step!(scene, step; fields=[:incident_par_flux])
+par_max = maximum(values(step.budget.incident_flux.total.par))
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    colorrange=(0.0, par_max),
+    color_missing=:gray85,
+    figure=(size=(900, 700),),
+)
+
+ax.show_axis[] = false
+PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
+fig
+```
+
+You can also inspect the grouped totals directly:
+
+```@example interactive_workflow
+(
+    incident_par = sum(values(step.budget.incident_energy.total.par)),
+    incident_nir = sum(values(step.budget.incident_energy.total.nir)),
+    absorbed_par = sum(values(step.budget.absorbed_energy.total.par)),
+    absorbed_nir = sum(values(step.budget.absorbed_energy.total.nir)),
+)
+```
 
 ## Modify Geometry And Re-run
 
 Once the geometry stays in memory, you can grow or edit it and reuse the same pattern:
 
-```julia
+```@example interactive_workflow
 grow_length!(axis; delta=0.05, bump_scene=false)
 set_growth_attributes!(axis; Width=0.025, Thickness=0.025, bump_scene=false)
 rebuild_geometry!(mtg, prototypes; bump_scene=false)
@@ -201,10 +299,32 @@ step = run_light_step(
         relativeHumidity=60.0,
         RI_PAR_f=350.0,
         RI_NIR_f=250.0,
-        use="relativeHumidity RI_PAR_f RI_NIR_f",
+        use="relativeHumidity",
     ),
     options,
 )
+
+step
+```
+
+And you can visualize the updated geometry with the new interception field after growth:
+
+```@example interactive_workflow
+attach_light_step!(scene, step; fields=[:incident_par_flux])
+par_max = maximum(values(step.budget.incident_flux.total.par))
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    colorrange=(0.0, par_max),
+    color_missing=:gray85,
+    figure=(size=(900, 700),),
+)
+
+ax.show_axis[] = false
+PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
+fig
 ```
 
 ## Practical Advice
