@@ -186,6 +186,7 @@ end
 # Dense tables avoid hash traffic on packed canopies, but above this size the empty-cell
 # overhead starts to outweigh the benefit on sparse scenes.
 const _DENSE_PIXEL_HITS_MAX_CELLS = 500_000
+const _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS = 300_000
 
 DensePixelHits(::Type{S}, n::Int) where {S} = DensePixelHits{S}(fill(nothing, n))
 
@@ -220,9 +221,11 @@ Accepted values are:
 - `"small"`: force `SmallHitStack`
 - `"vector"`: force the legacy `Vector{HitRecord}` representation
 
-`"auto"` currently resolves to the same path as `"small"`. This keeps the best
-default we have validated so far while still giving users a manual escape hatch
-for scene classes where they know deeper pixel stacks are common.
+`"auto"` keeps `SmallHitStack` for the validated sparse and mid-density cases,
+but switches to the legacy `Vector{HitRecord}` storage when the plot raster is
+large enough that dense canopies are likely to spill `SmallHitStack` constantly.
+This favors large toric canopies like the bundled coffee example without
+changing the behavior for the smaller regression fixtures.
 """
 function _pixel_hit_stack_mode(options::LightOptions)
     mode = lowercase(strip(options.pixel_hit_stack_mode))
@@ -235,6 +238,18 @@ end
 
 @inline function _pixel_hit_stack_type(options::LightOptions)
     mode = _pixel_hit_stack_mode(options)
+    return mode == "vector" ? Vector{HitRecord} : SmallHitStack
+end
+
+@inline function _pixel_hit_stack_type(options::LightOptions, plotbox)
+    mode = _pixel_hit_stack_mode(options)
+    if mode == "auto"
+        n_cells = plotbox.nx * plotbox.ny
+        if n_cells >= _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS && _use_dense_pixel_hits(plotbox)
+            return Vector{HitRecord}
+        end
+        return SmallHitStack
+    end
     return mode == "vector" ? Vector{HitRecord} : SmallHitStack
 end
 
@@ -1261,7 +1276,7 @@ function _direction_projection_dense(
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
     strict_java_float = _strict_java_float(options)
     unit_scale = Float32(_projection_unit_scale(options))
-    stack_type = _pixel_hit_stack_type(options)
+    stack_type = _pixel_hit_stack_type(options, plotbox)
 
     pixel_hits = _pixel_hits_table(stack_type, dense_pixel_hits && _use_dense_pixel_hits(plotbox), plotbox)
     node_hits = zeros(Int, length(node_ids))
