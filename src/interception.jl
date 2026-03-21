@@ -280,6 +280,9 @@ end
 @inline function _sort_hit_stack!(stack::FlatPixelHitStack)
     len = length(stack)
     len <= 1 && return stack
+    if len <= 8
+        return _sort_small_hit_stack!(stack)
+    end
     return _sort_small_hit_stack!(stack)
 end
 
