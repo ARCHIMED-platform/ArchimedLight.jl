@@ -201,6 +201,33 @@ function _pair_counts_from_projections(
     return _edge_counts_from_packed(edge_counts), sun_hits
 end
 
+function _pair_counts_from_streamed_projections(
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    stacks_sorted::Bool=false,
+)
+    edge_counts = Dict{UInt64,Int}()
+    sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
+
+    for sector in turtle.sectors
+        projection = _prepared_direction_projection(prepared, sector.direction, options)
+        _accumulate_scattering_counts!(
+            edge_counts,
+            sun_hits,
+            sector,
+            projection,
+            prepared.virtual_nodes,
+            prepared.geometry.node_group,
+            scratch;
+            stacks_sorted=stacks_sorted,
+        )
+    end
+
+    return _edge_counts_from_packed(edge_counts), sun_hits
+end
+
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, options::LightOptions, node_ids)
     all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
     if !options.all_in_turtle
@@ -262,17 +289,9 @@ function _build_scattering_topology_cache(
     scene::SceneGeometry,
     models::LightModels,
     prepared::PreparedInterceptionData,
-    turtle::TurtleGrid,
-    projections::AbstractVector{DirectionProjectionResult},
-    stacks_sorted::Bool=false,
+    pair_counts::ScatteringPairCounts,
+    sun_hits::Dict{Int,Int},
 )
-    pair_counts, sun_hits = _pair_counts_from_projections(
-        turtle,
-        projections,
-        prepared.virtual_nodes,
-        prepared.geometry.node_group,
-        stacks_sorted,
-    )
     group_type_coeffs = _group_optical_coeffs(models)
     node_ids = copy(prepared.geometry.node_ids)
     node_type = Dict{Int,String}()
@@ -289,6 +308,41 @@ function _build_scattering_topology_cache(
         node_type,
         group_type_coeffs,
     )
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    projections::AbstractVector{DirectionProjectionResult},
+    stacks_sorted::Bool=false,
+)
+    pair_counts, sun_hits = _pair_counts_from_projections(
+        turtle,
+        projections,
+        prepared.virtual_nodes,
+        prepared.geometry.node_group,
+        stacks_sorted,
+    )
+    return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    stacks_sorted::Bool=false,
+)
+    pair_counts, sun_hits = _pair_counts_from_streamed_projections(
+        prepared,
+        turtle,
+        options;
+        stacks_sorted=stacks_sorted,
+    )
+    return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)
 end
 
 function _node_ids_for_scattering(topology::ScatteringTopologyCache, first::FirstOrderResult)
@@ -397,8 +451,7 @@ function build_scattering_transfer_graph(
     ::RaycastScatteringBackend,
 )
     prepared = _prepare_interception_data(scene, models, options)
-    projections = _build_direction_projections(prepared, turtle, options)
-    topology = _build_scattering_topology_cache(scene, models, prepared, turtle, projections)
+    topology = _build_scattering_topology_cache(scene, models, prepared, turtle, options)
     return _transfer_graph_from_topology(topology, first, options)
 end
 

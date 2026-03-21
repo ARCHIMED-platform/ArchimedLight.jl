@@ -570,6 +570,38 @@ function _emitter_weights_from_packed_counts(edge_counts::Dict{UInt64,Int}, tota
     return weights
 end
 
+function _accumulate_emitter_transfer_counts!(
+    edge_counts::Dict{UInt64,Int},
+    total_from::Dict{Int,Int},
+    projection::DirectionProjectionResult,
+    emitter_nodes::Set{Int};
+    stacks_sorted::Bool=false,
+)
+    for stack in values(projection.pixel_hits)
+        length(stack) <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+
+        for j in eachindex(stack)
+            src = _stack_hit_node(stack, j)
+            src in emitter_nodes || continue
+
+            to = 0
+            for k in (j + 1):length(stack)
+                nid = _stack_hit_node(stack, k)
+                nid in emitter_nodes && continue
+                to = nid
+                break
+            end
+            to == 0 && continue
+
+            edge = _pack_emitter_edge(to, src)
+            edge_counts[edge] = get(edge_counts, edge, 0) + 1
+            total_from[src] = get(total_from, src, 0) + 1
+        end
+    end
+    return nothing
+end
+
 function _emitter_transfer_weights(
     vertices,
     faces,
@@ -589,30 +621,13 @@ function _emitter_transfer_weights(
         sector.source == :sun && continue
         projection =
             _direction_projection_cached(vertices, faces, face2node, sector.direction, options, plotbox, cache_ctx, upper_hit=false)
-
-        for stack in values(projection.pixel_hits)
-            length(stack) <= 1 && continue
-            # Java uses a stable sort for hit heights; preserve insertion order on ties.
-            _sort_hit_stack!(stack)
-
-            for i in eachindex(stack)
-                src = _stack_hit_node(stack, i)
-                src in emitter_nodes || continue
-
-                to = 0
-                for j in (i+1):length(stack)
-                    nid = _stack_hit_node(stack, j)
-                    nid in emitter_nodes && continue
-                    to = nid
-                    break
-                end
-                to == 0 && continue
-
-                edge = _pack_emitter_edge(to, src)
-                edge_counts[edge] = get(edge_counts, edge, 0) + 1
-                total_from[src] = get(total_from, src, 0) + 1
-            end
-        end
+        _accumulate_emitter_transfer_counts!(
+            edge_counts,
+            total_from,
+            projection,
+            emitter_nodes;
+            stacks_sorted=false,
+        )
     end
 
     return _emitter_weights_from_packed_counts(edge_counts, total_from)
@@ -632,29 +647,13 @@ function _emitter_transfer_weights_from_projections(
     for i in eachindex(turtle.sectors)
         turtle.sectors[i].source == :sun && continue
         projection = projections[i]
-
-        for stack in values(projection.pixel_hits)
-            length(stack) <= 1 && continue
-            stacks_sorted || _sort_hit_stack!(stack)
-
-            for j in eachindex(stack)
-                src = _stack_hit_node(stack, j)
-                src in emitter_nodes || continue
-
-                to = 0
-                for k in (j + 1):length(stack)
-                    nid = _stack_hit_node(stack, k)
-                    nid in emitter_nodes && continue
-                    to = nid
-                    break
-                end
-                to == 0 && continue
-
-                edge = _pack_emitter_edge(to, src)
-                edge_counts[edge] = get(edge_counts, edge, 0) + 1
-                total_from[src] = get(total_from, src, 0) + 1
-            end
-        end
+        _accumulate_emitter_transfer_counts!(
+            edge_counts,
+            total_from,
+            projection,
+            emitter_nodes;
+            stacks_sorted=stacks_sorted,
+        )
     end
 
     return _emitter_weights_from_packed_counts(edge_counts, total_from)
