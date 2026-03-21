@@ -204,7 +204,26 @@ end
     return stack
 end
 
+@inline function _sort_small_hit_vector!(stack::Vector{HitRecord})
+    @inbounds for i in 2:length(stack)
+        x = stack[i]
+        xh = _hit_height(x)
+        j = i - 1
+        while j >= 1 && _hit_height(stack[j]) < xh
+            stack[j + 1] = stack[j]
+            j -= 1
+        end
+        stack[j + 1] = x
+    end
+    return stack
+end
+
 @inline function _sort_hit_stack!(stack::Vector{HitRecord})
+    len = length(stack)
+    len <= 1 && return stack
+    if len <= 8
+        return _sort_small_hit_vector!(stack)
+    end
     sort!(stack; lt=_hit_sort_lt, alg=Base.Sort.MergeSort)
     return stack
 end
