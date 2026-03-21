@@ -83,6 +83,32 @@ end
 
 ScatteringStackScratch() = ScatteringStackScratch(Int[])
 
+function _accumulate_sun_hits!(
+    sun_hits::Dict{Int,Int},
+    projection::DirectionProjectionResult,
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+)
+    for (nid, h) in projection.node_hits
+        sun_hits[nid] = get(sun_hits, nid, 0) + h
+    end
+    return nothing
+end
+
+function _accumulate_sun_hits!(
+    sun_hits::Dict{Int,Int},
+    projection::DenseDirectionProjectionResult,
+    node_ids::Union{Nothing,Vector{Int}},
+)
+    node_ids === nothing && error("DenseDirectionProjectionResult sun-hit accumulation requires node_ids")
+    @inbounds for i in eachindex(projection.node_hits)
+        h = projection.node_hits[i]
+        h == 0 && continue
+        nid = node_ids[i]
+        sun_hits[nid] = get(sun_hits, nid, 0) + h
+    end
+    return nothing
+end
+
 function _stack_transfer_pairs!(
     edge_counts::Dict{UInt64,Int},
     stack,
@@ -128,16 +154,15 @@ function _accumulate_scattering_counts!(
     edge_counts::Dict{UInt64,Int},
     sun_hits::Dict{Int,Int},
     sector::TurtleSector,
-    projection::DirectionProjectionResult,
+    projection,
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
     scratch::ScatteringStackScratch;
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
     stacks_sorted::Bool=false,
 )
     if sector.source == :sun
-        for (nid, h) in projection.node_hits
-            sun_hits[nid] = get(sun_hits, nid, 0) + h
-        end
+        _accumulate_sun_hits!(sun_hits, projection, node_ids)
         return nothing
     end
 
@@ -176,9 +201,10 @@ end
 
 function _pair_counts_from_projections(
     turtle::TurtleGrid,
-    projections::AbstractVector{DirectionProjectionResult},
+    projections::AbstractVector,
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
     stacks_sorted::Bool=false,
 )
     edge_counts = Dict{UInt64,Int}()
@@ -194,6 +220,7 @@ function _pair_counts_from_projections(
             virtual_nodes,
             node_group,
             scratch;
+            node_ids=node_ids,
             stacks_sorted=stacks_sorted,
         )
     end
@@ -221,6 +248,7 @@ function _pair_counts_from_streamed_projections(
             prepared.virtual_nodes,
             prepared.geometry.node_group,
             scratch;
+            node_ids=prepared.geometry.node_ids,
             stacks_sorted=stacks_sorted,
         )
     end
@@ -323,6 +351,7 @@ function _build_scattering_topology_cache(
         projections,
         prepared.virtual_nodes,
         prepared.geometry.node_group,
+        prepared.geometry.node_ids,
         stacks_sorted,
     )
     return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)

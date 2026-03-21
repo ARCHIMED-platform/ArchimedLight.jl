@@ -57,6 +57,13 @@ struct DirectionProjectionResult{PH}
     projected_pixels_area::Dict{Int,Float64}
 end
 
+struct DenseDirectionProjectionResult{PH}
+    pixel_hits::PH
+    node_hits::Vector{Int}
+    projected_mesh_area::Vector{Float64}
+    projected_pixels_area::Vector{Float64}
+end
+
 struct InterceptionSceneData
     vertices
     faces::Vector{PlantGeom.Face3}
@@ -333,6 +340,35 @@ function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_
     projected_pixels_area[top_nid] = max(0.0, get(projected_pixels_area, top_nid, 0.0) - plotbox.pixel_area)
 end
 
+function _apply_debug_drop_leading_hit!(
+    pixel_hits,
+    node_hits::Vector{Int},
+    projected_pixels_area::Vector{Float64},
+    plotbox,
+    options::LightOptions,
+    node_index::Dict{Int,Int},
+)
+    spec = _cfg_debug_drop_leading_hit(options)
+    spec === nothing && return
+    idx = spec.x + 1 + spec.y * plotbox.nx
+    stack = get(pixel_hits, idx, nothing)
+    stack === nothing && return
+    isempty(stack) && return
+
+    _sort_hit_stack!(stack)
+    top_nid = _stack_hit_node(stack, 1)
+    top_nid == spec.node_id || return
+
+    deleteat!(stack, 1)
+    if isempty(stack)
+        delete!(pixel_hits, idx)
+    end
+
+    node_idx = node_index[top_nid]
+    node_hits[node_idx] = max(0, node_hits[node_idx] - 1)
+    projected_pixels_area[node_idx] = max(0.0, projected_pixels_area[node_idx] - plotbox.pixel_area)
+end
+
 function _is_sensor_interception(interception::InterceptionModel)
     interception.sensor || return lowercase(strip(interception.model)) == "virtualsensor"
     return true
@@ -573,7 +609,7 @@ end
 function _accumulate_emitter_transfer_counts!(
     edge_counts::Dict{UInt64,Int},
     total_from::Dict{Int,Int},
-    projection::DirectionProjectionResult,
+    projection,
     emitter_nodes::Set{Int};
     stacks_sorted::Bool=false,
 )
@@ -1144,6 +1180,43 @@ end
     return get(projection.projected_mesh_area, node_id, 0.0) / projected_pixels
 end
 
+@inline function _projection_area_ratio(
+    projection::DenseDirectionProjectionResult,
+    options::LightOptions,
+    node_idx::Int,
+)
+    options.area_ratio || return 1.0
+    projected_pixels = projection.projected_pixels_area[node_idx]
+    projected_pixels > 0.0 || return 1.0
+    return projection.projected_mesh_area[node_idx] / projected_pixels
+end
+
+function _dense_projection_hits(projection::DirectionProjectionResult, geometry::InterceptionSceneData)
+    return _dense_sector_int(projection.node_hits, geometry).values
+end
+
+function _dense_projection_hits(projection::DenseDirectionProjectionResult, geometry::InterceptionSceneData)
+    return projection.node_hits
+end
+
+function _accumulate_projection_hits!(hits_per_node::Vector{Int}, projection::DirectionProjectionResult, geometry::InterceptionSceneData)
+    for (nid, h) in projection.node_hits
+        hits_per_node[geometry.node_index[nid]] += h
+    end
+    return nothing
+end
+
+function _accumulate_projection_hits!(
+    hits_per_node::Vector{Int},
+    projection::DenseDirectionProjectionResult,
+    geometry::InterceptionSceneData,
+)
+    @inbounds for i in eachindex(hits_per_node)
+        hits_per_node[i] += projection.node_hits[i]
+    end
+    return nothing
+end
+
 function _visible_area_from_projection(
     projection::DirectionProjectionResult,
     options::LightOptions,
@@ -1220,6 +1293,45 @@ function _visible_area_from_projection_dense(
     return visible_area
 end
 
+function _visible_area_from_projection_dense(
+    projection::DenseDirectionProjectionResult,
+    options::LightOptions,
+    plotbox,
+    virtual_nodes::Set{Int},
+    geometry::InterceptionSceneData,
+    stacks_sorted::Bool=false,
+)
+    visible_area = zeros(Float64, length(geometry.node_ids))
+    pixel_area = plotbox.pixel_area
+    for stack in values(projection.pixel_hits)
+        isempty(stack) && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+
+        non_virtual_seen = false
+        first_non_virtual_idx = 0
+        for hit in stack
+            nid = _hit_node(hit)
+            node_idx = geometry.node_index[nid]
+            if nid in virtual_nodes
+                if !non_virtual_seen
+                    ratio = _projection_area_ratio(projection, options, node_idx)
+                    visible_area[node_idx] += pixel_area * ratio
+                end
+            else
+                first_non_virtual_idx = node_idx
+                non_virtual_seen = true
+                break
+            end
+        end
+        if first_non_virtual_idx != 0
+            ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
+            visible_area[first_non_virtual_idx] += pixel_area * ratio
+        end
+    end
+
+    return visible_area
+end
+
 function _prepared_direction_projection(
     prepared::PreparedInterceptionData,
     direction,
@@ -1235,8 +1347,12 @@ function _build_direction_projections(
     turtle::TurtleGrid,
     options::LightOptions,
 )
-    projections = Vector{DirectionProjectionResult}(undef, length(turtle.sectors))
-    for i in eachindex(turtle.sectors)
+    n = length(turtle.sectors)
+    n == 0 && return Any[]
+    first_projection = _prepared_direction_projection(prepared, turtle.sectors[1].direction, options)
+    projections = Vector{typeof(first_projection)}(undef, n)
+    projections[1] = first_projection
+    for i in 2:n
         projections[i] = _prepared_direction_projection(prepared, turtle.sectors[i].direction, options)
     end
     return projections
@@ -1270,6 +1386,8 @@ function _direction_projection_dense(
     plotbox;
     upper_hit::Union{Nothing,Bool}=nothing,
     dense_pixel_hits::Bool=true,
+    materialize_node_maps::Bool=true,
+    node_index_override::Union{Nothing,Dict{Int,Int}}=nothing,
 )
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
@@ -1312,11 +1430,18 @@ function _direction_projection_dense(
         )
     end
 
-    node_hits_map = _dense_int_node_map(node_ids, node_hits)
-    projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
-    projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
-    _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
-    return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
+    if materialize_node_maps
+        node_hits_map = _dense_int_node_map(node_ids, node_hits)
+        projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
+        projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
+        _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
+        return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
+    end
+
+    node_index =
+        node_index_override === nothing ? Dict{Int,Int}(nid => i for (i, nid) in enumerate(node_ids)) : node_index_override
+    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options, node_index)
+    return DenseDirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
 
 function _direction_projection(vertices, faces, face2node, direction, options::LightOptions, plotbox; upper_hit::Union{Nothing,Bool}=nothing)
@@ -1394,6 +1519,8 @@ function _direction_projection_cached(
             geometry.plotbox;
             upper_hit=upper_hit,
             dense_pixel_hits=true,
+            materialize_node_maps=false,
+            node_index_override=geometry.node_index,
         )
     end
 
@@ -1708,11 +1835,7 @@ function _compute_first_order(
                 prepared.virtual_nodes,
                 geometry,
             )
-        node_hits = projection.node_hits
-
-        for (nid, h) in node_hits
-            hits_per_node[geometry.node_index[nid]] += h
-        end
+        _accumulate_projection_hits!(hits_per_node, projection, geometry)
 
         par_flux = fluxes.par[k]
         nir_flux = fluxes.nir[k]

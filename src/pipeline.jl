@@ -203,7 +203,7 @@ function _build_sector_responses(
                     geometry,
                 ),
             )
-        hits_by_sector[i] = _dense_sector_int(projection.node_hits, geometry)
+        hits_by_sector[i] = DenseNodeMap(geometry.node_ids, copy(_dense_projection_hits(projection, geometry)))
         if emitter_edge_counts !== nothing
             _accumulate_emitter_transfer_counts!(
                 emitter_edge_counts,
@@ -222,6 +222,7 @@ function _build_sector_responses(
                 prepared.virtual_nodes,
                 geometry.node_group,
                 scattering_scratch;
+                node_ids=geometry.node_ids,
                 stacks_sorted=true,
             )
         end
@@ -326,9 +327,7 @@ function _stream_first_order_with_scattering_topology(
                 geometry,
             )
 
-        for (nid, h) in projection.node_hits
-            hits_per_node[geometry.node_index[nid]] += h
-        end
+        _accumulate_projection_hits!(hits_per_node, projection, geometry)
 
         par_flux = fluxes.par[k]
         nir_flux = fluxes.nir[k]
@@ -359,6 +358,7 @@ function _stream_first_order_with_scattering_topology(
             prepared.virtual_nodes,
             geometry.node_group,
             scattering_scratch;
+            node_ids=geometry.node_ids,
             stacks_sorted=true,
         )
     end
