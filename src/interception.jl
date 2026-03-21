@@ -50,6 +50,31 @@ struct DensePixelHits{S}
     stacks::Vector{Union{Nothing,S}}
 end
 
+mutable struct FlatPixelHitBuilder
+    heads::Vector{Int}
+    tails::Vector{Int}
+    counts::Vector{Int}
+    heights::Vector{Float64}
+    nodes::Vector{Int}
+    next::Vector{Int}
+end
+
+FlatPixelHitBuilder(n_pixels::Int) =
+    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Float64[], Int[], Int[])
+
+mutable struct FlatPixelHits
+    starts::Vector{Int}
+    counts::Vector{Int}
+    occupied::Vector{Int}
+    heights::Vector{Float64}
+    nodes::Vector{Int}
+end
+
+struct FlatPixelHitStack <: AbstractVector{HitRecord}
+    parent::FlatPixelHits
+    pixel_idx::Int
+end
+
 struct DirectionProjectionResult{PH}
     pixel_hits::PH
     node_hits::Dict{Int,Int}
@@ -228,6 +253,36 @@ end
     return stack
 end
 
+@inline function _sort_small_hit_stack!(stack::FlatPixelHitStack)
+    len = length(stack)
+    start = _flat_stack_start(stack)
+    heights = stack.parent.heights
+    nodes = stack.parent.nodes
+    @inbounds for i in 2:len
+        idx = start + i - 1
+        xh = heights[idx]
+        xn = nodes[idx]
+        j = i - 1
+        while j >= 1 && heights[start + j - 1] < xh
+            src = start + j - 1
+            dst = src + 1
+            heights[dst] = heights[src]
+            nodes[dst] = nodes[src]
+            j -= 1
+        end
+        dst = start + j
+        heights[dst] = xh
+        nodes[dst] = xn
+    end
+    return stack
+end
+
+@inline function _sort_hit_stack!(stack::FlatPixelHitStack)
+    len = length(stack)
+    len <= 1 && return stack
+    return _sort_small_hit_stack!(stack)
+end
+
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
@@ -257,6 +312,51 @@ function Base.delete!(pixel_hits::DensePixelHits, idx::Int)
 end
 
 Base.values(pixel_hits::DensePixelHits) = (stack for stack in pixel_hits.stacks if stack !== nothing)
+
+Base.IndexStyle(::Type{FlatPixelHitStack}) = IndexLinear()
+Base.size(stack::FlatPixelHitStack) = (length(stack),)
+Base.length(stack::FlatPixelHitStack) = stack.parent.counts[stack.pixel_idx]
+
+@inline _flat_stack_start(stack::FlatPixelHitStack) = stack.parent.starts[stack.pixel_idx]
+
+function Base.getindex(stack::FlatPixelHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    idx = _flat_stack_start(stack) + i - 1
+    return (stack.parent.heights[idx], stack.parent.nodes[idx])
+end
+
+function Base.setindex!(stack::FlatPixelHitStack, hit::HitRecord, i::Int)
+    @boundscheck checkbounds(stack, i)
+    idx = _flat_stack_start(stack) + i - 1
+    stack.parent.heights[idx] = hit[1]
+    stack.parent.nodes[idx] = hit[2]
+    return stack
+end
+
+function Base.deleteat!(stack::FlatPixelHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    count = length(stack)
+    start = _flat_stack_start(stack)
+    @inbounds for pos in i:(count - 1)
+        src = start + pos
+        dst = start + pos - 1
+        stack.parent.heights[dst] = stack.parent.heights[src]
+        stack.parent.nodes[dst] = stack.parent.nodes[src]
+    end
+    stack.parent.counts[stack.pixel_idx] = count - 1
+    return stack
+end
+
+Base.get(pixel_hits::FlatPixelHits, idx::Int, default) =
+    (1 <= idx <= length(pixel_hits.counts) && pixel_hits.counts[idx] > 0) ? FlatPixelHitStack(pixel_hits, idx) : default
+
+function Base.delete!(pixel_hits::FlatPixelHits, idx::Int)
+    1 <= idx <= length(pixel_hits.counts) && (pixel_hits.counts[idx] = 0)
+    return pixel_hits
+end
+
+Base.values(pixel_hits::FlatPixelHits) =
+    (FlatPixelHitStack(pixel_hits, idx) for idx in pixel_hits.occupied if pixel_hits.counts[idx] > 0)
 
 @inline _use_dense_pixel_hits(plotbox) = (plotbox.nx * plotbox.ny) <= _DENSE_PIXEL_HITS_MAX_CELLS
 
@@ -310,6 +410,80 @@ function _pixel_hits_table(::Type{S}, dense::Bool, plotbox) where {S}
         return DensePixelHits(S, plotbox.nx * plotbox.ny)
     end
     return Dict{Int,S}()
+end
+
+@inline function _append_hit!(pixel_hits, idx::Int, hit::HitRecord, stack_type::Type)
+    h = get!(pixel_hits, idx) do
+        _new_hit_stack(stack_type)
+    end
+    push!(h, hit)
+    return nothing
+end
+
+@inline function _append_upper_hit!(pixel_hits, idx::Int, hit::HitRecord, stack_type::Type)
+    h = get!(pixel_hits, idx) do
+        _new_hit_stack(stack_type)
+    end
+    if isempty(h)
+        push!(h, hit)
+    elseif hit[1] > _stack_hit_height(h, 1)
+        h[1] = hit
+    end
+    return nothing
+end
+
+@inline function _append_hit!(pixel_hits::FlatPixelHitBuilder, idx::Int, hit::HitRecord, ::Type)
+    pos = length(pixel_hits.heights) + 1
+    push!(pixel_hits.heights, hit[1])
+    push!(pixel_hits.nodes, hit[2])
+    push!(pixel_hits.next, 0)
+    tail = pixel_hits.tails[idx]
+    if tail == 0
+        pixel_hits.heads[idx] = pos
+    else
+        pixel_hits.next[tail] = pos
+    end
+    pixel_hits.tails[idx] = pos
+    pixel_hits.counts[idx] += 1
+    return nothing
+end
+
+@inline function _append_upper_hit!(pixel_hits::FlatPixelHitBuilder, idx::Int, hit::HitRecord, ::Type)
+    head = pixel_hits.heads[idx]
+    if head == 0
+        _append_hit!(pixel_hits, idx, hit, HitRecord)
+    elseif hit[1] > pixel_hits.heights[head]
+        pixel_hits.heights[head] = hit[1]
+        pixel_hits.nodes[head] = hit[2]
+    end
+    return nothing
+end
+
+function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
+    n_pixels = length(builder.counts)
+    starts = zeros(Int, n_pixels)
+    occupied = Int[]
+    sizehint!(occupied, count(>(0), builder.counts))
+
+    total_hits = sum(builder.counts)
+    heights = Vector{Float64}(undef, total_hits)
+    nodes = Vector{Int}(undef, total_hits)
+
+    cursor = 1
+    @inbounds for idx in 1:n_pixels
+        count = builder.counts[idx]
+        count == 0 && continue
+        starts[idx] = cursor
+        push!(occupied, idx)
+        pos = builder.heads[idx]
+        while pos != 0
+            heights[cursor] = builder.heights[pos]
+            nodes[cursor] = builder.nodes[pos]
+            cursor += 1
+            pos = builder.next[pos]
+        end
+    end
+    return FlatPixelHits(starts, copy(builder.counts), occupied, heights, nodes)
 end
 
 function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
@@ -1221,17 +1395,11 @@ function _project_triangle!(
             if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
                 idx = ii + 1 + jj * nx
                 zpix_f32 = Float64(zpix / u)
-                h = get!(pixel_hits, idx) do
-                    _new_hit_stack(stack_type)
-                end
+                hit = (zpix_f32, stack_node)
                 if upper_hit
-                    if isempty(h)
-                        push!(h, (zpix_f32, stack_node))
-                    elseif zpix_f32 > _stack_hit_height(h, 1)
-                        h[1] = (zpix_f32, stack_node)
-                    end
+                    _append_upper_hit!(pixel_hits, idx, hit, stack_type)
                 else
-                    push!(h, (zpix_f32, stack_node))
+                    _append_hit!(pixel_hits, idx, hit, stack_type)
                 end
                 node_hit_count += 1
             end
@@ -1546,8 +1714,14 @@ function _direction_projection_dense(
     strict_java_float = _strict_java_float(options)
     unit_scale = Float32(_projection_unit_scale(options))
     stack_type = _pixel_hit_stack_type(options, plotbox)
-
-    pixel_hits = _pixel_hits_table(stack_type, dense_pixel_hits && _use_dense_pixel_hits(plotbox), plotbox)
+    use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
+    use_flat_hit_pool = !materialize_node_maps && use_dense_table && (stack_type === Vector{HitRecord})
+    pixel_hits =
+        if use_flat_hit_pool
+            FlatPixelHitBuilder(plotbox.nx * plotbox.ny)
+        else
+            _pixel_hits_table(stack_type, use_dense_table, plotbox)
+        end
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
     projected_pixels_area = zeros(Float64, length(node_ids))
@@ -1591,6 +1765,7 @@ function _direction_projection_dense(
         return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
     end
 
+    use_flat_hit_pool && (pixel_hits = _finalize_flat_pixel_hits(pixel_hits))
     _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options, node_ids)
     return DenseDirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
