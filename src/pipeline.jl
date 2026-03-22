@@ -160,7 +160,8 @@ struct SectorResponsesCache
     projected_area_per_sector::Vector{DenseNodeMap{Float64}}
     hits_per_sector::Vector{DenseNodeMap{Int}}
     node_ids::Vector{Int}
-    emitter_weights::Dict{Tuple{Int,Int},Float64}
+    emitter_incident_power_par::DenseNodeMap{Float64}
+    emitter_incident_power_nir::DenseNodeMap{Float64}
     scattering_topology::Union{Nothing,ScatteringTopologyCache}
 end
 
@@ -178,6 +179,29 @@ function _dense_sector_int(values::Dict{Int,Int}, geometry::InterceptionSceneDat
         out[geometry.node_index[nid]] = v
     end
     return _dense_node_map(out, geometry)
+end
+
+function _dense_emitter_incident_power(
+    edge_counts::Union{Nothing,Dict{UInt64,Int}},
+    total_from::Union{Nothing,Dict{Int,Int}},
+    prepared::PreparedInterceptionData,
+)
+    geometry = prepared.geometry
+    par = zeros(Float64, length(geometry.node_ids))
+    nir = zeros(Float64, length(geometry.node_ids))
+    if edge_counts !== nothing && total_from !== nothing
+        for (edge, count) in edge_counts
+            src = _unpack_emitter_from(edge)
+            n = get(total_from, src, 0)
+            n > 0 || continue
+            w = count / n
+            to = _unpack_emitter_to(edge)
+            idx = geometry.node_index[to]
+            par[idx] += w * get(prepared.emitter_par_power_per_node, src, 0.0)
+            nir[idx] += w * get(prepared.emitter_nir_power_per_node, src, 0.0)
+        end
+    end
+    return _dense_node_map(par, geometry), _dense_node_map(nir, geometry)
 end
 
 function _turtle_cache_key(turtle::TurtleGrid, options::LightOptions)
@@ -269,9 +293,8 @@ function _build_sector_responses(
             end
         end
     end
-    emitter_weights =
-        emitter_edge_counts === nothing ? Dict{Tuple{Int,Int},Float64}() :
-        _emitter_weights_from_packed_counts(emitter_edge_counts, emitter_total_from)
+    emitter_incident_power_par, emitter_incident_power_nir =
+        _dense_emitter_incident_power(emitter_edge_counts, emitter_total_from, prepared)
     scattering_topology =
         if scattering_edge_counts !== nothing
             _build_scattering_topology_cache(
@@ -284,7 +307,15 @@ function _build_sector_responses(
         else
             nothing
         end
-    return SectorResponsesCache(prepared, pa_by_sector, hits_by_sector, geometry.node_ids, emitter_weights, scattering_topology)
+    return SectorResponsesCache(
+        prepared,
+        pa_by_sector,
+        hits_by_sector,
+        geometry.node_ids,
+        emitter_incident_power_par,
+        emitter_incident_power_nir,
+        scattering_topology,
+    )
 end
 
 function _build_sector_responses(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
@@ -322,10 +353,13 @@ function _combine_sector_responses(
         end
     end
 
-    for ((to, src), w) in responses.emitter_weights
-        idx = responses.prepared.geometry.node_index[to]
-        incident_power_par[idx] += w * get(responses.prepared.emitter_par_power_per_node, src, 0.0)
-        incident_power_nir[idx] += w * get(responses.prepared.emitter_nir_power_per_node, src, 0.0)
+    emitter_par = responses.emitter_incident_power_par.values
+    @inbounds for idx in _active_indices(responses.emitter_incident_power_par)
+        incident_power_par[idx] += emitter_par[idx]
+    end
+    emitter_nir = responses.emitter_incident_power_nir.values
+    @inbounds for idx in _active_indices(responses.emitter_incident_power_nir)
+        incident_power_nir[idx] += emitter_nir[idx]
     end
 
     return FirstOrderResult(
@@ -430,10 +464,13 @@ function _stream_first_order_with_scattering_topology(
     end
 
     if emitter_edge_counts !== nothing
-        for ((to, src), w) in _emitter_weights_from_packed_counts(emitter_edge_counts, emitter_total_from)
-            idx = geometry.node_index[to]
-            incident_power_par[idx] += w * get(prepared.emitter_par_power_per_node, src, 0.0)
-            incident_power_nir[idx] += w * get(prepared.emitter_nir_power_per_node, src, 0.0)
+        emitter_incident_power_par, emitter_incident_power_nir =
+            _dense_emitter_incident_power(emitter_edge_counts, emitter_total_from, prepared)
+        @inbounds for idx in _active_indices(emitter_incident_power_par)
+            incident_power_par[idx] += emitter_incident_power_par.values[idx]
+        end
+        @inbounds for idx in _active_indices(emitter_incident_power_nir)
+            incident_power_nir[idx] += emitter_incident_power_nir.values[idx]
         end
     end
 
