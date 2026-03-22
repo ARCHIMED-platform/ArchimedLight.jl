@@ -1889,7 +1889,61 @@ function _rasterize_direction_java(
     return _visible_area_from_projection(projection, options, plotbox, virtual_nodes), projection.node_hits
 end
 
-function _direction_projection_dense(
+function _accumulate_direction_projection!(
+    pixel_hits,
+    node_hits::Vector{Int},
+    projected_mesh_area::Vector{Float64},
+    projected_pixels_area::Vector{Float64},
+    vertices,
+    faces,
+    stack_nodes::Vector{Int},
+    face2node_index::Vector{Int},
+    direction,
+    plotbox,
+    toricity::Bool,
+    use_upper_hit::Bool,
+    strict_java_float::Bool,
+    unit_scale::Float32,
+    stack_type::Type,
+)
+    origin_x = plotbox.origin_x
+    origin_y = plotbox.origin_y
+    pix_x = plotbox.pix_x
+    pix_y = plotbox.pix_y
+    pixel_area = plotbox.pixel_area
+    nx = plotbox.nx
+    ny = plotbox.ny
+    @inbounds for fi in eachindex(faces)
+        f = faces[fi]
+        _project_triangle!(
+            pixel_hits,
+            node_hits,
+            projected_mesh_area,
+            projected_pixels_area,
+            stack_nodes[fi],
+            face2node_index[fi],
+            vertices[f[1]],
+            vertices[f[2]],
+            vertices[f[3]],
+            direction,
+            origin_x,
+            origin_y,
+            pix_x,
+            pix_y,
+            pixel_area,
+            nx,
+            ny,
+            toricity,
+            use_upper_hit,
+            strict_java_float,
+            unit_scale,
+            stack_type,
+        )
+    end
+    return nothing
+end
+
+function _direction_projection_materialized(
     vertices,
     faces,
     face2node,
@@ -1900,7 +1954,6 @@ function _direction_projection_dense(
     plotbox;
     upper_hit::Union{Nothing,Bool}=nothing,
     dense_pixel_hits::Bool=true,
-    materialize_node_maps::Bool=true,
 )
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
@@ -1908,7 +1961,52 @@ function _direction_projection_dense(
     unit_scale = Float32(_projection_unit_scale(options))
     stack_type = _pixel_hit_stack_type(options, plotbox)
     use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
-    use_flat_hit_pool = !materialize_node_maps && use_dense_table && (stack_type === Vector{HitRecord})
+    pixel_hits = _pixel_hits_table(stack_type, use_dense_table, plotbox, use_upper_hit)
+    node_hits = zeros(Int, length(node_ids))
+    projected_mesh_area = zeros(Float64, length(node_ids))
+    projected_pixels_area = zeros(Float64, length(node_ids))
+    _accumulate_direction_projection!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        vertices,
+        faces,
+        face2node,
+        face2node_index,
+        direction,
+        plotbox,
+        toricity,
+        use_upper_hit,
+        strict_java_float,
+        unit_scale,
+        stack_type,
+    )
+    node_hits_map = _dense_int_node_map(node_ids, node_hits)
+    projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
+    projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
+    _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
+    return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
+end
+
+function _direction_projection_prepared(
+    vertices,
+    faces,
+    face2node_index::Vector{Int},
+    node_ids::Vector{Int},
+    direction,
+    options::LightOptions,
+    plotbox;
+    upper_hit::Union{Nothing,Bool}=nothing,
+    dense_pixel_hits::Bool=true,
+)
+    toricity = _cfg_toricity(options)
+    use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
+    strict_java_float = _strict_java_float(options)
+    unit_scale = Float32(_projection_unit_scale(options))
+    stack_type = _pixel_hit_stack_type(options, plotbox)
+    use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
+    use_flat_hit_pool = use_dense_table && (stack_type === Vector{HitRecord})
     pixel_hits =
         if use_flat_hit_pool
             FlatPixelHitBuilder(plotbox.nx * plotbox.ny)
@@ -1918,46 +2016,23 @@ function _direction_projection_dense(
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
     projected_pixels_area = zeros(Float64, length(node_ids))
-
-    @inbounds for fi in eachindex(faces)
-        f = faces[fi]
-        nid = face2node[fi]
-        node_idx = face2node_index[fi]
-        stack_node = materialize_node_maps ? nid : node_idx
-        _project_triangle!(
-            pixel_hits,
-            node_hits,
-            projected_mesh_area,
-            projected_pixels_area,
-            stack_node,
-            node_idx,
-            vertices[f[1]],
-            vertices[f[2]],
-            vertices[f[3]],
-            direction,
-            plotbox.origin_x,
-            plotbox.origin_y,
-            plotbox.pix_x,
-            plotbox.pix_y,
-            plotbox.pixel_area,
-            plotbox.nx,
-            plotbox.ny,
-            toricity,
-            use_upper_hit,
-            strict_java_float,
-            unit_scale,
-            stack_type,
-        )
-    end
-
-    if materialize_node_maps
-        node_hits_map = _dense_int_node_map(node_ids, node_hits)
-        projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
-        projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
-        _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
-        return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
-    end
-
+    _accumulate_direction_projection!(
+        pixel_hits,
+        node_hits,
+        projected_mesh_area,
+        projected_pixels_area,
+        vertices,
+        faces,
+        face2node_index,
+        face2node_index,
+        direction,
+        plotbox,
+        toricity,
+        use_upper_hit,
+        strict_java_float,
+        unit_scale,
+        stack_type,
+    )
     use_flat_hit_pool && (pixel_hits = _finalize_flat_pixel_hits(pixel_hits))
     _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options, node_ids)
     return DenseDirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
@@ -1967,7 +2042,7 @@ function _direction_projection(vertices, faces, face2node, direction, options::L
     node_ids = unique(face2node)
     node_index = Dict{Int,Int}(nid => i for (i, nid) in enumerate(node_ids))
     face2node_index = [node_index[nid] for nid in face2node]
-    return _direction_projection_dense(
+    return _direction_projection_materialized(
         vertices,
         faces,
         face2node,
@@ -1987,7 +2062,7 @@ function _direction_projection(
     options::LightOptions;
     upper_hit::Union{Nothing,Bool}=nothing,
 )
-    return _direction_projection_dense(
+    return _direction_projection_materialized(
         geometry.vertices,
         geometry.faces,
         geometry.face2node,
@@ -2027,10 +2102,9 @@ function _direction_projection_cached(
     strict_java_float::Bool=false,
 )
     if cache_ctx === nothing
-        return _direction_projection_dense(
+        return _direction_projection_prepared(
             geometry.vertices,
             geometry.faces,
-            geometry.face2node,
             geometry.face2node_index,
             geometry.node_ids,
             direction,
@@ -2038,7 +2112,6 @@ function _direction_projection_cached(
             geometry.plotbox;
             upper_hit=upper_hit,
             dense_pixel_hits=true,
-            materialize_node_maps=false,
         )
     end
 
@@ -2049,7 +2122,7 @@ function _direction_projection_cached(
         rm(path; force=true)
     end
 
-    result = _direction_projection_dense(
+    result = _direction_projection_materialized(
         geometry.vertices,
         geometry.faces,
         geometry.face2node,
