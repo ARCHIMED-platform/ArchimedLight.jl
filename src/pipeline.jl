@@ -122,20 +122,37 @@ end
 struct DenseNodeMap{T}
     node_ids::Vector{Int}
     values::Vector{T}
+    active_indices::Vector{Int}
 end
 
 Base.eltype(::Type{DenseNodeMap{T}}) where {T} = Pair{Int,T}
 
-function Base.iterate(map::DenseNodeMap{T}, state::Int=1) where {T}
-    i = state
-    while i <= length(map.values)
-        v = map.values[i]
-        if !iszero(v)
-            return ((map.node_ids[i], v), i + 1)
-        end
-        i += 1
+function _dense_node_map_active_indices(values::Vector{T}) where {T}
+    active = Int[]
+    sizehint!(active, min(length(values), 64))
+    @inbounds for i in eachindex(values)
+        iszero(values[i]) && continue
+        push!(active, i)
     end
-    return nothing
+    return active
+end
+
+DenseNodeMap(node_ids::Vector{Int}, values::Vector{T}) where {T} =
+    DenseNodeMap{T}(node_ids, values, _dense_node_map_active_indices(values))
+
+function Base.iterate(map::DenseNodeMap{T}, state::Int=1) where {T}
+    state > length(map.active_indices) && return nothing
+    idx = map.active_indices[state]
+    @inbounds v = map.values[idx]
+    @inbounds nid = map.node_ids[idx]
+    return ((nid, v), state + 1)
+end
+
+@inline Base.length(map::DenseNodeMap) = length(map.active_indices)
+@inline _active_indices(map::DenseNodeMap) = map.active_indices
+
+function _dense_node_map(values::Vector{T}, geometry::InterceptionSceneData) where {T}
+    return DenseNodeMap(geometry.node_ids, values)
 end
 
 struct SectorResponsesCache
@@ -152,7 +169,7 @@ function _dense_sector_float(values::Dict{Int,Float64}, geometry::InterceptionSc
     for (nid, v) in values
         out[geometry.node_index[nid]] = v
     end
-    return DenseNodeMap(geometry.node_ids, out)
+    return _dense_node_map(out, geometry)
 end
 
 function _dense_sector_int(values::Dict{Int,Int}, geometry::InterceptionSceneData)
@@ -160,7 +177,7 @@ function _dense_sector_int(values::Dict{Int,Int}, geometry::InterceptionSceneDat
     for (nid, v) in values
         out[geometry.node_index[nid]] = v
     end
-    return DenseNodeMap(geometry.node_ids, out)
+    return _dense_node_map(out, geometry)
 end
 
 function _turtle_cache_key(turtle::TurtleGrid, options::LightOptions)
@@ -193,8 +210,7 @@ function _build_sector_responses(
         sector = turtle.sectors[i]
         projection = _prepared_direction_projection(prepared, sector.direction, options)
         pa_by_sector[i] =
-            DenseNodeMap(
-                geometry.node_ids,
+            _dense_node_map(
                 _visible_area_from_projection_dense(
                     projection,
                     options,
@@ -202,8 +218,9 @@ function _build_sector_responses(
                     prepared.virtual_node_mask,
                     geometry,
                 ),
+                geometry,
             )
-        hits_by_sector[i] = DenseNodeMap(geometry.node_ids, copy(_dense_projection_hits(projection, geometry)))
+        hits_by_sector[i] = _dense_node_map(copy(_dense_projection_hits(projection, geometry)), geometry)
         if emitter_edge_counts !== nothing
             if projection isa DenseDirectionProjectionResult
                 _accumulate_emitter_transfer_counts!(
@@ -292,16 +309,15 @@ function _combine_sector_responses(
 
         sector_area = responses.projected_area_per_sector[i].values
         if active_flux
-            @inbounds for j in eachindex(sector_area)
+            @inbounds for j in _active_indices(responses.projected_area_per_sector[i])
                 pa = sector_area[j]
-                pa <= 0.0 && continue
                 projected_area_per_node[j] += pa
                 pf != 0.0 && (incident_power_par[j] += pf * pa)
                 nf != 0.0 && (incident_power_nir[j] += nf * pa)
             end
         end
         sector_hits = responses.hits_per_sector[i].values
-        @inbounds for j in eachindex(sector_hits)
+        @inbounds for j in _active_indices(responses.hits_per_sector[i])
             hits_per_node[j] += sector_hits[j]
         end
     end
