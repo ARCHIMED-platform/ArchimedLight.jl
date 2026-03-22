@@ -949,6 +949,7 @@ function run_light_step(
     nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(options, sky)
     fluxes = compute_directional_fluxes(meteo_row, sky, turtle, options)
+    prepared = nothing
     responses_cache = nothing
     scattering_topology = nothing
     extra_irr = _extra_band_irradiance(meteo_row)
@@ -996,9 +997,9 @@ function run_light_step(
         meteo_row=meteo_row,
         extra_initial_energy_per_band=extra_0_q,
         extra_energy_per_band=extra_q,
-        component_area_per_node=responses_cache === nothing ? nothing : responses_cache.prepared.component_area_per_node,
-        absorption_par_per_node=responses_cache === nothing ? nothing : responses_cache.prepared.absorption_par_per_node,
-        absorption_nir_per_node=responses_cache === nothing ? nothing : responses_cache.prepared.absorption_nir_per_node,
+        component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
+        absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
+        absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
     LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
 end
