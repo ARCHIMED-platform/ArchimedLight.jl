@@ -88,6 +88,13 @@ struct UpperHitStack <: AbstractVector{HitRecord}
     pixel_idx::Int
 end
 
+mutable struct RasterScanlineScratch
+    minY::Vector{Int}
+    maxY::Vector{Int}
+end
+
+RasterScanlineScratch() = RasterScanlineScratch(Int[], Int[])
+
 struct DirectionProjectionResult{PH}
     pixel_hits::PH
     node_hits::Dict{Int,Int}
@@ -1623,6 +1630,123 @@ function _project_triangle!(
     projected_pixels_area[node_idx] += nb_hits * pixel_area
 end
 
+@inline function _scanline_bounds!(scratch::RasterScanlineScratch, iLength::Int, jMin::Int, jMax::Int)
+    resize!(scratch.minY, iLength)
+    resize!(scratch.maxY, iLength)
+    fill!(scratch.minY, jMax)
+    fill!(scratch.maxY, jMin)
+    return scratch.minY, scratch.maxY
+end
+
+function _project_triangle!(
+    pixel_hits,
+    node_hits::Vector{Int},
+    projected_mesh_area::Vector{Float64},
+    projected_pixels_area::Vector{Float64},
+    stack_node::Int,
+    node_idx::Int,
+    p1,
+    p2,
+    p3,
+    direction,
+    origin_x::Float64,
+    origin_y::Float64,
+    x_pix::Float64,
+    y_pix::Float64,
+    pixel_area::Float64,
+    nx::Int,
+    ny::Int,
+    toricity::Bool,
+    upper_hit::Bool,
+    strict_java_float::Bool,
+    unit_scale::Float32,
+    stack_type::Type,
+    scratch::RasterScanlineScratch,
+)
+    u = unit_scale > 0.0f0 ? unit_scale : 1.0f0
+    ox = Float32(origin_x) * u
+    oy = Float32(origin_y) * u
+    pxs = Float32(x_pix) * u
+    pys = Float32(y_pix) * u
+    dirx = Float32(direction[1])
+    diry = Float32(direction[2])
+    dirz = Float32(direction[3])
+    dirz == 0.0f0 && return
+
+    projected1, pix1 = _project_vertex_to_ground_pixel(p1, dirx, diry, dirz, ox, oy, pxs, pys, u)
+    projected2, pix2 = _project_vertex_to_ground_pixel(p2, dirx, diry, dirz, ox, oy, pxs, pys, u)
+    projected3, pix3 = _project_vertex_to_ground_pixel(p3, dirx, diry, dirz, ox, oy, pxs, pys, u)
+
+    iMin = min(floor(Int, pix1[1]), floor(Int, pix2[1]), floor(Int, pix3[1]))
+    iMax = max(ceil(Int, pix1[1]), ceil(Int, pix2[1]), ceil(Int, pix3[1]))
+    jMin = min(floor(Int, pix1[2]), floor(Int, pix2[2]), floor(Int, pix3[2]))
+    jMax = max(ceil(Int, pix1[2]), ceil(Int, pix2[2]), ceil(Int, pix3[2]))
+    kMin = min(floor(Int, pix1[3]), floor(Int, pix2[3]), floor(Int, pix3[3]))
+    kMax = max(ceil(Int, pix1[3]), ceil(Int, pix2[3]), ceil(Int, pix3[3]))
+
+    iLength = (iMax - iMin) + 1
+    iLength <= 0 && return
+
+    minY, maxY = _scanline_bounds!(scratch, iLength, jMin, jMax)
+
+    _get_border_pixels(pix1, pix2, iMin, minY, maxY)
+    _get_border_pixels(pix2, pix3, iMin, minY, maxY)
+    _get_border_pixels(pix3, pix1, iMin, minY, maxY)
+
+    normal = strict_java_float ? _compute_normal_f32((pix1, pix2, pix3)) : _compute_normal((pix1, pix2, pix3))
+    slopeX_f32, slopeY_f32 =
+        if abs(normal[3]) > 1e-5
+            (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
+        else
+            dz = Float32(direction[3])
+            (dz * Float32(normal[1]), dz * Float32(normal[2]))
+        end
+
+    z0 = Float32(pix1[3])
+    z0 += slopeX_f32 * (Float32(pix1[1]) - Float32(iMin))
+    z0 += slopeY_f32 * (Float32(pix1[2]) - Float32(jMin))
+
+    tri_proj_area = _triangle_area_xy(projected1, projected2, projected3)
+    nb_hits = 0
+    node_hit_count = node_hits[node_idx]
+    @inbounds for i in iMin:(iMax-1)
+        ni = i - iMin
+        zi = z0 - slopeX_f32 * Float32(ni)
+        ymin_i = minY[ni+1]
+        ymax_i = maxY[ni+1]
+
+        for j in ymin_i:(ymax_i-1)
+            nj = j - jMin
+            zpix = zi - slopeY_f32 * Float32(nj)
+            zpix = clamp(zpix, Float32(kMin), Float32(kMax))
+            nb_hits += 1
+
+            ii, jj =
+                if toricity
+                    (_wrap_index(i, nx), _wrap_index(j, ny))
+                else
+                    (i, j)
+                end
+
+            if toricity || ((0 <= ii < nx) && (0 <= jj < ny))
+                idx = ii + 1 + jj * nx
+                zpix_f32 = Float64(zpix / u)
+                hit = (zpix_f32, stack_node)
+                if upper_hit
+                    _append_upper_hit!(pixel_hits, idx, hit, stack_type)
+                else
+                    _append_hit!(pixel_hits, idx, hit, stack_type)
+                end
+                node_hit_count += 1
+            end
+        end
+    end
+
+    node_hits[node_idx] = node_hit_count
+    projected_mesh_area[node_idx] += tri_proj_area
+    projected_pixels_area[node_idx] += nb_hits * pixel_area
+end
+
 @inline _hit_height(hit) = hit[1]
 @inline _hit_node(hit) = hit[2]
 
@@ -1943,6 +2067,62 @@ function _accumulate_direction_projection!(
     return nothing
 end
 
+function _accumulate_direction_projection_prepared!(
+    pixel_hits,
+    node_hits::Vector{Int},
+    projected_mesh_area::Vector{Float64},
+    projected_pixels_area::Vector{Float64},
+    vertices,
+    faces,
+    face2node_index::Vector{Int},
+    direction,
+    plotbox,
+    toricity::Bool,
+    use_upper_hit::Bool,
+    strict_java_float::Bool,
+    unit_scale::Float32,
+    stack_type::Type,
+)
+    origin_x = plotbox.origin_x
+    origin_y = plotbox.origin_y
+    pix_x = plotbox.pix_x
+    pix_y = plotbox.pix_y
+    pixel_area = plotbox.pixel_area
+    nx = plotbox.nx
+    ny = plotbox.ny
+    scratch = RasterScanlineScratch()
+    @inbounds for fi in eachindex(faces)
+        f = faces[fi]
+        node_idx = face2node_index[fi]
+        _project_triangle!(
+            pixel_hits,
+            node_hits,
+            projected_mesh_area,
+            projected_pixels_area,
+            node_idx,
+            node_idx,
+            vertices[f[1]],
+            vertices[f[2]],
+            vertices[f[3]],
+            direction,
+            origin_x,
+            origin_y,
+            pix_x,
+            pix_y,
+            pixel_area,
+            nx,
+            ny,
+            toricity,
+            use_upper_hit,
+            strict_java_float,
+            unit_scale,
+            stack_type,
+            scratch,
+        )
+    end
+    return nothing
+end
+
 function _direction_projection_materialized(
     vertices,
     faces,
@@ -2016,14 +2196,13 @@ function _direction_projection_prepared(
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
     projected_pixels_area = zeros(Float64, length(node_ids))
-    _accumulate_direction_projection!(
+    _accumulate_direction_projection_prepared!(
         pixel_hits,
         node_hits,
         projected_mesh_area,
         projected_pixels_area,
         vertices,
         faces,
-        face2node_index,
         face2node_index,
         direction,
         plotbox,
