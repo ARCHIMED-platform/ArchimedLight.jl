@@ -127,6 +127,7 @@ end
 
 struct PreparedInterceptionData
     geometry::InterceptionSceneData
+    node_interception_by_index::Vector{Union{Nothing,InterceptionModel}}
     virtual_nodes::Set{Int}
     virtual_node_mask::Vector{Bool}
     upper_hit::Bool
@@ -859,6 +860,17 @@ function _virtual_sensor_node_ids(geometry::InterceptionSceneData, models::Light
     return out
 end
 
+function _virtual_sensor_node_ids(geometry::InterceptionSceneData, node_interception_by_index::Vector{Union{Nothing,InterceptionModel}})
+    out = Set{Int}()
+    @inbounds for i in eachindex(geometry.node_ids)
+        interception = node_interception_by_index[i]
+        interception === nothing && continue
+        _is_sensor_interception(interception) || continue
+        push!(out, geometry.node_ids[i])
+    end
+    return out
+end
+
 function _has_sensor_models(models::LightModels)
     for group_model in values(models)
         for type_model in values(group_model.types)
@@ -999,6 +1011,18 @@ function _type_model(models::LightModels, group::AbstractString, type_name::Abst
         resolved === nothing || return group_model.types[resolved]
     end
     return nothing
+end
+
+function _resolved_node_interception_models(geometry::InterceptionSceneData, models::LightModels)
+    out = Vector{Union{Nothing,InterceptionModel}}(undef, length(geometry.node_ids))
+    @inbounds for i in eachindex(geometry.node_ids)
+        group = geometry.node_group_by_index[i]
+        type_name0 = geometry.node_type_by_index[i]
+        type_name = isempty(type_name0) && group == "pavement" ? "Cobblestone" : type_name0
+        type_model = _type_model(models, _normalize_group_name_local(group), strip(type_name))
+        out[i] = type_model === nothing ? nothing : type_model.interception
+    end
+    return out
 end
 
 function _validate_scene_models(scene::SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
@@ -2484,29 +2508,31 @@ function _node_absorptance_maps_from_geometry(
     options::LightOptions,
     geometry::InterceptionSceneData,
     virtual_node_mask::Vector{Bool},
-    coeffs_by_group_type::Dict{Tuple{String,String},Dict{String,Float64}},
+    node_interception_by_index::Vector{Union{Nothing,InterceptionModel}},
 )
     sf_default_par = _default_scattering_factor_local(options, "PAR")
     sf_default_nir = _default_scattering_factor_local(options, "NIR")
     par = zeros(Float64, length(geometry.node_ids))
     nir = zeros(Float64, length(geometry.node_ids))
-    empty_coeffs = Dict{String,Float64}()
     @inbounds for i in eachindex(geometry.node_ids)
         if virtual_node_mask[i]
             par[i] = 0.0
             nir[i] = 0.0
             continue
         end
-        group = geometry.node_group_by_index[i]
-        typ0 = geometry.node_type_by_index[i]
-        typ = isempty(typ0) && group == "pavement" ? "Cobblestone" : typ0
-        coeffs = get(
-            coeffs_by_group_type,
-            (group, typ),
-            get(coeffs_by_group_type, (group, "*"), empty_coeffs),
-        )
-        par[i] = clamp(1.0 - get(coeffs, "PAR", sf_default_par), 0.0, 1.0)
-        nir[i] = clamp(1.0 - get(coeffs, "NIR", sf_default_nir), 0.0, 1.0)
+        interception = node_interception_by_index[i]
+        props = interception === nothing ? nothing : interception.optical_properties
+        if props === nothing
+            par[i] = clamp(1.0 - sf_default_par, 0.0, 1.0)
+            nir[i] = clamp(1.0 - sf_default_nir, 0.0, 1.0)
+            continue
+        end
+        has_par = get(props.extras, "__has_par", true)
+        has_nir = get(props.extras, "__has_nir", true)
+        par_sf = has_par ? props.par : sf_default_par
+        nir_sf = has_nir ? props.nir : sf_default_nir
+        par[i] = clamp(1.0 - par_sf, 0.0, 1.0)
+        nir[i] = clamp(1.0 - nir_sf, 0.0, 1.0)
     end
     return _all_dense_float_node_map(geometry.node_ids, par), _all_dense_float_node_map(geometry.node_ids, nir)
 end
@@ -2520,8 +2546,8 @@ function _node_absorptance_per_band_from_geometry(
     band::String,
 )
     virtual_node_mask = [nid in virtual_nodes for nid in geometry.node_ids]
-    coeffs_by_group_type = _group_optical_coeffs(models)
-    par, nir = _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, coeffs_by_group_type)
+    node_interception_by_index = _resolved_node_interception_models(geometry, models)
+    par, nir = _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, node_interception_by_index)
     return uppercase(band) == "NIR" ? nir : par
 end
 
@@ -2532,7 +2558,8 @@ function _prepare_interception_data(
     include_budget_maps::Bool=false,
 )
     geometry = _scene_geometry_for_interception(scene, models, options)
-    virtual_nodes = _virtual_sensor_node_ids(geometry, models)
+    node_interception_by_index = _resolved_node_interception_models(geometry, models)
+    virtual_nodes = _virtual_sensor_node_ids(geometry, node_interception_by_index)
     virtual_node_mask = [nid in virtual_nodes for nid in geometry.node_ids]
     upper_hit = _use_upper_hit_pixel_table(models, options)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
@@ -2545,13 +2572,13 @@ function _prepare_interception_data(
     absorption_par_per_node = nothing
     absorption_nir_per_node = nothing
     if include_budget_maps
-        coeffs_by_group_type = _group_optical_coeffs(models)
         absorption_par_per_node, absorption_nir_per_node =
-            _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, coeffs_by_group_type)
+            _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, node_interception_by_index)
     end
 
     return PreparedInterceptionData(
         geometry,
+        node_interception_by_index,
         virtual_nodes,
         virtual_node_mask,
         upper_hit,
