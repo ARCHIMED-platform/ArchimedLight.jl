@@ -61,13 +61,14 @@ mutable struct FlatPixelHitBuilder
     tails::Vector{Int}
     counts::Vector{Int}
     occupied::Vector{Int}
+    total_hits::Int
     heights::Vector{Float64}
     nodes::Vector{Int}
     next::Vector{Int}
 end
 
 FlatPixelHitBuilder(n_pixels::Int) =
-    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Int[], Float64[], Int[], Int[])
+    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Int[], 0, Float64[], Int[], Int[])
 
 mutable struct FlatPixelHits
     starts::Vector{Int}
@@ -687,6 +688,7 @@ end
     end
     pixel_hits.tails[idx] = pos
     pixel_hits.counts[idx] += 1
+    pixel_hits.total_hits += 1
     return nothing
 end
 
@@ -703,15 +705,16 @@ end
 
 function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     n_pixels = length(builder.counts)
-    starts = zeros(Int, n_pixels)
-    total_hits = sum(builder.counts)
+    starts = builder.heads
+    total_hits = builder.total_hits
     heights = Vector{Float64}(undef, total_hits)
     nodes = Vector{Int}(undef, total_hits)
 
     cursor = 1
+    counts = builder.counts
     occupied = builder.occupied
     @inbounds for idx in occupied
-        count = builder.counts[idx]
+        count = counts[idx]
         starts[idx] = cursor
         pos = builder.heads[idx]
         while pos != 0
@@ -721,7 +724,7 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
             pos = builder.next[pos]
         end
     end
-    return FlatPixelHits(starts, copy(builder.counts), occupied, falses(n_pixels), heights, nodes)
+    return FlatPixelHits(starts, counts, occupied, falses(n_pixels), heights, nodes)
 end
 
 function _dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
