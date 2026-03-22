@@ -57,18 +57,16 @@ struct DenseUpperPixelHits
 end
 
 mutable struct FlatPixelHitBuilder
-    heads::Vector{Int}
-    tails::Vector{Int}
     counts::Vector{Int}
     occupied::Vector{Int}
     total_hits::Int
+    pixels::Vector{Int}
     heights::Vector{Float64}
     nodes::Vector{Int}
-    next::Vector{Int}
 end
 
 FlatPixelHitBuilder(n_pixels::Int) =
-    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Int[], 0, Float64[], Int[], Int[])
+    FlatPixelHitBuilder(zeros(Int, n_pixels), Int[], 0, Int[], Float64[], Int[])
 
 mutable struct FlatPixelHits
     starts::Vector{Int}
@@ -677,38 +675,25 @@ end
 end
 
 @inline function _append_hit!(pixel_hits::FlatPixelHitBuilder, idx::Int, hit::HitRecord, ::Type)
-    pos = pixel_hits.total_hits + 1
+    if pixel_hits.counts[idx] == 0
+        push!(pixel_hits.occupied, idx)
+    end
+    push!(pixel_hits.pixels, idx)
     push!(pixel_hits.heights, hit[1])
     push!(pixel_hits.nodes, hit[2])
-    push!(pixel_hits.next, 0)
-    tail = pixel_hits.tails[idx]
-    if tail == 0
-        pixel_hits.heads[idx] = pos
-        push!(pixel_hits.occupied, idx)
-    else
-        pixel_hits.next[tail] = pos
-    end
-    pixel_hits.tails[idx] = pos
     pixel_hits.counts[idx] += 1
     pixel_hits.total_hits += 1
     return nothing
 end
 
 @inline function _append_upper_hit!(pixel_hits::FlatPixelHitBuilder, idx::Int, hit::HitRecord, ::Type)
-    head = pixel_hits.heads[idx]
-    if head == 0
-        _append_hit!(pixel_hits, idx, hit, HitRecord)
-    elseif hit[1] > pixel_hits.heights[head]
-        pixel_hits.heights[head] = hit[1]
-        pixel_hits.nodes[head] = hit[2]
-    end
-    return nothing
+    error("FlatPixelHitBuilder does not support upper-hit mode.")
 end
 
 function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     n_pixels = length(builder.counts)
-    starts = builder.heads
     total_hits = builder.total_hits
+    starts = zeros(Int, n_pixels)
     heights = Vector{Float64}(undef, total_hits)
     nodes = Vector{Int}(undef, total_hits)
 
@@ -716,15 +701,18 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     counts = builder.counts
     occupied = builder.occupied
     @inbounds for idx in occupied
-        count = counts[idx]
-        pos = starts[idx]
         starts[idx] = cursor
-        while pos != 0
-            heights[cursor] = builder.heights[pos]
-            nodes[cursor] = builder.nodes[pos]
-            cursor += 1
-            pos = builder.next[pos]
-        end
+        cursor += counts[idx]
+    end
+
+    write_pos = copy(starts)
+    pixels = builder.pixels
+    @inbounds for pos in eachindex(pixels)
+        idx = pixels[pos]
+        out = write_pos[idx]
+        heights[out] = builder.heights[pos]
+        nodes[out] = builder.nodes[pos]
+        write_pos[idx] = out + 1
     end
     return FlatPixelHits(starts, counts, occupied, falses(n_pixels), heights, nodes)
 end
@@ -2228,7 +2216,7 @@ function _direction_projection_prepared(
     unit_scale = Float32(_projection_unit_scale(options))
     stack_type = _pixel_hit_stack_type(options, plotbox)
     use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
-    use_flat_hit_pool = use_dense_table && (stack_type === Vector{HitRecord})
+    use_flat_hit_pool = use_dense_table && !use_upper_hit && (stack_type === Vector{HitRecord})
     pixel_hits =
         if use_flat_hit_pool
             FlatPixelHitBuilder(plotbox.nx * plotbox.ny)
