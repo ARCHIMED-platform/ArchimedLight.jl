@@ -307,6 +307,126 @@ end
     return @inbounds stack.parent.nodes[_flat_stack_start(stack) + i - 1]
 end
 
+@inline function _accumulate_emitter_transfer_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    total_from::Dict{Int,Int},
+    stack,
+    emitter_node_mask::Vector{Bool},
+    node_ids::Vector{Int},
+)
+    @inbounds for j in eachindex(stack)
+        src_idx = _stack_hit_node(stack, j)
+        emitter_node_mask[src_idx] || continue
+
+        to_idx = 0
+        for k in (j + 1):length(stack)
+            node_idx = _stack_hit_node(stack, k)
+            emitter_node_mask[node_idx] && continue
+            to_idx = node_idx
+            break
+        end
+        to_idx == 0 && continue
+
+        src = node_ids[src_idx]
+        to = node_ids[to_idx]
+        edge = _pack_emitter_edge(to, src)
+        edge_counts[edge] = get(edge_counts, edge, 0) + 1
+        total_from[src] = get(total_from, src, 0) + 1
+    end
+    return nothing
+end
+
+@inline function _accumulate_emitter_transfer_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    total_from::Dict{Int,Int},
+    stack::FlatPixelHitStack,
+    emitter_node_mask::Vector{Bool},
+    node_ids::Vector{Int},
+)
+    start = _flat_stack_start(stack)
+    nodes = stack.parent.nodes
+    n_hits = length(stack)
+    @inbounds for j in 0:(n_hits - 1)
+        src_idx = nodes[start + j]
+        emitter_node_mask[src_idx] || continue
+
+        to_idx = 0
+        for k in (j + 1):(n_hits - 1)
+            node_idx = nodes[start + k]
+            emitter_node_mask[node_idx] && continue
+            to_idx = node_idx
+            break
+        end
+        to_idx == 0 && continue
+
+        src = node_ids[src_idx]
+        to = node_ids[to_idx]
+        edge = _pack_emitter_edge(to, src)
+        edge_counts[edge] = get(edge_counts, edge, 0) + 1
+        total_from[src] = get(total_from, src, 0) + 1
+    end
+    return nothing
+end
+
+@inline function _accumulate_visible_area_dense!(
+    visible_area::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
+    stack,
+    options::LightOptions,
+    pixel_area::Float64,
+    virtual_node_mask::Vector{Bool},
+)
+    non_virtual_seen = false
+    first_non_virtual_idx = 0
+    @inbounds for hit in stack
+        node_idx = _hit_node(hit)
+        if virtual_node_mask[node_idx]
+            if !non_virtual_seen
+                ratio = _projection_area_ratio(projection, options, node_idx)
+                visible_area[node_idx] += pixel_area * ratio
+            end
+        else
+            first_non_virtual_idx = node_idx
+            non_virtual_seen = true
+            break
+        end
+    end
+    if first_non_virtual_idx != 0
+        ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
+        visible_area[first_non_virtual_idx] += pixel_area * ratio
+    end
+    return nothing
+end
+
+@inline function _accumulate_visible_area_dense!(
+    visible_area::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
+    stack::FlatPixelHitStack,
+    options::LightOptions,
+    pixel_area::Float64,
+    virtual_node_mask::Vector{Bool},
+)
+    start = _flat_stack_start(stack)
+    nodes = stack.parent.nodes
+    n_hits = length(stack)
+    first_non_virtual_idx = 0
+    @inbounds for h in 0:(n_hits - 1)
+        node_idx = nodes[start + h]
+        if virtual_node_mask[node_idx]
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            visible_area[node_idx] += pixel_area * ratio
+        else
+            first_non_virtual_idx = node_idx
+            break
+        end
+    end
+    if first_non_virtual_idx != 0
+        ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
+        visible_area[first_non_virtual_idx] += pixel_area * ratio
+    end
+    return nothing
+end
+
 # Dense tables avoid hash traffic on packed canopies, but above this size the empty-cell
 # overhead starts to outweigh the benefit on sparse scenes.
 const _DENSE_PIXEL_HITS_MAX_CELLS = 500_000
@@ -889,26 +1009,7 @@ function _accumulate_emitter_transfer_counts!(
     for stack in values(projection.pixel_hits)
         length(stack) <= 1 && continue
         stacks_sorted || _sort_hit_stack!(stack)
-
-        for j in eachindex(stack)
-            src_idx = _stack_hit_node(stack, j)
-            emitter_node_mask[src_idx] || continue
-
-            to_idx = 0
-            for k in (j + 1):length(stack)
-                node_idx = _stack_hit_node(stack, k)
-                emitter_node_mask[node_idx] && continue
-                to_idx = node_idx
-                break
-            end
-            to_idx == 0 && continue
-
-            src = node_ids[src_idx]
-            to = node_ids[to_idx]
-            edge = _pack_emitter_edge(to, src)
-            edge_counts[edge] = get(edge_counts, edge, 0) + 1
-            total_from[src] = get(total_from, src, 0) + 1
-        end
+        _accumulate_emitter_transfer_counts_dense!(edge_counts, total_from, stack, emitter_node_mask, node_ids)
     end
     return nothing
 end
@@ -1652,26 +1753,7 @@ function _visible_area_from_projection_dense(
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
         stacks_sorted || _sort_hit_stack!(stack)
-
-        non_virtual_seen = false
-        first_non_virtual_idx = 0
-        for hit in stack
-            node_idx = _hit_node(hit)
-            if virtual_node_mask[node_idx]
-                if !non_virtual_seen
-                    ratio = _projection_area_ratio(projection, options, node_idx)
-                    visible_area[node_idx] += pixel_area * ratio
-                end
-            else
-                first_non_virtual_idx = node_idx
-                non_virtual_seen = true
-                break
-            end
-        end
-        if first_non_virtual_idx != 0
-            ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
-            visible_area[first_non_virtual_idx] += pixel_area * ratio
-        end
+        _accumulate_visible_area_dense!(visible_area, projection, stack, options, pixel_area, virtual_node_mask)
     end
 
     return visible_area

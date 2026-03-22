@@ -174,6 +174,109 @@ function _accumulate_scattering_counts!(
     return nothing
 end
 
+@inline function _accumulate_scattering_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    stack,
+    virtual_node_mask::Vector{Bool},
+    node_group_by_index::Vector{String},
+    scratch::ScatteringStackScratch,
+    node_ids::Vector{Int},
+)
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        node_idx = _stack_hit_node(stack, h)
+        if !virtual_node_mask[node_idx]
+            nearest_below = node_idx
+        end
+        below[h] = nearest_below
+    end
+
+    nearest_above = 0
+    @inbounds for h in 1:(n_hits - 1)
+        to_above_idx = _stack_hit_node(stack, h)
+        if !virtual_node_mask[to_above_idx]
+            nearest_above = to_above_idx
+        end
+
+        from_below_idx = below[h + 1]
+        if from_below_idx != 0
+            to_above = node_ids[to_above_idx]
+            from_below = node_ids[from_below_idx]
+            if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
+                _add_packed_edge_count!(edge_counts, to_above, from_below)
+            end
+        end
+
+        to_below_idx = _stack_hit_node(stack, h + 1)
+        from_above_idx = nearest_above
+        if from_above_idx != 0
+            to_below = node_ids[to_below_idx]
+            from_above = node_ids[from_above_idx]
+            if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
+                _add_packed_edge_count!(edge_counts, to_below, from_above)
+            end
+        end
+    end
+    return nothing
+end
+
+@inline function _accumulate_scattering_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    stack::FlatPixelHitStack,
+    virtual_node_mask::Vector{Bool},
+    node_group_by_index::Vector{String},
+    scratch::ScatteringStackScratch,
+    node_ids::Vector{Int},
+)
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    start = stack.parent.starts[stack.pixel_idx]
+    nodes = stack.parent.nodes
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        node_idx = nodes[start + h - 1]
+        if !virtual_node_mask[node_idx]
+            nearest_below = node_idx
+        end
+        below[h] = nearest_below
+    end
+
+    nearest_above = 0
+    @inbounds for h in 1:(n_hits - 1)
+        to_above_idx = nodes[start + h - 1]
+        if !virtual_node_mask[to_above_idx]
+            nearest_above = to_above_idx
+        end
+
+        from_below_idx = below[h + 1]
+        if from_below_idx != 0
+            to_above = node_ids[to_above_idx]
+            from_below = node_ids[from_below_idx]
+            if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
+                _add_packed_edge_count!(edge_counts, to_above, from_below)
+            end
+        end
+
+        to_below_idx = nodes[start + h]
+        from_above_idx = nearest_above
+        if from_above_idx != 0
+            to_below = node_ids[to_below_idx]
+            from_above = node_ids[from_above_idx]
+            if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
+                _add_packed_edge_count!(edge_counts, to_below, from_above)
+            end
+        end
+    end
+    return nothing
+end
+
 function _accumulate_scattering_counts!(
     edge_counts::Dict{UInt64,Int},
     sun_hits::Dict{Int,Int},
@@ -195,45 +298,14 @@ function _accumulate_scattering_counts!(
         n_hits = length(stack)
         n_hits <= 1 && continue
         stacks_sorted || _sort_hit_stack!(stack)
-
-        below = scratch.nearest_nonvirtual_below
-        resize!(below, n_hits)
-
-        nearest_below = 0
-        @inbounds for h in n_hits:-1:1
-            node_idx = _stack_hit_node(stack, h)
-            if !virtual_node_mask[node_idx]
-                nearest_below = node_idx
-            end
-            below[h] = nearest_below
-        end
-
-        nearest_above = 0
-        @inbounds for h in 1:(n_hits - 1)
-            to_above_idx = _stack_hit_node(stack, h)
-            if !virtual_node_mask[to_above_idx]
-                nearest_above = to_above_idx
-            end
-
-            from_below_idx = below[h + 1]
-            if from_below_idx != 0
-                to_above = node_ids[to_above_idx]
-                from_below = node_ids[from_below_idx]
-                if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
-                    _add_packed_edge_count!(edge_counts, to_above, from_below)
-                end
-            end
-
-            to_below_idx = _stack_hit_node(stack, h + 1)
-            from_above_idx = nearest_above
-            if from_above_idx != 0
-                to_below = node_ids[to_below_idx]
-                from_above = node_ids[from_above_idx]
-                if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
-                    _add_packed_edge_count!(edge_counts, to_below, from_above)
-                end
-            end
-        end
+        _accumulate_scattering_counts_dense!(
+            edge_counts,
+            stack,
+            virtual_node_mask,
+            node_group_by_index,
+            scratch,
+            node_ids,
+        )
     end
     return nothing
 end
