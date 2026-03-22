@@ -332,6 +332,10 @@ struct ScatteringTransferGraph
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+    coeff_par_by_node::Dict{Int,Float64}
+    coeff_nir_by_node::Dict{Int,Float64}
+    default_coeff_par::Float64
+    default_coeff_nir::Float64
 end
 
 function ScatteringTransferGraph(
@@ -341,6 +345,10 @@ function ScatteringTransferGraph(
     node_group::Dict{Int,String},
     node_type::Dict{Int,String},
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+    default_coeff_par::Float64,
+    default_coeff_nir::Float64,
 )
     return ScatteringTransferGraph(
         ScatteringPairCounts(pair_counts),
@@ -349,6 +357,10 @@ function ScatteringTransferGraph(
         node_group,
         node_type,
         group_type_coeffs,
+        coeff_par_by_node,
+        coeff_nir_by_node,
+        default_coeff_par,
+        default_coeff_nir,
     )
 end
 

@@ -564,6 +564,8 @@ function _transfer_graph_from_topology(
 )
     node_ids = _node_ids_for_scattering(topology, first)
     all_hits = _all_dir_hits_for_scattering(first, topology.sun_hits, options, node_ids)
+    coeff_par, coeff_nir =
+        _coeff_maps_by_node(node_ids, topology.node_group, topology.node_type, topology.group_type_coeffs, options)
     return ScatteringTransferGraph(
         topology.pair_counts,
         all_hits,
@@ -571,6 +573,10 @@ function _transfer_graph_from_topology(
         topology.node_group,
         topology.node_type,
         topology.group_type_coeffs,
+        coeff_par,
+        coeff_nir,
+        options.scattering_coeff_par,
+        options.scattering_coeff_nir,
     )
 end
 
@@ -700,24 +706,84 @@ function _default_band_coeff(options::LightOptions, band_key::String)
     return options.scattering_coeff_par
 end
 
+@inline function _group_type_band_coeff(
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    group::String,
+    type_name::String,
+    band::String,
+    default_coeff::Float64,
+)
+    coeffs = get(
+        group_type_coeffs,
+        (group, type_name),
+        get(group_type_coeffs, (group, "*"), Dict{String,Float64}()),
+    )
+    return get(coeffs, band, default_coeff)
+end
+
 function _coeff_by_node(
-    graph::ScatteringTransferGraph,
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
     band_key::String,
     default_coeff::Float64,
 )
     coeff_by_node = Dict{Int,Float64}()
     band = uppercase(band_key)
-    for nid in graph.node_ids
-        g = get(graph.node_group, nid, "")
-        t = get(graph.node_type, nid, "")
-        c = get(
-            graph.group_type_coeffs,
-            (g, t),
-            get(graph.group_type_coeffs, (g, "*"), Dict{String,Float64}()),
-        )
-        coeff_by_node[nid] = get(c, band, default_coeff)
+    for nid in node_ids
+        g = get(node_group, nid, "")
+        t = get(node_type, nid, "")
+        coeff_by_node[nid] = _group_type_band_coeff(group_type_coeffs, g, t, band, default_coeff)
     end
     coeff_by_node
+end
+
+function _coeff_by_node(
+    graph::ScatteringTransferGraph,
+    band_key::String,
+    default_coeff::Float64,
+)
+    band = uppercase(band_key)
+    if band == "PAR"
+        default_coeff == graph.default_coeff_par && return graph.coeff_par_by_node
+    elseif band == "NIR"
+        default_coeff == graph.default_coeff_nir && return graph.coeff_nir_by_node
+    end
+    return _coeff_by_node(
+        graph.node_ids,
+        graph.node_group,
+        graph.node_type,
+        graph.group_type_coeffs,
+        band,
+        default_coeff,
+    )
+end
+
+function _coeff_maps_by_node(
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    options::LightOptions,
+)
+    coeff_par = _coeff_by_node(
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        "PAR",
+        options.scattering_coeff_par,
+    )
+    coeff_nir = _coeff_by_node(
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        "NIR",
+        options.scattering_coeff_nir,
+    )
+    return coeff_par, coeff_nir
 end
 
 function _initial_scattering_power(
@@ -938,19 +1004,19 @@ function compute_scattering(
     initial_par = _initial_scattering_power(graph, first, nothing, "PAR")
     initial_nir = _initial_scattering_power(graph, first, nothing, "NIR")
 
-    added_par, it_par, conv_par = _scattering_one_band(
+    added_par, it_par, conv_par = _propagate_scattering_one_band(
         initial_par,
         graph,
+        graph.coeff_par_by_node,
         options,
-        "PAR",
-        options.scattering_coeff_par,
+        graph.default_coeff_par,
     )
-    added_nir, it_nir, conv_nir = _scattering_one_band(
+    added_nir, it_nir, conv_nir = _propagate_scattering_one_band(
         initial_nir,
         graph,
+        graph.coeff_nir_by_node,
         options,
-        "NIR",
-        options.scattering_coeff_nir,
+        graph.default_coeff_nir,
     )
 
     ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
