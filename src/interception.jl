@@ -122,6 +122,7 @@ struct InterceptionSceneData
     node_group_by_index::Vector{String}
     pavement_node_mask::Vector{Bool}
     node_type::Dict{Int,String}
+    node_type_by_index::Vector{String}
 end
 
 struct PreparedInterceptionData
@@ -842,6 +843,20 @@ function _virtual_sensor_node_ids(node_group::Dict{Int,String}, node_type::Dict{
         push!(out, nid)
     end
     out
+end
+
+function _virtual_sensor_node_ids(geometry::InterceptionSceneData, models::LightModels)
+    out = Set{Int}()
+    @inbounds for i in eachindex(geometry.node_ids)
+        g = geometry.node_group_by_index[i]
+        type_model = _type_model(models, _normalize_group_name_local(g), strip(geometry.node_type_by_index[i]))
+        type_model === nothing && continue
+        interception = type_model.interception
+        interception === nothing && continue
+        _is_sensor_interception(interception) || continue
+        push!(out, geometry.node_ids[i])
+    end
+    return out
 end
 
 function _has_sensor_models(models::LightModels)
@@ -2437,6 +2452,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
     node_group_by_index = [get(node_group, nid, "") for nid in node_ids]
     pavement_node_mask = [group == "pavement" for group in node_group_by_index]
     node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
+    node_type_by_index = [get(node_type, nid, "") for nid in node_ids]
 
     return InterceptionSceneData(
         vertices,
@@ -2450,18 +2466,49 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
         node_group_by_index,
         pavement_node_mask,
         node_type,
+        node_type_by_index,
     )
 end
 
 function _interception_area_per_node_from_geometry(geometry::InterceptionSceneData)
-    area = Dict{Int,Float64}(nid => 0.0 for nid in geometry.node_ids)
+    area = zeros(Float64, length(geometry.node_ids))
     @inbounds for i in eachindex(geometry.faces)
         f = geometry.faces[i]
-        nid = geometry.face2node[i]
         a = _triangle_area3d(geometry.vertices[f[1]], geometry.vertices[f[2]], geometry.vertices[f[3]])
-        area[nid] = get(area, nid, 0.0) + a
+        area[geometry.face2node_index[i]] += a
     end
-    return area
+    return _all_dense_float_node_map(geometry.node_ids, area)
+end
+
+function _node_absorptance_maps_from_geometry(
+    options::LightOptions,
+    geometry::InterceptionSceneData,
+    virtual_node_mask::Vector{Bool},
+    coeffs_by_group_type::Dict{Tuple{String,String},Dict{String,Float64}},
+)
+    sf_default_par = _default_scattering_factor_local(options, "PAR")
+    sf_default_nir = _default_scattering_factor_local(options, "NIR")
+    par = zeros(Float64, length(geometry.node_ids))
+    nir = zeros(Float64, length(geometry.node_ids))
+    empty_coeffs = Dict{String,Float64}()
+    @inbounds for i in eachindex(geometry.node_ids)
+        if virtual_node_mask[i]
+            par[i] = 0.0
+            nir[i] = 0.0
+            continue
+        end
+        group = geometry.node_group_by_index[i]
+        typ0 = geometry.node_type_by_index[i]
+        typ = isempty(typ0) && group == "pavement" ? "Cobblestone" : typ0
+        coeffs = get(
+            coeffs_by_group_type,
+            (group, typ),
+            get(coeffs_by_group_type, (group, "*"), empty_coeffs),
+        )
+        par[i] = clamp(1.0 - get(coeffs, "PAR", sf_default_par), 0.0, 1.0)
+        nir[i] = clamp(1.0 - get(coeffs, "NIR", sf_default_nir), 0.0, 1.0)
+    end
+    return _all_dense_float_node_map(geometry.node_ids, par), _all_dense_float_node_map(geometry.node_ids, nir)
 end
 
 function _node_absorptance_per_band_from_geometry(
@@ -2472,27 +2519,10 @@ function _node_absorptance_per_band_from_geometry(
     virtual_nodes::Set{Int},
     band::String,
 )
+    virtual_node_mask = [nid in virtual_nodes for nid in geometry.node_ids]
     coeffs_by_group_type = _group_optical_coeffs(models)
-    b = uppercase(band)
-    sf_default = _default_scattering_factor_local(options, b)
-    out = Dict{Int,Float64}()
-    for nid in geometry.node_ids
-        group = get(geometry.node_group, nid, _scene_group(scene, nid, ""))
-        if nid in virtual_nodes
-            out[nid] = 0.0
-            continue
-        end
-        default_type = group == "pavement" ? "Cobblestone" : ""
-        typ = _scene_type(scene, nid, default_type)
-        coeffs = get(
-            coeffs_by_group_type,
-            (group, typ),
-            get(coeffs_by_group_type, (group, "*"), Dict{String,Float64}()),
-        )
-        sf = get(coeffs, b, sf_default)
-        out[nid] = clamp(1.0 - sf, 0.0, 1.0)
-    end
-    return out
+    par, nir = _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, coeffs_by_group_type)
+    return uppercase(band) == "NIR" ? nir : par
 end
 
 function _prepare_interception_data(
@@ -2502,7 +2532,7 @@ function _prepare_interception_data(
     include_budget_maps::Bool=false,
 )
     geometry = _scene_geometry_for_interception(scene, models, options)
-    virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
+    virtual_nodes = _virtual_sensor_node_ids(geometry, models)
     virtual_node_mask = [nid in virtual_nodes for nid in geometry.node_ids]
     upper_hit = _use_upper_hit_pixel_table(models, options)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
@@ -2512,14 +2542,13 @@ function _prepare_interception_data(
 
     component_area_per_node =
         include_budget_maps ? _interception_area_per_node_from_geometry(geometry) : nothing
-    absorption_par_per_node =
-        include_budget_maps ?
-        _node_absorptance_per_band_from_geometry(scene, models, options, geometry, virtual_nodes, "PAR") :
-        nothing
-    absorption_nir_per_node =
-        include_budget_maps ?
-        _node_absorptance_per_band_from_geometry(scene, models, options, geometry, virtual_nodes, "NIR") :
-        nothing
+    absorption_par_per_node = nothing
+    absorption_nir_per_node = nothing
+    if include_budget_maps
+        coeffs_by_group_type = _group_optical_coeffs(models)
+        absorption_par_per_node, absorption_nir_per_node =
+            _node_absorptance_maps_from_geometry(options, geometry, virtual_node_mask, coeffs_by_group_type)
+    end
 
     return PreparedInterceptionData(
         geometry,
