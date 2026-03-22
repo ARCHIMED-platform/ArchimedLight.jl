@@ -178,7 +178,7 @@ end
     edge_counts::Dict{UInt64,Int},
     stack,
     virtual_node_mask::Vector{Bool},
-    node_group_by_index::Vector{String},
+    pavement_node_mask::Vector{Bool},
     scratch::ScatteringStackScratch,
     node_ids::Vector{Int},
 )
@@ -206,7 +206,7 @@ end
         if from_below_idx != 0
             to_above = node_ids[to_above_idx]
             from_below = node_ids[from_below_idx]
-            if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
+            if !(pavement_node_mask[to_above_idx] && pavement_node_mask[from_below_idx])
                 _add_packed_edge_count!(edge_counts, to_above, from_below)
             end
         end
@@ -216,7 +216,7 @@ end
         if from_above_idx != 0
             to_below = node_ids[to_below_idx]
             from_above = node_ids[from_above_idx]
-            if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
+            if !(pavement_node_mask[to_below_idx] && pavement_node_mask[from_above_idx])
                 _add_packed_edge_count!(edge_counts, to_below, from_above)
             end
         end
@@ -228,7 +228,7 @@ end
     edge_counts::Dict{UInt64,Int},
     stack::FlatPixelHitStack,
     virtual_node_mask::Vector{Bool},
-    node_group_by_index::Vector{String},
+    pavement_node_mask::Vector{Bool},
     scratch::ScatteringStackScratch,
     node_ids::Vector{Int},
 )
@@ -259,7 +259,7 @@ end
         if from_below_idx != 0
             to_above = node_ids[to_above_idx]
             from_below = node_ids[from_below_idx]
-            if !(node_group_by_index[to_above_idx] == "pavement" && node_group_by_index[from_below_idx] == "pavement")
+            if !(pavement_node_mask[to_above_idx] && pavement_node_mask[from_below_idx])
                 _add_packed_edge_count!(edge_counts, to_above, from_below)
             end
         end
@@ -269,7 +269,7 @@ end
         if from_above_idx != 0
             to_below = node_ids[to_below_idx]
             from_above = node_ids[from_above_idx]
-            if !(node_group_by_index[to_below_idx] == "pavement" && node_group_by_index[from_above_idx] == "pavement")
+            if !(pavement_node_mask[to_below_idx] && pavement_node_mask[from_above_idx])
                 _add_packed_edge_count!(edge_counts, to_below, from_above)
             end
         end
@@ -283,7 +283,7 @@ function _accumulate_scattering_counts!(
     sector::TurtleSector,
     projection::DenseDirectionProjectionResult,
     virtual_node_mask::Vector{Bool},
-    node_group_by_index::Vector{String},
+    pavement_node_mask::Vector{Bool},
     scratch::ScatteringStackScratch;
     node_ids::Union{Nothing,Vector{Int}}=nothing,
     stacks_sorted::Bool=false,
@@ -302,7 +302,7 @@ function _accumulate_scattering_counts!(
             edge_counts,
             stack,
             virtual_node_mask,
-            node_group_by_index,
+            pavement_node_mask,
             scratch,
             node_ids,
         )
@@ -341,7 +341,7 @@ function _pair_counts_from_projections(
     virtual_nodes::Set{Int},
     node_group::Dict{Int,String},
     node_ids::Union{Nothing,Vector{Int}}=nothing,
-    node_group_by_index::Union{Nothing,Vector{String}}=nothing,
+    pavement_node_mask::Union{Nothing,Vector{Bool}}=nothing,
     virtual_node_mask::Union{Nothing,Vector{Bool}}=nothing,
     stacks_sorted::Bool=false,
 )
@@ -358,7 +358,7 @@ function _pair_counts_from_projections(
                 turtle.sectors[i],
                 projection,
                 virtual_node_mask,
-                node_group_by_index,
+                pavement_node_mask,
                 scratch;
                 node_ids=node_ids,
                 stacks_sorted=stacks_sorted,
@@ -400,7 +400,7 @@ function _pair_counts_from_streamed_projections(
                 sector,
                 projection,
                 prepared.virtual_node_mask,
-                prepared.geometry.node_group_by_index,
+                prepared.geometry.pavement_node_mask,
                 scratch;
                 node_ids=prepared.geometry.node_ids,
                 stacks_sorted=stacks_sorted,
@@ -519,7 +519,7 @@ function _build_scattering_topology_cache(
         prepared.virtual_nodes,
         prepared.geometry.node_group,
         prepared.geometry.node_ids,
-        prepared.geometry.node_group_by_index,
+        prepared.geometry.pavement_node_mask,
         prepared.virtual_node_mask,
         stacks_sorted,
     )

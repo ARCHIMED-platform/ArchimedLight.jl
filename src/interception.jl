@@ -100,6 +100,7 @@ struct InterceptionSceneData
     plotbox
     node_group::Dict{Int,String}
     node_group_by_index::Vector{String}
+    pavement_node_mask::Vector{Bool}
     node_type::Dict{Int,String}
 end
 
@@ -2093,6 +2094,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
     face2node_index = [node_index[nid] for nid in face2node]
     node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
     node_group_by_index = [get(node_group, nid, "") for nid in node_ids]
+    pavement_node_mask = [group == "pavement" for group in node_group_by_index]
     node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
 
     return InterceptionSceneData(
@@ -2105,6 +2107,7 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
         plotbox,
         node_group,
         node_group_by_index,
+        pavement_node_mask,
         node_type,
     )
 end

@@ -232,7 +232,7 @@ function _build_sector_responses(
                     sector,
                     projection,
                     prepared.virtual_node_mask,
-                    geometry.node_group_by_index,
+                    geometry.pavement_node_mask,
                     scattering_scratch;
                     node_ids=geometry.node_ids,
                     stacks_sorted=true,
@@ -393,7 +393,7 @@ function _stream_first_order_with_scattering_topology(
                 sector,
                 projection,
                 prepared.virtual_node_mask,
-                geometry.node_group_by_index,
+                geometry.pavement_node_mask,
                 scattering_scratch;
                 node_ids=geometry.node_ids,
                 stacks_sorted=true,
