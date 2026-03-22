@@ -716,8 +716,8 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     occupied = builder.occupied
     @inbounds for idx in occupied
         count = counts[idx]
+        pos = starts[idx]
         starts[idx] = cursor
-        pos = builder.heads[idx]
         while pos != 0
             heights[cursor] = builder.heights[pos]
             nodes[cursor] = builder.nodes[pos]
