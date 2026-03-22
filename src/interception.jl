@@ -62,19 +62,19 @@ mutable struct FlatPixelHitBuilder
     occupied::Vector{Int}
     total_hits::Int
     pixels::Vector{FlatPoolInt}
-    heights::Vector{Float64}
+    heights::Vector{Float32}
     nodes::Vector{FlatPoolInt}
 end
 
 FlatPixelHitBuilder(n_pixels::Int) =
-    FlatPixelHitBuilder(zeros(Int, n_pixels), Int[], 0, FlatPoolInt[], Float64[], FlatPoolInt[])
+    FlatPixelHitBuilder(zeros(Int, n_pixels), Int[], 0, FlatPoolInt[], Float32[], FlatPoolInt[])
 
 mutable struct FlatPixelHits
     starts::Vector{Int}
     counts::Vector{Int}
     occupied::Vector{Int}
     sorted::BitVector
-    heights::Vector{Float64}
+    heights::Vector{Float32}
     nodes::Vector{FlatPoolInt}
 end
 
@@ -358,7 +358,7 @@ end
 end
 @inline function _stack_hit_height(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds stack.parent.heights[_flat_stack_start(stack) + i - 1]
+    return @inbounds Float64(stack.parent.heights[_flat_stack_start(stack) + i - 1])
 end
 @inline function _stack_hit_node(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
@@ -540,13 +540,13 @@ Base.length(stack::FlatPixelHitStack) = stack.parent.counts[stack.pixel_idx]
 function Base.getindex(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
     idx = _flat_stack_start(stack) + i - 1
-    return (stack.parent.heights[idx], Int(stack.parent.nodes[idx]))
+    return (Float64(stack.parent.heights[idx]), Int(stack.parent.nodes[idx]))
 end
 
 function Base.setindex!(stack::FlatPixelHitStack, hit::HitRecord, i::Int)
     @boundscheck checkbounds(stack, i)
     idx = _flat_stack_start(stack) + i - 1
-    stack.parent.heights[idx] = hit[1]
+    stack.parent.heights[idx] = Float32(hit[1])
     stack.parent.nodes[idx] = FlatPoolInt(hit[2])
     stack.parent.sorted[stack.pixel_idx] = false
     return stack
@@ -680,7 +680,7 @@ end
         push!(pixel_hits.occupied, idx)
     end
     push!(pixel_hits.pixels, FlatPoolInt(idx))
-    push!(pixel_hits.heights, hit[1])
+    push!(pixel_hits.heights, Float32(hit[1]))
     push!(pixel_hits.nodes, FlatPoolInt(hit[2]))
     pixel_hits.counts[idx] += 1
     pixel_hits.total_hits += 1
@@ -695,8 +695,8 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     n_pixels = length(builder.counts)
     total_hits = builder.total_hits
     starts = zeros(Int, n_pixels)
-    heights = Vector{Float64}(undef, total_hits)
-    nodes = Vector{Int}(undef, total_hits)
+    heights = Vector{Float32}(undef, total_hits)
+    nodes = Vector{FlatPoolInt}(undef, total_hits)
 
     cursor = 1
     counts = builder.counts
