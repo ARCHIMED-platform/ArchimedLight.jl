@@ -675,7 +675,7 @@ end
 end
 
 @inline function _append_hit!(pixel_hits::FlatPixelHitBuilder, idx::Int, hit::HitRecord, ::Type)
-    pos = length(pixel_hits.heights) + 1
+    pos = pixel_hits.total_hits + 1
     push!(pixel_hits.heights, hit[1])
     push!(pixel_hits.nodes, hit[2])
     push!(pixel_hits.next, 0)
