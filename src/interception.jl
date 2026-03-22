@@ -50,6 +50,12 @@ struct DensePixelHits{S}
     stacks::Vector{Union{Nothing,S}}
 end
 
+struct DenseUpperPixelHits
+    heights::Vector{Float64}
+    nodes::Vector{Int}
+    occupied::Vector{Int}
+end
+
 mutable struct FlatPixelHitBuilder
     heads::Vector{Int}
     tails::Vector{Int}
@@ -73,6 +79,11 @@ end
 
 struct FlatPixelHitStack <: AbstractVector{HitRecord}
     parent::FlatPixelHits
+    pixel_idx::Int
+end
+
+struct UpperHitStack <: AbstractVector{HitRecord}
+    parent::DenseUpperPixelHits
     pixel_idx::Int
 end
 
@@ -122,6 +133,33 @@ end
 Base.IndexStyle(::Type{<:SmallHitStack}) = IndexLinear()
 Base.size(stack::SmallHitStack) = (Int(stack.len),)
 Base.length(stack::SmallHitStack) = Int(stack.len)
+
+Base.IndexStyle(::Type{UpperHitStack}) = IndexLinear()
+Base.size(stack::UpperHitStack) = (length(stack),)
+Base.length(stack::UpperHitStack) = @inbounds(stack.parent.nodes[stack.pixel_idx] == 0 ? 0 : 1)
+
+function Base.getindex(stack::UpperHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    @inbounds return (stack.parent.heights[stack.pixel_idx], stack.parent.nodes[stack.pixel_idx])
+end
+
+function Base.setindex!(stack::UpperHitStack, hit::HitRecord, i::Int)
+    @boundscheck checkbounds(stack, i)
+    @inbounds begin
+        stack.parent.heights[stack.pixel_idx] = hit[1]
+        stack.parent.nodes[stack.pixel_idx] = hit[2]
+    end
+    return stack
+end
+
+function Base.deleteat!(stack::UpperHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    @inbounds begin
+        stack.parent.heights[stack.pixel_idx] = 0.0
+        stack.parent.nodes[stack.pixel_idx] = 0
+    end
+    return stack
+end
 
 function Base.getindex(stack::SmallHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
@@ -297,8 +335,17 @@ end
 end
 
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
+@inline _sort_hit_stack!(stack::UpperHitStack) = stack
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
+@inline function _stack_hit_height(stack::UpperHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    return @inbounds stack.parent.heights[stack.pixel_idx]
+end
+@inline function _stack_hit_node(stack::UpperHitStack, i::Int)
+    @boundscheck checkbounds(stack, i)
+    return @inbounds stack.parent.nodes[stack.pixel_idx]
+end
 @inline function _stack_hit_height(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
     return @inbounds stack.parent.heights[_flat_stack_start(stack) + i - 1]
@@ -434,9 +481,19 @@ const _DENSE_PIXEL_HITS_MAX_CELLS = 500_000
 const _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS = 300_000
 
 DensePixelHits(::Type{S}, n::Int) where {S} = DensePixelHits{S}(fill(nothing, n))
+function DenseUpperPixelHits(n::Int)
+    occupied = Int[]
+    # Dense upper-hit tables already commit to per-pixel arrays, so reserving
+    # the occupied index list up front avoids repeated growth in the hot append path.
+    sizehint!(occupied, n)
+    return DenseUpperPixelHits(zeros(Float64, n), zeros(Int, n), occupied)
+end
 
 Base.get(pixel_hits::DensePixelHits, idx::Int, default) =
     (1 <= idx <= length(pixel_hits.stacks) && pixel_hits.stacks[idx] !== nothing) ? pixel_hits.stacks[idx] : default
+
+Base.get(pixel_hits::DenseUpperPixelHits, idx::Int, default) =
+    (1 <= idx <= length(pixel_hits.nodes) && pixel_hits.nodes[idx] != 0) ? UpperHitStack(pixel_hits, idx) : default
 
 function Base.get!(f::F, pixel_hits::DensePixelHits, idx::Int) where {F}
     stack = pixel_hits.stacks[idx]
@@ -452,7 +509,17 @@ function Base.delete!(pixel_hits::DensePixelHits, idx::Int)
     return pixel_hits
 end
 
+function Base.delete!(pixel_hits::DenseUpperPixelHits, idx::Int)
+    if 1 <= idx <= length(pixel_hits.nodes)
+        pixel_hits.heights[idx] = 0.0
+        pixel_hits.nodes[idx] = 0
+    end
+    return pixel_hits
+end
+
 Base.values(pixel_hits::DensePixelHits) = (stack for stack in pixel_hits.stacks if stack !== nothing)
+Base.values(pixel_hits::DenseUpperPixelHits) =
+    (UpperHitStack(pixel_hits, idx) for idx in pixel_hits.occupied if pixel_hits.nodes[idx] != 0)
 
 Base.IndexStyle(::Type{FlatPixelHitStack}) = IndexLinear()
 Base.size(stack::FlatPixelHitStack) = (length(stack),)
@@ -557,6 +624,13 @@ function _pixel_hits_table(::Type{S}, dense::Bool, plotbox) where {S}
     return Dict{Int,S}()
 end
 
+function _pixel_hits_table(::Type{S}, dense::Bool, plotbox, upper_hit::Bool) where {S}
+    if dense && upper_hit
+        return DenseUpperPixelHits(plotbox.nx * plotbox.ny)
+    end
+    return _pixel_hits_table(S, dense, plotbox)
+end
+
 @inline function _append_hit!(pixel_hits, idx::Int, hit::HitRecord, stack_type::Type)
     h = get!(pixel_hits, idx) do
         _new_hit_stack(stack_type)
@@ -573,6 +647,20 @@ end
         push!(h, hit)
     elseif hit[1] > _stack_hit_height(h, 1)
         h[1] = hit
+    end
+    return nothing
+end
+
+@inline function _append_upper_hit!(pixel_hits::DenseUpperPixelHits, idx::Int, hit::HitRecord, ::Type)
+    @inbounds begin
+        if pixel_hits.nodes[idx] == 0
+            pixel_hits.heights[idx] = hit[1]
+            pixel_hits.nodes[idx] = hit[2]
+            push!(pixel_hits.occupied, idx)
+        elseif hit[1] > pixel_hits.heights[idx]
+            pixel_hits.heights[idx] = hit[1]
+            pixel_hits.nodes[idx] = hit[2]
+        end
     end
     return nothing
 end
@@ -1827,7 +1915,7 @@ function _direction_projection_dense(
         if use_flat_hit_pool
             FlatPixelHitBuilder(plotbox.nx * plotbox.ny)
         else
-            _pixel_hits_table(stack_type, use_dense_table, plotbox)
+            _pixel_hits_table(stack_type, use_dense_table, plotbox, use_upper_hit)
         end
     node_hits = zeros(Int, length(node_ids))
     projected_mesh_area = zeros(Float64, length(node_ids))
