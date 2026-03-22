@@ -11,6 +11,7 @@ struct ProjectionCacheContext
 end
 
 const HitRecord = Tuple{Float64,Int}
+const FlatPoolInt = Int32
 
 """
     SmallHitStack
@@ -60,13 +61,13 @@ mutable struct FlatPixelHitBuilder
     counts::Vector{Int}
     occupied::Vector{Int}
     total_hits::Int
-    pixels::Vector{Int}
+    pixels::Vector{FlatPoolInt}
     heights::Vector{Float64}
-    nodes::Vector{Int}
+    nodes::Vector{FlatPoolInt}
 end
 
 FlatPixelHitBuilder(n_pixels::Int) =
-    FlatPixelHitBuilder(zeros(Int, n_pixels), Int[], 0, Int[], Float64[], Int[])
+    FlatPixelHitBuilder(zeros(Int, n_pixels), Int[], 0, FlatPoolInt[], Float64[], FlatPoolInt[])
 
 mutable struct FlatPixelHits
     starts::Vector{Int}
@@ -74,7 +75,7 @@ mutable struct FlatPixelHits
     occupied::Vector{Int}
     sorted::BitVector
     heights::Vector{Float64}
-    nodes::Vector{Int}
+    nodes::Vector{FlatPoolInt}
 end
 
 struct FlatPixelHitStack <: AbstractVector{HitRecord}
@@ -361,7 +362,7 @@ end
 end
 @inline function _stack_hit_node(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds stack.parent.nodes[_flat_stack_start(stack) + i - 1]
+    return @inbounds Int(stack.parent.nodes[_flat_stack_start(stack) + i - 1])
 end
 
 @inline function _accumulate_emitter_transfer_counts_dense!(
@@ -404,12 +405,12 @@ end
     nodes = stack.parent.nodes
     n_hits = length(stack)
     @inbounds for j in 0:(n_hits - 1)
-        src_idx = nodes[start + j]
+        src_idx = Int(nodes[start + j])
         emitter_node_mask[src_idx] || continue
 
         to_idx = 0
         for k in (j + 1):(n_hits - 1)
-            node_idx = nodes[start + k]
+            node_idx = Int(nodes[start + k])
             emitter_node_mask[node_idx] && continue
             to_idx = node_idx
             break
@@ -468,7 +469,7 @@ end
     n_hits = length(stack)
     first_non_virtual_idx = 0
     @inbounds for h in 0:(n_hits - 1)
-        node_idx = nodes[start + h]
+        node_idx = Int(nodes[start + h])
         if virtual_node_mask[node_idx]
             ratio = _projection_area_ratio(projection, options, node_idx)
             visible_area[node_idx] += pixel_area * ratio
@@ -539,14 +540,14 @@ Base.length(stack::FlatPixelHitStack) = stack.parent.counts[stack.pixel_idx]
 function Base.getindex(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
     idx = _flat_stack_start(stack) + i - 1
-    return (stack.parent.heights[idx], stack.parent.nodes[idx])
+    return (stack.parent.heights[idx], Int(stack.parent.nodes[idx]))
 end
 
 function Base.setindex!(stack::FlatPixelHitStack, hit::HitRecord, i::Int)
     @boundscheck checkbounds(stack, i)
     idx = _flat_stack_start(stack) + i - 1
     stack.parent.heights[idx] = hit[1]
-    stack.parent.nodes[idx] = hit[2]
+    stack.parent.nodes[idx] = FlatPoolInt(hit[2])
     stack.parent.sorted[stack.pixel_idx] = false
     return stack
 end
@@ -678,9 +679,9 @@ end
     if pixel_hits.counts[idx] == 0
         push!(pixel_hits.occupied, idx)
     end
-    push!(pixel_hits.pixels, idx)
+    push!(pixel_hits.pixels, FlatPoolInt(idx))
     push!(pixel_hits.heights, hit[1])
-    push!(pixel_hits.nodes, hit[2])
+    push!(pixel_hits.nodes, FlatPoolInt(hit[2]))
     pixel_hits.counts[idx] += 1
     pixel_hits.total_hits += 1
     return nothing
@@ -709,7 +710,7 @@ function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
 
     pixels = builder.pixels
     @inbounds for pos in eachindex(pixels)
-        idx = pixels[pos]
+        idx = Int(pixels[pos])
         out = counts[idx]
         heights[out] = builder.heights[pos]
         nodes[out] = builder.nodes[pos]
@@ -2220,7 +2221,12 @@ function _direction_projection_prepared(
     unit_scale = Float32(_projection_unit_scale(options))
     stack_type = _pixel_hit_stack_type(options, plotbox)
     use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
-    use_flat_hit_pool = use_dense_table && !use_upper_hit && (stack_type === Vector{HitRecord})
+    use_flat_hit_pool =
+        use_dense_table &&
+        !use_upper_hit &&
+        (stack_type === Vector{HitRecord}) &&
+        (plotbox.nx * plotbox.ny <= typemax(FlatPoolInt)) &&
+        (length(node_ids) <= typemax(FlatPoolInt))
     pixel_hits =
         if use_flat_hit_pool
             FlatPixelHitBuilder(plotbox.nx * plotbox.ny)

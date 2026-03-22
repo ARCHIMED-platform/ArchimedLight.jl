@@ -241,7 +241,7 @@ end
 
     nearest_below = 0
     @inbounds for h in n_hits:-1:1
-        node_idx = nodes[start + h - 1]
+        node_idx = Int(nodes[start + h - 1])
         if !virtual_node_mask[node_idx]
             nearest_below = node_idx
         end
@@ -250,7 +250,7 @@ end
 
     nearest_above = 0
     @inbounds for h in 1:(n_hits - 1)
-        to_above_idx = nodes[start + h - 1]
+        to_above_idx = Int(nodes[start + h - 1])
         if !virtual_node_mask[to_above_idx]
             nearest_above = to_above_idx
         end
@@ -264,7 +264,7 @@ end
             end
         end
 
-        to_below_idx = nodes[start + h]
+        to_below_idx = Int(nodes[start + h])
         from_above_idx = nearest_above
         if from_above_idx != 0
             to_below = node_ids[to_below_idx]
