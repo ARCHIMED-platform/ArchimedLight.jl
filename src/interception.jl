@@ -60,13 +60,14 @@ mutable struct FlatPixelHitBuilder
     heads::Vector{Int}
     tails::Vector{Int}
     counts::Vector{Int}
+    occupied::Vector{Int}
     heights::Vector{Float64}
     nodes::Vector{Int}
     next::Vector{Int}
 end
 
 FlatPixelHitBuilder(n_pixels::Int) =
-    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Float64[], Int[], Int[])
+    FlatPixelHitBuilder(fill(0, n_pixels), fill(0, n_pixels), zeros(Int, n_pixels), Int[], Float64[], Int[], Int[])
 
 mutable struct FlatPixelHits
     starts::Vector{Int}
@@ -673,6 +674,7 @@ end
     tail = pixel_hits.tails[idx]
     if tail == 0
         pixel_hits.heads[idx] = pos
+        push!(pixel_hits.occupied, idx)
     else
         pixel_hits.next[tail] = pos
     end
@@ -695,19 +697,15 @@ end
 function _finalize_flat_pixel_hits(builder::FlatPixelHitBuilder)
     n_pixels = length(builder.counts)
     starts = zeros(Int, n_pixels)
-    occupied = Int[]
-    sizehint!(occupied, count(>(0), builder.counts))
-
     total_hits = sum(builder.counts)
     heights = Vector{Float64}(undef, total_hits)
     nodes = Vector{Int}(undef, total_hits)
 
     cursor = 1
-    @inbounds for idx in 1:n_pixels
+    occupied = builder.occupied
+    @inbounds for idx in occupied
         count = builder.counts[idx]
-        count == 0 && continue
         starts[idx] = cursor
-        push!(occupied, idx)
         pos = builder.heads[idx]
         while pos != 0
             heights[cursor] = builder.heights[pos]
