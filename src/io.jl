@@ -34,6 +34,11 @@ function _as_float(x, default::Float64)
     return default
 end
 
+function _as_string(x, default::String)
+    x === nothing && return default
+    return String(x)
+end
+
 function _join_if_relative(base::AbstractString, p::AbstractString)
     isabspath(p) ? p : normpath(joinpath(base, p))
 end
@@ -225,6 +230,7 @@ function read_options(path::AbstractString)
         scattering_coeff_nir=_as_float(get(raw, "scattering_coeff_nir", 0.30), 0.30),
         cache_radiation=_as_bool(get(raw, "cache_radiation", false), false),
         cache_pixel_table=_as_bool(get(raw, "cache_pixel_table", false), false),
+        pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
         nir_interception=_as_bool(get(raw, "nir_interception", true), true),

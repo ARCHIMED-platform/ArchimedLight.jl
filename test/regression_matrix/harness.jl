@@ -121,8 +121,15 @@ end
 
 function _fast_fixture_source(source_id::String)
     get!(_FAST_FIXTURE_CACHE, source_id) do
-        case_root = joinpath(@__DIR__, "..", "fast_fixtures", source_id)
-        fixture = load_fixture_inputs(joinpath(case_root, "input"))
+        case_root, input_path =
+            if source_id == "coffee_example_2"
+                root = normpath(joinpath(@__DIR__, "..", "..", "example_2"))
+                (root, joinpath(root, "config.yml"))
+            else
+                root = joinpath(@__DIR__, "..", "fast_fixtures", source_id)
+                (root, joinpath(root, "input"))
+            end
+        fixture = load_fixture_inputs(input_path)
         merge((case_root=case_root,), fixture)
     end
 end
@@ -173,6 +180,7 @@ function regression_cases(; profile::String=_regression_profile())
     cached_series = RegressionScenario("cached_series_parity", :synthetic, "cached_series_parity")
     simpleplant = RegressionScenario("simpleplant", :fast_fixture, "simpleplant_16_notoric")
     sky_fixture = RegressionScenario("sky_fixture", :fast_fixture, "sky_46_direct")
+    coffee_dense = RegressionScenario("coffee_dense_default", :fast_fixture, "coffee_example_2")
 
     _push_case!(cases, "strict_single_plate", single_plate, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01); strict=true)
     _push_case!(cases, "strict_partial_overlap", partial_overlap, OrderedDict("sky_mode" => "1_direct", "pixel_size_m" => 0.01); strict=true)
@@ -183,6 +191,26 @@ function regression_cases(; profile::String=_regression_profile())
     _push_case!(cases, "strict_cached_series", cached_series, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.01); strict=true)
     _push_case!(cases, "strict_simpleplant", simpleplant, OrderedDict("sky_mode" => "46_direct", "pixel_size_m" => 0.40, "area_ratio" => true, "toricity" => false); strict=true, visual=true)
     _push_case!(cases, "strict_sky_fixture", sky_fixture, OrderedDict("sky_mode" => "46_direct"); strict=true)
+    _push_case!(
+        cases,
+        "strict_coffee_dense",
+        coffee_dense,
+        OrderedDict(
+            "sky_mode" => "16_all_in_turtle",
+            "toricity" => true,
+            "area_ratio" => true,
+            "scattering" => true,
+            "pixel_size_m" => 0.003,
+            "cache_radiation" => false,
+            "cache_pixel_table" => false,
+            "nir_interception" => true,
+            "nir_scattering" => true,
+            "radiation_timestep" => 5,
+            "java_logged_turtle_dirs" => false,
+            "scattering_mode" => :raycast,
+        );
+        strict=true,
+    )
 
     for opts in _core_matrix_option_sets()
         _push_case!(cases, "matrix_partial_overlap", partial_overlap, opts)
@@ -447,9 +475,11 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
     image_path = nothing
 
     if data.kind == :scene_outputs
-        comp_path = joinpath(observed_dir, "component_values.csv")
-        _write_component_series_csv(comp_path, data.scene, data.models, data.series, data.options, data.meteo_rows)
-        files["component_values.csv"] = comp_path
+        if case.scenario.source_id != "coffee_example_2"
+            comp_path = joinpath(observed_dir, "component_values.csv")
+            _write_component_series_csv(comp_path, data.scene, data.models, data.series, data.options, data.meteo_rows)
+            files["component_values.csv"] = comp_path
+        end
 
         scene_path = joinpath(observed_dir, "scene_values.csv")
         _write_scene_series_csv(scene_path, data.scene, data.series, data.meteo_rows)

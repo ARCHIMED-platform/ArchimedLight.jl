@@ -287,6 +287,33 @@ end
                 @test series0[i].budget.incident_energy.total.par == series1[i].budget.incident_energy.total.par
             end
         end
+
+        @testset "Scenario: scattering series cache keeps identical outputs" begin
+            scene = _synthetic_horizontal_scene([
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+                (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+            ])
+            models = _default_synthetic_models()
+            rows = [
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
+                _synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+            ]
+            meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_scattering_series"))
+            uncached = _synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=false)
+            cached = _synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=true)
+
+            series0 = ArchimedLight.run_light_series(scene, models, meteo, uncached)
+            series1 = ArchimedLight.run_light_series(scene, models, meteo, cached)
+
+            @test length(series0) == length(series1)
+            for i in eachindex(series0)
+                @test series0[i].budget.incident_flux.total.par == series1[i].budget.incident_flux.total.par
+                @test series0[i].budget.incident_flux.total.nir == series1[i].budget.incident_flux.total.nir
+                @test series0[i].budget.incident_energy.total.par == series1[i].budget.incident_energy.total.par
+                @test series0[i].budget.incident_energy.total.nir == series1[i].budget.incident_energy.total.nir
+            end
+        end
     end
 
     if _synthetic_case_enabled("missing_models")
