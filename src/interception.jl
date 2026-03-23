@@ -133,6 +133,8 @@ struct PreparedInterceptionData
     cache_ctx::Union{Nothing,ProjectionCacheContext}
     emitter_par_power_per_node::Dict{Int,Float64}
     emitter_nir_power_per_node::Dict{Int,Float64}
+    emitter_par_power_by_index::Vector{Float64}
+    emitter_nir_power_by_index::Vector{Float64}
     emitter_nodes::Set{Int}
     emitter_node_mask::Vector{Bool}
     component_area_per_node::Union{Nothing,Dict{Int,Float64}}
@@ -2562,6 +2564,14 @@ function _prepare_interception_data(
     upper_hit = _use_upper_hit_pixel_table(models, options)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
     emit_par, emit_nir = _emitter_power_per_node(scene, models)
+    emitter_par_power_by_index = zeros(Float64, length(geometry.node_ids))
+    emitter_nir_power_by_index = zeros(Float64, length(geometry.node_ids))
+    for (nid, power) in emit_par
+        emitter_par_power_by_index[geometry.node_index[nid]] = power
+    end
+    for (nid, power) in emit_nir
+        emitter_nir_power_by_index[geometry.node_index[nid]] = power
+    end
     emitter_nodes = Set(union(keys(emit_par), keys(emit_nir)))
     emitter_node_mask = [nid in emitter_nodes for nid in geometry.node_ids]
 
@@ -2583,6 +2593,8 @@ function _prepare_interception_data(
         cache_ctx,
         emit_par,
         emit_nir,
+        emitter_par_power_by_index,
+        emitter_nir_power_by_index,
         emitter_nodes,
         emitter_node_mask,
         component_area_per_node,
@@ -2710,8 +2722,9 @@ function _compute_first_order(
         )
         for ((to, src), ww) in w
             idx = geometry.node_index[to]
-            incident_power_par[idx] += ww * get(prepared.emitter_par_power_per_node, src, 0.0)
-            incident_power_nir[idx] += ww * get(prepared.emitter_nir_power_per_node, src, 0.0)
+            src_idx = geometry.node_index[src]
+            incident_power_par[idx] += ww * prepared.emitter_par_power_by_index[src_idx]
+            incident_power_nir[idx] += ww * prepared.emitter_nir_power_by_index[src_idx]
         end
     end
 

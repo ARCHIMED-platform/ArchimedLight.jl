@@ -248,30 +248,40 @@ end
         below[h] = nearest_below
     end
 
-    nearest_above = 0
-    @inbounds for h in 1:(n_hits - 1)
-        to_above_idx = Int(nodes[start + h - 1])
-        if !virtual_node_mask[to_above_idx]
-            nearest_above = to_above_idx
-        end
+    @inbounds begin
+        current_idx = Int(nodes[start])
+        current_node = node_ids[current_idx]
+        current_is_pavement = pavement_node_mask[current_idx]
+        nearest_above = virtual_node_mask[current_idx] ? 0 : current_idx
+        for h in 1:(n_hits - 1)
+            next_idx = Int(nodes[start + h])
+            next_node = node_ids[next_idx]
+            next_is_pavement = pavement_node_mask[next_idx]
 
-        from_below_idx = below[h + 1]
-        if from_below_idx != 0
-            to_above = node_ids[to_above_idx]
-            from_below = node_ids[from_below_idx]
-            if !(pavement_node_mask[to_above_idx] && pavement_node_mask[from_below_idx])
-                _add_packed_edge_count!(edge_counts, to_above, from_below)
+            from_above_idx = nearest_above
+            from_below_idx = below[h + 1]
+            if from_below_idx != 0
+                from_below_is_pavement = pavement_node_mask[from_below_idx]
+                if !(current_is_pavement && from_below_is_pavement)
+                    from_below = node_ids[from_below_idx]
+                    _add_packed_edge_count!(edge_counts, current_node, from_below)
+                end
             end
-        end
 
-        to_below_idx = Int(nodes[start + h])
-        from_above_idx = nearest_above
-        if from_above_idx != 0
-            to_below = node_ids[to_below_idx]
-            from_above = node_ids[from_above_idx]
-            if !(pavement_node_mask[to_below_idx] && pavement_node_mask[from_above_idx])
-                _add_packed_edge_count!(edge_counts, to_below, from_above)
+            if from_above_idx != 0
+                from_above_is_pavement = pavement_node_mask[from_above_idx]
+                if !(next_is_pavement && from_above_is_pavement)
+                    from_above = node_ids[from_above_idx]
+                    _add_packed_edge_count!(edge_counts, next_node, from_above)
+                end
             end
+
+            if !virtual_node_mask[next_idx]
+                nearest_above = next_idx
+            end
+            current_idx = next_idx
+            current_node = next_node
+            current_is_pavement = next_is_pavement
         end
     end
     return nothing

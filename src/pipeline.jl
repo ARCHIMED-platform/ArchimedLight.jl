@@ -197,8 +197,9 @@ function _dense_emitter_incident_power(
             w = count / n
             to = _unpack_emitter_to(edge)
             idx = geometry.node_index[to]
-            par[idx] += w * get(prepared.emitter_par_power_per_node, src, 0.0)
-            nir[idx] += w * get(prepared.emitter_nir_power_per_node, src, 0.0)
+            src_idx = geometry.node_index[src]
+            par[idx] += w * prepared.emitter_par_power_by_index[src_idx]
+            nir[idx] += w * prepared.emitter_nir_power_by_index[src_idx]
         end
     end
     return _dense_node_map(par, geometry), _dense_node_map(nir, geometry)
