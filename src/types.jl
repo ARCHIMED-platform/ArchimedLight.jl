@@ -111,6 +111,17 @@ Base.keys(models::LightModels) = keys(models.groups)
 Base.haskey(models::LightModels, key) = haskey(models.groups, key)
 Base.getindex(models::LightModels, key) = models.groups[key]
 
+"""
+    LightOptions
+
+Runtime controls for interception, scattering, and caching.
+
+`pixel_hit_stack_mode` selects how per-pixel hit stacks are stored during raster
+projection:
+- `"auto"`: current default optimized path
+- `"small"`: force inline small stacks with spillover allocation
+- `"vector"`: force the legacy `Vector` stack representation
+"""
 Base.@kwdef struct LightOptions
     all_in_turtle::Bool = false
     turtle_sectors::Int = 46
@@ -123,6 +134,7 @@ Base.@kwdef struct LightOptions
     scattering_coeff_nir::Float64 = 0.30
     cache_radiation::Bool = false
     cache_pixel_table::Bool = false
+    pixel_hit_stack_mode::String = "auto"
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
     nir_interception::Bool = true
@@ -147,6 +159,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :scattering_coeff_nir => old.scattering_coeff_nir,
         :cache_radiation => old.cache_radiation,
         :cache_pixel_table => old.cache_pixel_table,
+        :pixel_hit_stack_mode => old.pixel_hit_stack_mode,
         :toricity => old.toricity,
         :radiation_timestep_minutes => old.radiation_timestep_minutes,
         :nir_interception => old.nir_interception,
@@ -272,13 +285,83 @@ struct ScatteringResult
     converged::Bool
 end
 
+"""
+    ScatteringPairCounts
+
+Compact transfer-edge storage for scattering graphs.
+
+The hot topology builder accumulates counts with packed integer keys, then materializes this
+container once so downstream code can still iterate edges as `((to, from), count)` pairs
+without keeping tuple-key dictionaries in the graph.
+"""
+struct ScatteringPairCounts
+    to_nodes::Vector{Int}
+    from_nodes::Vector{Int}
+    counts::Vector{Int}
+end
+
+Base.length(pair_counts::ScatteringPairCounts) = length(pair_counts.counts)
+Base.isempty(pair_counts::ScatteringPairCounts) = isempty(pair_counts.counts)
+Base.eltype(::Type{ScatteringPairCounts}) = Pair{Tuple{Int,Int},Int}
+
+function Base.iterate(pair_counts::ScatteringPairCounts, state::Int=1)
+    state > length(pair_counts.counts) && return nothing
+    item = ((pair_counts.to_nodes[state], pair_counts.from_nodes[state]), pair_counts.counts[state])
+    return item, state + 1
+end
+
+function ScatteringPairCounts(pair_counts::Dict{Tuple{Int,Int},Int})
+    to_nodes = Int[]
+    from_nodes = Int[]
+    counts = Int[]
+    sizehint!(to_nodes, length(pair_counts))
+    sizehint!(from_nodes, length(pair_counts))
+    sizehint!(counts, length(pair_counts))
+    for ((to, from), count) in pair_counts
+        push!(to_nodes, to)
+        push!(from_nodes, from)
+        push!(counts, count)
+    end
+    return ScatteringPairCounts(to_nodes, from_nodes, counts)
+end
+
 struct ScatteringTransferGraph
-    pair_counts::Dict{Tuple{Int,Int},Int}
+    pair_counts::ScatteringPairCounts
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+    coeff_par_by_node::Dict{Int,Float64}
+    coeff_nir_by_node::Dict{Int,Float64}
+    default_coeff_par::Float64
+    default_coeff_nir::Float64
+end
+
+function ScatteringTransferGraph(
+    pair_counts::Dict{Tuple{Int,Int},Int},
+    all_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+    default_coeff_par::Float64,
+    default_coeff_nir::Float64,
+)
+    return ScatteringTransferGraph(
+        ScatteringPairCounts(pair_counts),
+        all_hits,
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        coeff_par_by_node,
+        coeff_nir_by_node,
+        default_coeff_par,
+        default_coeff_nir,
+    )
 end
 
 struct LightBudget

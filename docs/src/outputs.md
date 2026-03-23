@@ -1,0 +1,155 @@
+# Outputs
+
+The current Julia package exposes light results in three increasingly concrete forms:
+
+1. in memory as `LightBudget`
+2. attached back onto MTG nodes as ARCHIMED-style attributes
+3. written to disk when you export the enriched scene
+
+This page documents those three layers and then explains the ARCHIMED-style CSV outputs that still appear in the examples and regression harness.
+
+## 1. In-Memory Outputs: `LightBudget`
+
+The core output of `run_light_step` is:
+
+```julia
+step = run_light_step(scene, models, row, options)
+budget = step.budget
+```
+
+The main grouped fields are:
+
+- `budget.incident_flux`
+- `budget.incident_energy`
+- `budget.absorbed_flux`
+- `budget.absorbed_energy`
+
+Each one is then split into:
+
+- `initial`: first-order interception only
+- `total`: first-order plus scattering
+
+and by waveband, for example:
+
+- `par`
+- `nir`
+
+Typical accesses:
+
+```julia
+budget.incident_flux.initial.par
+budget.incident_flux.total.par
+budget.absorbed_energy.total.nir
+```
+
+Each leaf of that structure is a dictionary keyed by node id.
+
+## 2. Attached Outputs: ARCHIMED Attribute Names
+
+The convenience layer for visual inspection is `attach_light_step!`:
+
+```julia
+attach_light_step!(
+    scene,
+    step;
+    fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
+)
+```
+
+The default mappings are:
+
+| Field selector | Attached attribute |
+| --- | --- |
+| `:incident_par_initial_flux` | `Ri_PAR_0_f` |
+| `:incident_nir_initial_flux` | `Ri_NIR_0_f` |
+| `:incident_par_flux` | `Ri_PAR_f` |
+| `:incident_nir_flux` | `Ri_NIR_f` |
+| `:incident_par_initial_energy` | `Ri_PAR_0_q` |
+| `:incident_nir_initial_energy` | `Ri_NIR_0_q` |
+| `:incident_par_energy` | `Ri_PAR_q` |
+| `:incident_nir_energy` | `Ri_NIR_q` |
+| `:absorbed_par_initial_flux` | `Ra_PAR_0_f` |
+| `:absorbed_nir_initial_flux` | `Ra_NIR_0_f` |
+| `:absorbed_par_flux` | `Ra_PAR_f` |
+| `:absorbed_nir_flux` | `Ra_NIR_f` |
+| `:absorbed_par_initial_energy` | `Ra_PAR_0_q` |
+| `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
+| `:absorbed_par_energy` | `Ra_PAR_q` |
+| `:absorbed_nir_energy` | `Ra_NIR_q` |
+
+The meaning follows the historical ARCHIMED naming:
+
+- `Ri`: intercepted radiation
+- `Ra`: absorbed radiation
+- `_0_`: first-order only
+- no `_0_`: after scattering has been added
+- `_f`: irradiance-like quantity in `W m^-2`
+- `_q`: energy per component and per step in `J`
+
+## 3. Disk Outputs: Exported Scenes
+
+Once results are attached, you can export the enriched scene:
+
+```julia
+write_scene("output/scene_with_light.opf", scene)
+```
+
+Supported export formats are:
+
+- `.ops`
+- `.opf`
+- `.gwa`
+
+The export path determines the format.
+
+This is currently the main disk output mechanism of `ArchimedLight.jl`: attach node attributes, then write the scene back out.
+
+## Example Output Images
+
+![Scene before colouring](assets/example_simpleplant_scene.png)
+
+![Scene coloured by intercepted PAR](assets/example_simpleplant_scene_ri_par_q.png)
+
+## ARCHIMED-Style CSV Tables
+
+You will still see files such as:
+
+- `component_values.csv`
+- `scene_values.csv`
+- `summary.csv`
+
+in:
+
+- the archived Java outputs
+- the example comparison folder
+- the regression and release harnesses under `test/`
+
+Those files remain valuable because they are the main parity targets against the historical implementation.
+
+### `component_values.csv`
+
+Component-scale outputs, typically one row per scene node and step.
+Common columns are:
+
+- `step_number`
+- `object_id`
+- `source_topology_id`
+- `group`
+- `type`
+- `area`
+- `Ri_*`
+- `Ra_*`
+
+### `scene_values.csv`
+
+Scene-scale summary per meteo step.
+
+### `summary.csv`
+
+Grouped aggregation, usually by item, group, and type.
+
+## Which Output Form Should You Use
+
+- use `LightBudget` when staying inside Julia
+- use `attach_light_step!` when you want visual inspection or downstream scene export
+- use the ARCHIMED-style CSVs when doing parity work with historical datasets or harnesses

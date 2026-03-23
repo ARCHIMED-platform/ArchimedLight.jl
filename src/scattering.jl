@@ -2,6 +2,15 @@ function _dict_zero(node_ids)
     Dict{Int,Float64}(nid => 0.0 for nid in node_ids)
 end
 
+struct ScatteringTopologyCache
+    pair_counts::ScatteringPairCounts
+    sun_hits::Dict{Int,Int}
+    node_ids::Vector{Int}
+    node_group::Dict{Int,String}
+    node_type::Dict{Int,String}
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+end
+
 function _copy_node_values(source::Dict{Int,Float64}, node_ids)
     Dict{Int,Float64}(nid => get(source, nid, 0.0) for nid in node_ids)
 end
@@ -14,8 +23,53 @@ function _sum_dict_values(d::Dict{Int,Float64})
     s
 end
 
-function _add_pair_count!(pair_counts::Dict{Tuple{Int,Int},Int}, to::Int, from::Int)
-    pair_counts[(to, from)] = get(pair_counts, (to, from), 0) + 1
+"""
+    _pack_scattering_edge(to, from) -> UInt64
+
+Pack one scattering edge `(to, from)` into a single 64-bit key.
+
+We reserve 32 bits for each node id:
+
+    [to ........ 32 bits][from ...... 32 bits]
+
+The explicit `UInt32` conversion constrains each id to one half of the packed key, and the
+`UInt64` widening makes the shift/OR operations safe. This is cheaper to hash in the topology
+builder than a `Tuple{Int,Int}` key.
+"""
+@inline function _pack_scattering_edge(to::Int, from::Int)
+    return (UInt64(UInt32(to)) << 32) | UInt64(UInt32(from))
+end
+
+# Recover the upper and lower 32-bit halves of a packed `(to, from)` edge key.
+@inline _unpack_scattering_to(edge::UInt64) = Int(UInt32(edge >> 32))
+@inline _unpack_scattering_from(edge::UInt64) = Int(UInt32(edge & 0xffffffff))
+
+function _edge_counts_from_packed(edge_counts::Dict{UInt64,Int})
+    isempty(edge_counts) && return ScatteringPairCounts(Int[], Int[], Int[])
+
+    # Sort once when materializing the final graph so iteration order is deterministic.
+    packed_edges = sort!(collect(keys(edge_counts)))
+    to_nodes = Int[]
+    from_nodes = Int[]
+    counts = Int[]
+    sizehint!(to_nodes, length(packed_edges))
+    sizehint!(from_nodes, length(packed_edges))
+    sizehint!(counts, length(packed_edges))
+
+    for edge in packed_edges
+        count = edge_counts[edge]
+        if count > 0
+            push!(to_nodes, _unpack_scattering_to(edge))
+            push!(from_nodes, _unpack_scattering_from(edge))
+            push!(counts, count)
+        end
+    end
+    return ScatteringPairCounts(to_nodes, from_nodes, counts)
+end
+
+@inline function _add_packed_edge_count!(edge_counts::Dict{UInt64,Int}, to::Int, from::Int)
+    edge = _pack_scattering_edge(to, from)
+    edge_counts[edge] = get(edge_counts, edge, 0) + 1
     return nothing
 end
 
@@ -23,26 +77,245 @@ function _accept_scattering_link(node_group::Dict{Int,String}, to::Int, from::In
     !(get(node_group, to, "") == "pavement" && get(node_group, from, "") == "pavement")
 end
 
+mutable struct ScatteringStackScratch
+    nearest_nonvirtual_below::Vector{Int}
+end
+
+ScatteringStackScratch() = ScatteringStackScratch(Int[])
+
+function _accumulate_sun_hits!(
+    sun_hits::Dict{Int,Int},
+    projection::DirectionProjectionResult,
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+)
+    for (nid, h) in projection.node_hits
+        sun_hits[nid] = get(sun_hits, nid, 0) + h
+    end
+    return nothing
+end
+
+function _accumulate_sun_hits!(
+    sun_hits::Dict{Int,Int},
+    projection::DenseDirectionProjectionResult,
+    node_ids::Union{Nothing,Vector{Int}},
+)
+    node_ids === nothing && error("DenseDirectionProjectionResult sun-hit accumulation requires node_ids")
+    @inbounds for i in eachindex(projection.node_hits)
+        h = projection.node_hits[i]
+        h == 0 && continue
+        nid = node_ids[i]
+        sun_hits[nid] = get(sun_hits, nid, 0) + h
+    end
+    return nothing
+end
+
 function _stack_transfer_pairs!(
-    pair_counts::Dict{Tuple{Int,Int},Int},
-    node_ids_stack::Vector{Int},
-    scatt_up::Vector{Int},
-    scatt_down::Vector{Int},
+    edge_counts::Dict{UInt64,Int},
+    stack,
+    virtual_nodes::Set{Int},
+    scratch::ScatteringStackScratch,
     node_group::Dict{Int,String},
 )
-    n_hits = length(node_ids_stack)
-    @inbounds for h in (n_hits - 1):-1:1
-        to_above = node_ids_stack[h]
-        from_below = scatt_up[h + 1]
-        if from_below != 0 && _accept_scattering_link(node_group, to_above, from_below)
-            _add_pair_count!(pair_counts, to_above, from_below)
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        nid = _stack_hit_node(stack, h)
+        if !(nid in virtual_nodes)
+            nearest_below = nid
+        end
+        below[h] = nearest_below
+    end
+
+    nearest_above = 0
+    @inbounds for h in 1:(n_hits - 1)
+        to_above = _stack_hit_node(stack, h)
+        if !(to_above in virtual_nodes)
+            nearest_above = to_above
         end
 
-        to_below = node_ids_stack[h + 1]
-        from_above = scatt_down[h]
-        if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
-            _add_pair_count!(pair_counts, to_below, from_above)
+        from_below = below[h + 1]
+        if from_below != 0 && _accept_scattering_link(node_group, to_above, from_below)
+            _add_packed_edge_count!(edge_counts, to_above, from_below)
         end
+
+        to_below = _stack_hit_node(stack, h + 1)
+        from_above = nearest_above
+        if from_above != 0 && _accept_scattering_link(node_group, to_below, from_above)
+            _add_packed_edge_count!(edge_counts, to_below, from_above)
+        end
+    end
+    return nothing
+end
+
+function _accumulate_scattering_counts!(
+    edge_counts::Dict{UInt64,Int},
+    sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DirectionProjectionResult,
+    virtual_nodes::Set{Int},
+    node_group::Dict{Int,String},
+    scratch::ScatteringStackScratch;
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+    stacks_sorted::Bool=false,
+)
+    if sector.source == :sun
+        _accumulate_sun_hits!(sun_hits, projection, node_ids)
+        return nothing
+    end
+
+    for stack in values(projection.pixel_hits)
+        length(stack) <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        _stack_transfer_pairs!(edge_counts, stack, virtual_nodes, scratch, node_group)
+    end
+    return nothing
+end
+
+@inline function _accumulate_scattering_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    stack,
+    virtual_node_mask::Vector{Bool},
+    pavement_node_mask::Vector{Bool},
+    scratch::ScatteringStackScratch,
+    node_ids::Vector{Int},
+)
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        node_idx = _stack_hit_node(stack, h)
+        if !virtual_node_mask[node_idx]
+            nearest_below = node_idx
+        end
+        below[h] = nearest_below
+    end
+
+    nearest_above = 0
+    @inbounds for h in 1:(n_hits - 1)
+        to_above_idx = _stack_hit_node(stack, h)
+        if !virtual_node_mask[to_above_idx]
+            nearest_above = to_above_idx
+        end
+
+        from_below_idx = below[h + 1]
+        if from_below_idx != 0
+            to_above = node_ids[to_above_idx]
+            from_below = node_ids[from_below_idx]
+            if !(pavement_node_mask[to_above_idx] && pavement_node_mask[from_below_idx])
+                _add_packed_edge_count!(edge_counts, to_above, from_below)
+            end
+        end
+
+        to_below_idx = _stack_hit_node(stack, h + 1)
+        from_above_idx = nearest_above
+        if from_above_idx != 0
+            to_below = node_ids[to_below_idx]
+            from_above = node_ids[from_above_idx]
+            if !(pavement_node_mask[to_below_idx] && pavement_node_mask[from_above_idx])
+                _add_packed_edge_count!(edge_counts, to_below, from_above)
+            end
+        end
+    end
+    return nothing
+end
+
+@inline function _accumulate_scattering_counts_dense!(
+    edge_counts::Dict{UInt64,Int},
+    stack::FlatPixelHitStack,
+    virtual_node_mask::Vector{Bool},
+    pavement_node_mask::Vector{Bool},
+    scratch::ScatteringStackScratch,
+    node_ids::Vector{Int},
+)
+    n_hits = length(stack)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    start = stack.parent.starts[stack.pixel_idx]
+    nodes = stack.parent.nodes
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        node_idx = Int(nodes[start + h - 1])
+        if !virtual_node_mask[node_idx]
+            nearest_below = node_idx
+        end
+        below[h] = nearest_below
+    end
+
+    @inbounds begin
+        current_idx = Int(nodes[start])
+        current_node = node_ids[current_idx]
+        current_is_pavement = pavement_node_mask[current_idx]
+        nearest_above = virtual_node_mask[current_idx] ? 0 : current_idx
+        for h in 1:(n_hits - 1)
+            next_idx = Int(nodes[start + h])
+            next_node = node_ids[next_idx]
+            next_is_pavement = pavement_node_mask[next_idx]
+
+            from_above_idx = nearest_above
+            from_below_idx = below[h + 1]
+            if from_below_idx != 0
+                from_below_is_pavement = pavement_node_mask[from_below_idx]
+                if !(current_is_pavement && from_below_is_pavement)
+                    from_below = node_ids[from_below_idx]
+                    _add_packed_edge_count!(edge_counts, current_node, from_below)
+                end
+            end
+
+            if from_above_idx != 0
+                from_above_is_pavement = pavement_node_mask[from_above_idx]
+                if !(next_is_pavement && from_above_is_pavement)
+                    from_above = node_ids[from_above_idx]
+                    _add_packed_edge_count!(edge_counts, next_node, from_above)
+                end
+            end
+
+            if !virtual_node_mask[next_idx]
+                nearest_above = next_idx
+            end
+            current_idx = next_idx
+            current_node = next_node
+            current_is_pavement = next_is_pavement
+        end
+    end
+    return nothing
+end
+
+function _accumulate_scattering_counts!(
+    edge_counts::Dict{UInt64,Int},
+    sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DenseDirectionProjectionResult,
+    virtual_node_mask::Vector{Bool},
+    pavement_node_mask::Vector{Bool},
+    scratch::ScatteringStackScratch;
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+    stacks_sorted::Bool=false,
+)
+    node_ids === nothing && error("DenseDirectionProjectionResult scattering accumulation requires node_ids")
+    if sector.source == :sun
+        _accumulate_sun_hits!(sun_hits, projection, node_ids)
+        return nothing
+    end
+
+    for stack in values(projection.pixel_hits)
+        n_hits = length(stack)
+        n_hits <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        _accumulate_scattering_counts_dense!(
+            edge_counts,
+            stack,
+            virtual_node_mask,
+            pavement_node_mask,
+            scratch,
+            node_ids,
+        )
     end
     return nothing
 end
@@ -51,58 +324,113 @@ function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, 
     geometry = _scene_geometry_for_interception(scene, models, options)
     virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
-    pair_counts = Dict{Tuple{Int,Int},Int}()
+    edge_counts = Dict{UInt64,Int}()
     sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
 
     for sector in turtle.sectors
         projection =
             _direction_projection_cached(geometry.vertices, geometry.faces, geometry.face2node, sector.direction, options, geometry.plotbox, cache_ctx)
+        _accumulate_scattering_counts!(
+            edge_counts,
+            sun_hits,
+            sector,
+            projection,
+            virtual_nodes,
+            geometry.node_group,
+            scratch,
+        )
+    end
 
-        if sector.source == :sun
-            for (nid, h) in projection.node_hits
-                sun_hits[nid] = get(sun_hits, nid, 0) + h
-            end
-            continue
-        end
+    return _edge_counts_from_packed(edge_counts), sun_hits, geometry.node_ids, geometry.node_group
+end
 
-        for stack in values(projection.pixel_hits)
-            length(stack) <= 1 && continue
-            # Java PixelTable uses a stable height sort (Collections.sort on comparator).
-            sort!(stack, by=x -> x[1], rev=true, alg=Base.Sort.MergeSort)
+function _pair_counts_from_projections(
+    turtle::TurtleGrid,
+    projections::AbstractVector,
+    virtual_nodes::Set{Int},
+    node_group::Dict{Int,String},
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+    pavement_node_mask::Union{Nothing,Vector{Bool}}=nothing,
+    virtual_node_mask::Union{Nothing,Vector{Bool}}=nothing,
+    stacks_sorted::Bool=false,
+)
+    edge_counts = Dict{UInt64,Int}()
+    sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
 
-            n_hits = length(stack)
-            node_ids_stack = Vector{Int}(undef, n_hits)
-            @inbounds for i in 1:n_hits
-                node_ids_stack[i] = stack[i][2]
-            end
-
-            # Mirror EnergyTransferTask: carry nearest non-virtual diffuser upward/downward
-            # across virtual sensors, then transfer between adjacent stack positions.
-            scatt_up = Vector{Int}(undef, n_hits)
-            up = 0
-            @inbounds for h in n_hits:-1:1
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    up = nid
-                end
-                scatt_up[h] = up
-            end
-
-            scatt_down = Vector{Int}(undef, n_hits)
-            down = 0
-            @inbounds for h in 1:n_hits
-                nid = node_ids_stack[h]
-                if !(nid in virtual_nodes)
-                    down = nid
-                end
-                scatt_down[h] = down
-            end
-
-            _stack_transfer_pairs!(pair_counts, node_ids_stack, scatt_up, scatt_down, geometry.node_group)
+    for i in eachindex(turtle.sectors)
+        projection = projections[i]
+        if projection isa DenseDirectionProjectionResult
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                turtle.sectors[i],
+                projection,
+                virtual_node_mask,
+                pavement_node_mask,
+                scratch;
+                node_ids=node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        else
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                turtle.sectors[i],
+                projection,
+                virtual_nodes,
+                node_group,
+                scratch;
+                node_ids=node_ids,
+                stacks_sorted=stacks_sorted,
+            )
         end
     end
 
-    return pair_counts, sun_hits, geometry.node_ids, geometry.node_group
+    return _edge_counts_from_packed(edge_counts), sun_hits
+end
+
+function _pair_counts_from_streamed_projections(
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    stacks_sorted::Bool=false,
+)
+    edge_counts = Dict{UInt64,Int}()
+    sun_hits = Dict{Int,Int}()
+    scratch = ScatteringStackScratch()
+
+    for sector in turtle.sectors
+        projection = _prepared_direction_projection(prepared, sector.direction, options)
+        if projection isa DenseDirectionProjectionResult
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                sector,
+                projection,
+                prepared.virtual_node_mask,
+                prepared.geometry.pavement_node_mask,
+                scratch;
+                node_ids=prepared.geometry.node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        else
+            _accumulate_scattering_counts!(
+                edge_counts,
+                sun_hits,
+                sector,
+                projection,
+                prepared.virtual_nodes,
+                prepared.geometry.node_group,
+                scratch;
+                node_ids=prepared.geometry.node_ids,
+                stacks_sorted=stacks_sorted,
+            )
+        end
+    end
+
+    return _edge_counts_from_packed(edge_counts), sun_hits
 end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, options::LightOptions, node_ids)
@@ -154,12 +482,112 @@ function _group_optical_coeffs(models::LightModels)
 end
 
 struct ScatteringSceneContext
-    pair_counts::Dict{Tuple{Int,Int},Int}
+    pair_counts::ScatteringPairCounts
     all_hits::Dict{Int,Int}
     node_ids::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    pair_counts::ScatteringPairCounts,
+    sun_hits::Dict{Int,Int},
+)
+    group_type_coeffs = _group_optical_coeffs(models)
+    node_ids = copy(prepared.geometry.node_ids)
+    node_type = Dict{Int,String}()
+    for nid in node_ids
+        g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
+        default_type = g == "pavement" ? "Cobblestone" : ""
+        node_type[nid] = _scene_type(scene, nid, default_type)
+    end
+    return ScatteringTopologyCache(
+        pair_counts,
+        sun_hits,
+        node_ids,
+        prepared.geometry.node_group,
+        node_type,
+        group_type_coeffs,
+    )
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    projections::AbstractVector{DirectionProjectionResult},
+    stacks_sorted::Bool=false,
+)
+    pair_counts, sun_hits = _pair_counts_from_projections(
+        turtle,
+        projections,
+        prepared.virtual_nodes,
+        prepared.geometry.node_group,
+        prepared.geometry.node_ids,
+        prepared.geometry.pavement_node_mask,
+        prepared.virtual_node_mask,
+        stacks_sorted,
+    )
+    return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)
+end
+
+function _build_scattering_topology_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    stacks_sorted::Bool=false,
+)
+    pair_counts, sun_hits = _pair_counts_from_streamed_projections(
+        prepared,
+        turtle,
+        options;
+        stacks_sorted=stacks_sorted,
+    )
+    return _build_scattering_topology_cache(scene, models, prepared, pair_counts, sun_hits)
+end
+
+function _node_ids_for_scattering(topology::ScatteringTopologyCache, first::FirstOrderResult)
+    node_set = Set{Int}()
+    for nid in topology.node_ids
+        push!(node_set, nid)
+    end
+    for nid in keys(first.incident_power.par)
+        push!(node_set, nid)
+    end
+    for nid in keys(first.incident_power.nir)
+        push!(node_set, nid)
+    end
+    return collect(node_set)
+end
+
+function _transfer_graph_from_topology(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+)
+    node_ids = _node_ids_for_scattering(topology, first)
+    all_hits = _all_dir_hits_for_scattering(first, topology.sun_hits, options, node_ids)
+    coeff_par, coeff_nir =
+        _coeff_maps_by_node(node_ids, topology.node_group, topology.node_type, topology.group_type_coeffs, options)
+    return ScatteringTransferGraph(
+        topology.pair_counts,
+        all_hits,
+        node_ids,
+        topology.node_group,
+        topology.node_type,
+        topology.group_type_coeffs,
+        coeff_par,
+        coeff_nir,
+        options.scattering_coeff_par,
+        options.scattering_coeff_nir,
+    )
 end
 
 function _scattering_context(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, first::FirstOrderResult, options::LightOptions)
@@ -236,15 +664,9 @@ function build_scattering_transfer_graph(
     options::LightOptions,
     ::RaycastScatteringBackend,
 )
-    context = _scattering_context(scene, models, turtle, first, options)
-    return ScatteringTransferGraph(
-        context.pair_counts,
-        context.all_hits,
-        context.node_ids,
-        context.node_group,
-        context.node_type,
-        context.group_type_coeffs,
-    )
+    prepared = _prepare_interception_data(scene, models, options)
+    topology = _build_scattering_topology_cache(scene, models, prepared, turtle, options)
+    return _transfer_graph_from_topology(topology, first, options)
 end
 
 function build_scattering_transfer_graph(
@@ -259,10 +681,72 @@ function build_scattering_transfer_graph(
     return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
 end
 
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    return build_scattering_transfer_graph(topology, first, options, b)
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::RaycastScatteringBackend,
+)
+    return _transfer_graph_from_topology(topology, first, options)
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::LinksScatteringBackend,
+)
+    return build_scattering_transfer_graph(topology, first, options, RaycastScatteringBackend())
+end
+
 function _default_band_coeff(options::LightOptions, band_key::String)
     bk = uppercase(band_key)
     bk == "NIR" && return options.scattering_coeff_nir
     return options.scattering_coeff_par
+end
+
+@inline function _group_type_band_coeff(
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    group::String,
+    type_name::String,
+    band::String,
+    default_coeff::Float64,
+)
+    coeffs = get(
+        group_type_coeffs,
+        (group, type_name),
+        get(group_type_coeffs, (group, "*"), Dict{String,Float64}()),
+    )
+    return get(coeffs, band, default_coeff)
+end
+
+function _coeff_by_node(
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    band_key::String,
+    default_coeff::Float64,
+)
+    coeff_by_node = Dict{Int,Float64}()
+    band = uppercase(band_key)
+    for nid in node_ids
+        g = get(node_group, nid, "")
+        t = get(node_type, nid, "")
+        coeff_by_node[nid] = _group_type_band_coeff(group_type_coeffs, g, t, band, default_coeff)
+    end
+    coeff_by_node
 end
 
 function _coeff_by_node(
@@ -270,19 +754,46 @@ function _coeff_by_node(
     band_key::String,
     default_coeff::Float64,
 )
-    coeff_by_node = Dict{Int,Float64}()
     band = uppercase(band_key)
-    for nid in graph.node_ids
-        g = get(graph.node_group, nid, "")
-        t = get(graph.node_type, nid, "")
-        c = get(
-            graph.group_type_coeffs,
-            (g, t),
-            get(graph.group_type_coeffs, (g, "*"), Dict{String,Float64}()),
-        )
-        coeff_by_node[nid] = get(c, band, default_coeff)
+    if band == "PAR"
+        default_coeff == graph.default_coeff_par && return graph.coeff_par_by_node
+    elseif band == "NIR"
+        default_coeff == graph.default_coeff_nir && return graph.coeff_nir_by_node
     end
-    coeff_by_node
+    return _coeff_by_node(
+        graph.node_ids,
+        graph.node_group,
+        graph.node_type,
+        graph.group_type_coeffs,
+        band,
+        default_coeff,
+    )
+end
+
+function _coeff_maps_by_node(
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    options::LightOptions,
+)
+    coeff_par = _coeff_by_node(
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        "PAR",
+        options.scattering_coeff_par,
+    )
+    coeff_nir = _coeff_by_node(
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        "NIR",
+        options.scattering_coeff_nir,
+    )
+    return coeff_par, coeff_nir
 end
 
 function _initial_scattering_power(
@@ -452,6 +963,29 @@ function compute_scattering_band(
     )
 end
 
+function compute_scattering_band(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(topology, first, options, b)
+    return compute_scattering_band(
+        graph,
+        first,
+        options,
+        b;
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
+end
+
 """
     compute_scattering(scene, models, turtle, first, options; mode=:raycast, backend=nothing)::ScatteringResult
     compute_scattering(graph, first, options; mode=:raycast, backend=nothing)::ScatteringResult
@@ -480,19 +1014,19 @@ function compute_scattering(
     initial_par = _initial_scattering_power(graph, first, nothing, "PAR")
     initial_nir = _initial_scattering_power(graph, first, nothing, "NIR")
 
-    added_par, it_par, conv_par = _scattering_one_band(
+    added_par, it_par, conv_par = _propagate_scattering_one_band(
         initial_par,
         graph,
+        graph.coeff_par_by_node,
         options,
-        "PAR",
-        options.scattering_coeff_par,
+        graph.default_coeff_par,
     )
-    added_nir, it_nir, conv_nir = _scattering_one_band(
+    added_nir, it_nir, conv_nir = _propagate_scattering_one_band(
         initial_nir,
         graph,
+        graph.coeff_nir_by_node,
         options,
-        "NIR",
-        options.scattering_coeff_nir,
+        graph.default_coeff_nir,
     )
 
     ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
@@ -519,5 +1053,17 @@ function compute_scattering(
 )
     b = _resolve_scattering_backend(mode, backend)
     graph = build_scattering_transfer_graph(scene, models, turtle, first, options, b)
+    return compute_scattering(graph, first, options, b)
+end
+
+function compute_scattering(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions;
+    mode=:raycast,
+    backend=nothing,
+)
+    b = _resolve_scattering_backend(mode, backend)
+    graph = build_scattering_transfer_graph(topology, first, options, b)
     return compute_scattering(graph, first, options, b)
 end
