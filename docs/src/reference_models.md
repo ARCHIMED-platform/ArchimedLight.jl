@@ -183,3 +183,137 @@ Historical model files may include:
 - many energy-balance parameters
 
 Those sections are valuable archival context, but they are not the active light API of `ArchimedLight.jl`.
+
+## Interactive Equivalent
+
+In an interactive workflow, you do not need YAML model files. The equivalent is
+to build [`GroupModel`](@ref), [`TypeModel`](@ref), and
+[`InterceptionModel`](@ref) objects directly in Julia, then normalize them with
+`prepare_models`.
+
+Typical pattern:
+
+```julia
+models = prepare_models([
+    GroupModel(
+        "coffee";
+        types=OrderedDict(
+            "Leaf" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+            "Metamer" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.1,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+        ),
+    ),
+])
+```
+
+The correspondences are:
+
+- YAML `Group:` -> `GroupModel("coffee"; ...)`
+- YAML `Type:` entries -> the `types=OrderedDict(...)` mapping
+- YAML `Interception:` block -> `InterceptionModel(...)`
+- YAML `LightEmitter:` block -> `EmitterModel(...)`
+
+This means the matching semantics are unchanged. A node still resolves models by
+its `(group, type)` pair; the only difference is whether the mapping came from
+files or from Julia objects you built yourself.
+
+### Interactive Wildcard Models
+
+The wildcard mechanism also works when models are defined directly in Julia.
+
+You can use `*` at two levels:
+
+- wildcard group: `GroupModel("*"; ...)`
+- wildcard type: `types=OrderedDict("*" => ...)`
+
+The broadest fallback is:
+
+```julia
+models = prepare_models([
+    GroupModel(
+        "*";
+        types=OrderedDict(
+            "*" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.30),
+                ),
+            ),
+        ),
+    ),
+])
+```
+
+That means:
+
+- any functional group matches `GroupModel("*", ...)`
+- any component type inside that group matches the `"*"` type entry
+
+This is useful when:
+
+- building quick synthetic scenes
+- writing tests that should not depend on many exact type names
+- defining a safe default before adding more specific rules
+
+You can also mix explicit and wildcard rules:
+
+```julia
+models = prepare_models([
+    GroupModel(
+        "coffee";
+        types=OrderedDict(
+            "Leaf" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.18, 0.88),
+                ),
+            ),
+            "*" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+        ),
+    ),
+    GroupModel(
+        "*";
+        types=OrderedDict(
+            "*" => TypeModel(
+                interception=InterceptionModel(
+                    model="Translucent",
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.30),
+                ),
+            ),
+        ),
+    ),
+])
+```
+
+With that setup:
+
+- `("coffee", "Leaf")` uses the explicit coffee leaf model
+- `("coffee", "Stem")` falls back to the wildcard type inside the coffee group
+- `("banana", "Leaf")` falls back to the global wildcard group and wildcard type
+
+The precedence is the same as for YAML model files:
+
+1. exact group and exact type
+2. exact group and wildcard type
+3. wildcard group and exact type
+4. wildcard group and wildcard type

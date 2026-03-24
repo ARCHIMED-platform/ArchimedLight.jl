@@ -127,3 +127,64 @@ For a robust light-only workflow, prefer:
 - correct `latitude`
 - either measured `RI_PAR_f` / `RI_NIR_f` or a trusted `clearness`
 - optional extra bands only when you also have matching optical coefficients in the model files
+
+## Interactive Equivalent
+
+In an interactive workflow, you do not need a meteo CSV if you already know the
+forcing you want to simulate. There are two common equivalents.
+
+### 1. Build A `MeteoTable` In Memory
+
+Use this when you still want the normal meteo-driven pipeline with
+`prepare_meteo`, `run_light_step`, or `run_light_series`:
+
+```julia
+meteo = MeteoTable(
+    [
+        (
+            date=Date(2020, 6, 21),
+            hour_start="12:00:00",
+            hour_end="12:30:00",
+            latitude=15.0,
+            RI_PAR_f=350.0,
+            RI_NIR_f=250.0,
+            relativeHumidity=60.0,
+            use="relativeHumidity",
+        ),
+    ],
+    (latitude=15.0, file="interactive",),
+)
+
+rows = prepare_meteo(meteo, options).rows
+step = run_light_step(scene, models, first(rows), options)
+```
+
+The correspondences are:
+
+- CSV rows -> the vector of named tuples in `MeteoTable.rows`
+- metadata comments such as `#' latitude: ...` -> `MeteoTable.metadata`
+- `prepare_meteo(read_meteo(path), options)` -> `prepare_meteo(meteo, options)`
+
+### 2. Build A `SkyState` Directly
+
+Use this when you already know the direct/diffuse forcing and want to bypass the
+meteo parsing layer entirely:
+
+```julia
+sky = SkyState(
+    135.0,
+    90.0,
+    350.0,
+    250.0,
+    0.95,
+    0.05,
+)
+
+turtle = build_turtle(options, sky)
+fluxes = compute_directional_fluxes(sky, turtle, options)
+first = compute_first_order(scene, models, turtle, fluxes, options)
+```
+
+This is the interactive equivalent of saying “for this step, I already know the
+sun direction, PAR, NIR, and direct/diffuse partition, so I do not need a CSV
+row at all.”

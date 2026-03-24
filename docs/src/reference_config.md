@@ -203,3 +203,49 @@ Those keys remain useful documentation for old workflows, but they are not the m
 - [Scene Files And Semantics](reference_scene.md)
 - [Model Files Reference](reference_models.md)
 - [Meteo Inputs Reference](reference_meteo.md)
+
+## Interactive Equivalent
+
+There is no one-file interactive equivalent of `config.yml`.
+
+Instead, the information that would normally be centralized in the config file
+is passed explicitly as Julia objects and function arguments:
+
+```julia
+scene = prepare_scene(mtg; scene_xy_bounds=(-1.0, -1.0, 1.0, 1.0))
+models = prepare_models(groups)
+meteo = MeteoTable(rows, metadata)
+rows = prepare_meteo(meteo, options).rows
+step = run_light_step(scene, models, first(rows), options)
+```
+
+The correspondences are:
+
+- `scene:` -> the MTG you pass to `prepare_scene`
+- `models:` -> the groups you pass to `prepare_models`
+- `meteo:` -> the `MeteoTable` or `SkyState` you build in Julia
+- global YAML options such as `sky_sectors`, `pixel_size`, `toricity`, `scattering` -> fields of `LightOptions`
+
+For example, this file-based block:
+
+```yaml
+sky_sectors: 16
+pixel_size: 1
+toricity: true
+scattering: false
+```
+
+becomes:
+
+```julia
+options = LightOptions(
+    turtle_sectors=16,
+    pixel_size=0.01,
+    toricity=true,
+    scattering=false,
+)
+```
+
+So `config.yml` is mainly a convenience layer for file-based workflows. In an
+interactive workflow, the same information is still required, but you provide it
+piece by piece in Julia instead of assembling it in one YAML file.

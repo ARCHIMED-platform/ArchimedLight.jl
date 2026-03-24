@@ -137,6 +137,42 @@ The critical rule is that the MTG nodes with geometry must expose enough metadat
 - a functional group, typically through `:functional_group`
 - a type, either explicit or implied by the node symbol
 
+### Interactive Equivalent
+
+There is no mandatory scene file in an interactive workflow. The equivalent of
+the `.ops` + `.opf` information is:
+
+- the MTG topology and geometry you build in Julia
+- the per-node metadata you attach to that MTG
+- the explicit `scene_xy_bounds` you pass to `prepare_scene`
+
+Typical pattern:
+
+```julia
+mtg = Node(MutableNodeMTG(:/, :Plant, 1, 1))
+leaf = Node(mtg, MutableNodeMTG(:+, :Leaf, 1, 2))
+leaf[:geometry] = some_geometry
+leaf[:functional_group] = "coffee"
+leaf[:object_id] = 1
+
+scene = prepare_scene(
+    mtg;
+    source_path="interactive.opf",
+    scene_xy_bounds=(-1.0, -1.0, 1.0, 1.0),
+)
+```
+
+The correspondences are:
+
+- `.ops` terrain line -> `scene_xy_bounds=(xmin, ymin, xmax, ymax)`
+- `#[Archimed] coffee` -> `node[:functional_group] = "coffee"`
+- object placement in `.ops` -> the geometry coordinates or transformations you build in Julia
+- organ identity from `.opf` -> the MTG nodes you keep in memory
+
+So the interactive question is not “which file format should I write?”, but
+“does my MTG expose geometry, group, type, and plot bounds clearly enough for
+`prepare_scene`?”
+
 ## Ground And Paving
 
 Two mechanisms exist:
