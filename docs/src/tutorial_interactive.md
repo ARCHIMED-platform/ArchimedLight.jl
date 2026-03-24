@@ -183,6 +183,12 @@ add_ground!(
 )
 ```
 
+We can now visualize the plant and the ground together:
+
+```@example interactive_workflow
+plantviz(scene.mtg, figure=(size=(820, 560),))
+```
+
 ## Run One Simulation And Visualize It
 
 The example below runs a single light simulation on that plant, and visualizes the result directly in 3D.
@@ -192,7 +198,7 @@ First, we define the sky conditions with a `SkyState`:
 ```@example interactive_workflow
 sky = SkyState(
     135.0,  # sun azimuth in degrees
-    90.0,   # sun elevation in degrees
+    60.0,   # sun elevation in degrees
     350.0,  # PAR irradiance on horizontal ground, W m^-2
     250.0,  # NIR irradiance on horizontal ground, W m^-2
     0.95,   # direct fraction
