@@ -8,6 +8,16 @@
     @test length(series) == length(selected.rows)
     @test !isempty(series[1].budget.incident_energy.total.par)
     @test length(series[1].turtle.sectors) == 17
+    step_summary = sprint(show, series[1])
+    step_pretty = sprint(show, MIME"text/plain"(), series[1])
+    @test occursin("LightStepResult(", step_summary)
+    @test occursin("sectors=17", step_summary)
+    @test occursin("LightStepResult", step_pretty)
+    @test occursin("sky        PAR", step_pretty)
+    @test occursin("incident   PAR", step_pretty)
+    @test occursin("absorbed   PAR", step_pretty)
+    @test occursin("turtle     17 sectors", step_pretty)
+    @test occursin("scattering off", step_pretty)
 
     options2, scene2, meteo2, models2 = ArchimedLight.read_config(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"))
     @test options2.turtle_sectors == fixture.options.turtle_sectors
@@ -31,4 +41,14 @@
     @test raw_scene.mtg[:geometry] !== nothing
     ArchimedLight.add_ground!(raw_scene; nx=2, ny=2)
     @test raw_scene.mtg[:geometry] === nothing
+end
+
+@testset "SmallHitStack handles dense pixels" begin
+    stack = ArchimedLight.SmallHitStack()
+    for i in 1:300
+        push!(stack, (Float64(i), i))
+    end
+    @test length(stack) == 300
+    @test stack[1] == (1.0, 1)
+    @test stack[end] == (300.0, 300)
 end

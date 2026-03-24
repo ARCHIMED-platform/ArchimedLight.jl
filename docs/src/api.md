@@ -21,6 +21,28 @@ LightBudget
 LightStepResult
 ```
 
+```@docs
+OpticalProperties
+InterceptionModel
+EmitterModel
+TypeModel
+GroupModel
+LightModels
+LightOptions
+MeteoTable
+SceneNodeData
+SceneGeometry
+SkyState
+TurtleSector
+TurtleGrid
+DirectionalFluxes
+FirstOrderResult
+ScatteringResult
+ScatteringTransferGraph
+LightBudget
+LightStepResult
+```
+
 ## Input Loading
 
 Use these when your workflow starts from files:

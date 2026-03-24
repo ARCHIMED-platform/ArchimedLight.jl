@@ -1,13 +1,13 @@
 # Getting Started
 
-This page is the shortest path from a fresh checkout to a first light simulation.
+This page is the shortest path to your first light simulation.
 It uses the bundled coffee example from `example_2/`, which is also the source of the image on the home page.
 
 ![Coffee example scene](assets/coffee_scene.png)
 
 ## What This Example Covers
 
-- reading a Java-style `config.yml`
+- reading parameters from files, using a `config.yml` as the single source of truth for file paths and model options
 - loading a scene from `.ops` and `.opf`
 - loading functional-group models from YAML
 - reading one meteo step
@@ -16,18 +16,21 @@ It uses the bundled coffee example from `example_2/`, which is also the source o
 
 ## Minimal Run
 
-From the repository root:
+```@setup getting_started
+using ArchimedLight, PlantGeom, CairoMakie
+CairoMakie.activate!(type = "png")
+```
 
-```bash
-julia --project=. -e '
+```@example getting_started
 using ArchimedLight
-config = "example_2/config.yml"
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
 options, scene, meteo, models = read_config(config)
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)
-println(step.budget.incident_flux.total.par)
-println(step.budget.absorbed_energy.total.par)
-'
+
+step
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -37,34 +40,21 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 - stage: `initial` for first-order only, `total` for first-order plus scattering
 - waveband: `par`, `nir`, and any extra shortwave bands present in the meteo file
 
-## The Same Run In Regular Julia Code
-
-```julia
-using ArchimedLight
-
-config = joinpath("example_2", "config.yml")
-options, scene, meteo, models = read_config(config)
-
-row = first(prepare_meteo(meteo, options).rows)
-step = run_light_step(scene, models, row, options)
-
-step.budget.incident_flux.total.par
-step.budget.incident_energy.initial.par
-step.budget.absorbed_flux.total.nir
-```
-
 ## Attach Results Back Onto The Scene
 
 `ArchimedLight.jl` keeps the numeric results in Julia objects by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
-```julia
+```@example getting_started
 attach_light_step!(
     scene,
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
 )
 
-write_scene("output/coffee_step.opf", scene)
+out_path = joinpath(mktempdir(), "coffee_step.opf")
+write_scene(out_path, scene)
+
+out_path
 ```
 
 The attached node attributes use the standard ARCHIMED names:
@@ -72,6 +62,27 @@ The attached node attributes use the standard ARCHIMED names:
 - `:incident_par_flux` -> `Ri_PAR_f`
 - `:incident_par_energy` -> `Ri_PAR_q`
 - `:absorbed_par_energy` -> `Ra_PAR_q`
+
+
+# Plotting the results
+
+You can plot the results using `PlantGeom.jl` + `Makie.jl`:
+
+```@example getting_started
+using PlantGeom, CairoMakie
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    figure=(size=(980, 700),),
+)
+
+PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
+fig
+```
+
+By default, the `toricity` parameter is activated, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
 
 ## What To Read Next
 

@@ -170,6 +170,17 @@ function _model_paths_from_config(path::AbstractString)
     [_join_if_relative(base, string(m)) for m in models]
 end
 
+"""
+    read_models(path_or_paths)::LightModels
+
+Read one or more ARCHIMED model YAML files and return them as a
+[`LightModels`](@ref) collection.
+
+`path_or_paths` can be:
+- the path to a single model YAML file containing a `Group`
+- the path to a config YAML file containing a `models:` list
+- a vector of explicit model-file paths
+"""
 function read_models(path_or_paths)
     model_paths =
         if path_or_paths isa AbstractString
@@ -200,6 +211,14 @@ function read_models(path_or_paths)
     LightModels(groups)
 end
 
+"""
+    prepare_models(models)
+
+Normalize in-memory model definitions into a [`LightModels`](@ref) object.
+
+Accepted inputs are an existing `LightModels`, a single [`GroupModel`](@ref), a
+vector of groups, or an `OrderedDict{String,GroupModel}`.
+"""
 function prepare_models(models::LightModels)
     models
 end
@@ -216,6 +235,15 @@ function prepare_models(groups::OrderedDict{String,GroupModel})
     LightModels(groups)
 end
 
+"""
+    read_options(path)::LightOptions
+
+Read runtime light options from a config YAML file.
+
+This parses the ARCHIMED configuration keys such as `sky_sectors`,
+`pixel_size`, `toricity`, scattering controls, and meteo-range options into a
+[`LightOptions`](@ref) instance.
+"""
 function read_options(path::AbstractString)
     raw = _load_yaml_ordered(path)
     return LightOptions(
@@ -340,6 +368,15 @@ function _materialize_paving!(
     _refresh_scene!(scene)
 end
 
+"""
+    read_config(path; plot_paving_override=nothing)
+
+Read a complete simulation configuration from `path` and return
+`(options, scene, meteo, models)`.
+
+When `plot_paving_override` is provided, it overrides the paving density
+declared in the model extras before the ground is materialized into the scene.
+"""
 function read_config(path::AbstractString; plot_paving_override=nothing)
     raw = _load_yaml_ordered(path)
     base = dirname(path)
@@ -543,6 +580,15 @@ function _scene_xy_bounds_from_mtg(mtg)
     )
 end
 
+"""
+    prepare_scene(mtg; source_path="interactive.opf", scene_xy_bounds=nothing, relabel_ids=false)::SceneGeometry
+
+Convert an MTG with geometry into the dense scene representation used by the
+light solver.
+
+The returned [`SceneGeometry`](@ref) stores the merged mesh, face-to-node map,
+per-node metadata, and optional xy bounds used for paving and rasterization.
+"""
 function prepare_scene(mtg; source_path::AbstractString="interactive.opf", scene_xy_bounds=nothing, relabel_ids::Bool=false)
     relabel_ids && _relabel_scene_node_ids!(mtg)
     bounds = scene_xy_bounds === nothing ? _scene_xy_bounds_from_mtg(mtg) : scene_xy_bounds
@@ -551,6 +597,7 @@ end
 
 function _refresh_scene!(scene::SceneGeometry)
     scene.mtg === nothing && error("Scene refresh requires an MTG-backed scene.")
+    PlantGeom.bump_scene_version!(scene.mtg)
     refreshed = prepare_scene(scene.mtg; source_path=scene.source_path, scene_xy_bounds=scene.scene_xy_bounds, relabel_ids=false)
     scene.merged_mesh = refreshed.merged_mesh
     scene.face2node = refreshed.face2node
@@ -559,6 +606,15 @@ function _refresh_scene!(scene::SceneGeometry)
     return scene
 end
 
+"""
+    read_scene(path)::SceneGeometry
+
+Read a scene file (`.ops`, `.opf`, or `.gwa`) and return a prepared
+[`SceneGeometry`](@ref).
+
+The scene is relabelled into a dense node-id space and immediately converted to
+the merged-mesh representation expected by the interception pipeline.
+"""
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
     mtg = if ext == ".ops"
@@ -605,15 +661,24 @@ function _normalize_source_topology_ids!(mtg)
     return mtg
 end
 
+"""
+    add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="pavement", type="Cobblestone")
+
+Add an explicit rectangular ground paving to an MTG-backed [`SceneGeometry`](@ref).
+
+The paving is discretized into `nx * ny` tiles covering `xy_bounds` (or the
+scene xy bounds when omitted), inserted into the scene MTG, and the prepared
+scene caches are refreshed.
+"""
 function add_ground!(
-    scene::SceneGeometry;
+    scene::SceneGeometry{T};
     z::Real=0.0,
     nx::Int=9,
     ny::Int=9,
     xy_bounds=nothing,
     group::AbstractString="pavement",
     type::AbstractString="Cobblestone",
-)
+) where {T<:MultiScaleTreeGraph.Node{N}} where N
     scene.mtg === nothing && error("add_ground! requires an MTG-backed scene.")
     bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
     bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
@@ -625,9 +690,9 @@ function add_ground!(
 
     for ix in 1:nx, iy in 1:ny
         x0 = x_edges[ix]
-        x1 = x_edges[ix + 1]
+        x1 = x_edges[ix+1]
         y0 = y_edges[iy]
-        y1 = y_edges[iy + 1]
+        y1 = y_edges[iy+1]
         points = GeometryBasics.Point3f[
             GeometryBasics.Point3f(Float32(x0), Float32(y0), Float32(z)),
             GeometryBasics.Point3f(Float32(x1), Float32(y0), Float32(z)),
@@ -642,7 +707,7 @@ function add_ground!(
         MultiScaleTreeGraph.Node(
             nid,
             scene.mtg,
-            MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), nid, root_scale + 1),
+            N(:+, Symbol(type), nid, root_scale + 1),
             Dict{Symbol,Any}(
                 :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
                 :functional_group => String(group),
@@ -659,6 +724,14 @@ function add_ground!(
     _refresh_scene!(scene)
 end
 
+"""
+    write_scene(path, scene)
+
+Write an MTG-backed [`SceneGeometry`](@ref) to `path`.
+
+Supported output formats are `.ops`, `.opf`, and `.gwa`. The function refreshes
+the reference-mesh registry and normalizes topology ids before export.
+"""
 function write_scene(path::AbstractString, scene::SceneGeometry)
     scene.mtg === nothing && error("write_scene requires an MTG-backed scene.")
     ext = lowercase(splitext(path)[2])
@@ -722,6 +795,15 @@ function _normalize_raw_meteo_dates(data)
     return data
 end
 
+"""
+    read_meteo(path)::MeteoTable
+
+Read a meteorological forcing table from `path` and return it as a
+[`MeteoTable`](@ref).
+
+The resulting table stores rows as named tuples and keeps available metadata
+such as latitude, longitude, altitude, and source file path.
+"""
 function read_meteo(path::AbstractString)
     weather, meta =
         try

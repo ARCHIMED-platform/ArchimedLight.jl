@@ -2,7 +2,7 @@
 
 This page explains, in plain language, how ARCHIMED computes light interception, what the main hypotheses are, and how the Julia implementation in `ArchimedLight.jl` mirrors the original Java code. The goal is not only to document the software, but to describe the model itself. A reader should be able to understand the full computation pipeline without opening the source files.
 
-The scope here is the light-only part of ARCHIMED: scene ingestion, solar and sky radiation, directional discretization with the turtle, first-order interception, multiple scattering, and the production of light output tables. Photosynthesis, energy balance, transpiration, and thermal calculations are intentionally left out because they are rather computed by PlantBiophysics.
+The scope here is the light-only part of ARCHIMED: scene ingestion, solar and sky radiation, directional discretization with the turtle, first-order interception, multiple scattering, and the production of light output tables. Photosynthesis, energy balance, transpiration, and thermal calculations are intentionally left out because they are rather computed by [PlantBiophysics](https://github.com/VEZY/PlantBiophysics.jl).
 
 ## What the model is trying to compute
 

@@ -32,13 +32,13 @@ optimum. Users can override the storage mode with
 `LightOptions(pixel_hit_stack_mode=...)`.
 """
 mutable struct SmallHitStack <: AbstractVector{HitRecord}
-    len::UInt8
+    len::Int32
     hit1::HitRecord
     hit2::HitRecord
     spill::Union{Nothing,Vector{HitRecord}}
 end
 
-SmallHitStack() = SmallHitStack(0x00, (0.0, 0), (0.0, 0), nothing)
+SmallHitStack() = SmallHitStack(0, (0.0, 0), (0.0, 0), nothing)
 
 """
     DensePixelHits
@@ -206,7 +206,7 @@ function Base.push!(stack::SmallHitStack, hit::HitRecord)
     else
         push!(stack.spill, hit)
     end
-    stack.len = UInt8(len + 1)
+    stack.len = Int32(len + 1)
     return stack
 end
 
@@ -238,7 +238,7 @@ function Base.deleteat!(stack::SmallHitStack, i::Int)
             stack.spill = nothing
         end
     end
-    stack.len = UInt8(len - 1)
+    stack.len = Int32(len - 1)
     return stack
 end
 
