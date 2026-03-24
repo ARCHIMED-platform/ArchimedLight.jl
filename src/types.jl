@@ -1,15 +1,64 @@
 import OrderedCollections: OrderedDict
 
+"""
+    InterceptionBackend
+
+Abstract supertype for first-order interception backends.
+"""
 abstract type InterceptionBackend end
 
+"""
+    RasterCPUBackend()
+
+Reference interception backend based on CPU raster projection.
+"""
 struct RasterCPUBackend <: InterceptionBackend end
 
+"""
+    ScatteringBackend
+
+Abstract supertype for multiple-scattering backends.
+"""
 abstract type ScatteringBackend end
 
+"""
+    RaycastScatteringBackend()
+
+Scattering backend that reconstructs transfer topology from directional
+ray-visibility stacks.
+"""
 struct RaycastScatteringBackend <: ScatteringBackend end
 
+"""
+    LinksScatteringBackend()
+
+Scattering backend that uses precomputed link-style transfer relationships.
+"""
 struct LinksScatteringBackend <: ScatteringBackend end
 
+"""
+    OpticalProperties(par=0.0, nir=0.0)
+
+Per-waveband scattering coefficients for a component or emitter.
+
+`par` and `nir` are the built-in ARCHIMED bands. Additional coefficients can be
+stored in `extras`.
+
+For plant components, these coefficients are typically used as the scattered
+fraction in each waveband. Expected values are usually in `[0, 1]`.
+
+Typical values:
+
+- leaves in PAR: often around `0.05-0.25`
+- leaves in NIR: often around `0.4-0.9`
+- emitters: `gamma` often uses `PAR=0.48`, `NIR=0.52` to split total radiance
+  into the built-in bands
+
+Examples:
+
+- `OpticalProperties(0.15, 0.90)` for a strongly NIR-scattering leaf
+- `OpticalProperties(0.48, 0.52)` for a neutral PAR/NIR emitter split
+"""
 mutable struct OpticalProperties
     par::Float64
     nir::Float64
@@ -18,6 +67,32 @@ end
 
 OpticalProperties(par::Real=0.0, nir::Real=0.0) = OpticalProperties(Float64(par), Float64(nir), OrderedDict{String,Any}())
 
+"""
+    InterceptionModel(; model="Translucent", sensor=false, transparency=0.0, optical_properties=nothing, use=nothing, variants=..., extras=...)
+
+Radiative behavior attached to one scene component type.
+
+This stores the interception model name, transparency, optical coefficients, and
+optional named variants from historical ARCHIMED model files.
+
+Main fields:
+
+- `model`: historical ARCHIMED interception model name. The common runtime case
+  is `"Translucent"`.
+- `sensor`: marks the type as a virtual sensor. Virtual sensors receive light
+  diagnostics but remain transparent in the transfer logic.
+- `transparency`: first-order transmitted fraction. Typical values are in
+  `[0, 1]`, with `0.0` for fully intercepting surfaces and larger values for
+  partially transmitting components.
+- `optical_properties`: waveband-dependent scattering coefficients used by the
+  scattering stage.
+- `use` and `variants`: preserved support for historical YAML files that define
+  several named parameter sets under one `Interception` block.
+
+Typical pattern for ordinary canopy elements:
+
+`InterceptionModel(model="Translucent", transparency=0.0, optical_properties=OpticalProperties(0.15, 0.90))`
+"""
 mutable struct InterceptionModel
     use::Union{Nothing,String}
     model::String
@@ -48,6 +123,20 @@ function InterceptionModel(;
     )
 end
 
+"""
+    EmitterModel(; model="LambertianEmitter", radiance=0.0, gamma=OpticalProperties(0.48, 0.52), extras=...)
+
+Emission model for artificial or diagnostic light sources.
+
+`radiance` is the total emitted radiance-like magnitude attached to the source
+type, and `gamma` splits that magnitude across wavebands. In the common PAR/NIR
+case, `gamma=OpticalProperties(0.48, 0.52)` means "48% of the emitted energy is
+treated as PAR and 52% as NIR".
+
+Most canopy simulations do not need explicit emitters and rely only on sky and
+sun forcing, but emitters are useful for artificial lighting setups, synthetic
+tests, or debugging scenes.
+"""
 mutable struct EmitterModel
     model::String
     radiance::Float64
@@ -64,6 +153,26 @@ function EmitterModel(;
     EmitterModel(String(model), Float64(radiance), gamma, extras)
 end
 
+"""
+    TypeModel(; interception=nothing, light_emitter=nothing, extras=...)
+
+Model definition for one component type inside a functional group.
+
+This is the level that corresponds to one entry under the `Type:` block in a
+historical YAML model file.
+
+Typical contents:
+
+- `interception`: how this component intercepts, transmits, and scatters light
+- `light_emitter`: optional emission model for artificial sources
+- `extras`: preserved non-light metadata from input files
+
+Examples:
+
+- a leaf type with only interception behavior
+- a lamp type with only `light_emitter`
+- a diagnostic sensor type with `interception=InterceptionModel(sensor=true, ...)`
+"""
 mutable struct TypeModel
     interception::Union{Nothing,InterceptionModel}
     light_emitter::Union{Nothing,EmitterModel}
@@ -78,6 +187,48 @@ function TypeModel(;
     TypeModel(interception, light_emitter, extras)
 end
 
+"""
+    GroupModel(group; types=OrderedDict(), extras=...)
+
+Model definition for one functional group, keyed by component type.
+
+`group` should match the functional-group name carried by the prepared scene
+geometry, for example `"coffee"` or `"pavement"`.
+
+`types` maps scene type names such as `"Leaf"`, `"Metamer"`, or
+`"Cobblestone"` to [`TypeModel`](@ref) values.
+
+Wildcard support:
+
+- an exact type key such as `"Leaf"` applies only to that type
+- the wildcard key `"*"` acts as a fallback for any type in the group
+
+This allows compact interactive setups such as:
+
+```julia
+GroupModel(
+    "coffee";
+    types=OrderedDict(
+        "*" => TypeModel(
+            interception=InterceptionModel(
+                model="Translucent",
+                optical_properties=OpticalProperties(0.15, 0.90),
+            ),
+        ),
+        "Stem" => TypeModel(
+            interception=InterceptionModel(
+                model="Translucent",
+                transparency=0.2,
+                optical_properties=OpticalProperties(0.10, 0.50),
+            ),
+        ),
+    ),
+)
+```
+
+In that example, all coffee components use the wildcard model except `"Stem"`,
+which is overridden explicitly.
+"""
 mutable struct GroupModel
     group::String
     types::OrderedDict{String,TypeModel}
@@ -92,6 +243,37 @@ function GroupModel(
     GroupModel(String(group), types, extras)
 end
 
+"""
+    LightModels(groups)
+
+Top-level collection of all functional-group models used by one simulation.
+
+This is the object passed to `run_light_step`, `run_light_series`, and the lower
+level interception/scattering functions.
+
+`groups` maps functional-group names to [`GroupModel`](@ref) values. The
+special group key `"*"` is also supported as a global fallback.
+
+When the solver resolves a scene node `(group, type)`, it matches models with
+the following precedence:
+
+1. exact group and exact type
+2. exact group and wildcard type `"*"`
+3. wildcard group `"*"` and exact type
+4. wildcard group `"*"` and wildcard type `"*"`
+
+This makes `LightModels` convenient for:
+
+- precise canopy parameterizations with several plant groups
+- synthetic scenes where one default model should cover many node types
+- gradual interactive workflows where you start with fallback models and then
+  add explicit overrides
+
+Examples:
+
+- `LightModels([GroupModel("coffee"; ...), GroupModel("pavement"; ...)])`
+- `LightModels([GroupModel("*"; types=OrderedDict("*" => default_type_model))])`
+"""
 struct LightModels
     groups::OrderedDict{String,GroupModel}
 end
@@ -121,6 +303,30 @@ projection:
 - `"auto"`: current default optimized path
 - `"small"`: force inline small stacks with spillover allocation
 - `"vector"`: force the legacy `Vector` stack representation
+
+Important fields:
+
+- `turtle_sectors`: number of diffuse sky sectors. Common values are `16`, `46`,
+  or denser grids for smoother angular resolution.
+- `all_in_turtle`: if `false`, the direct beam stays as a separate sun sector;
+  if `true`, it is redistributed into the turtle sectors.
+- `pixel_size`: raster pixel size in meters. Smaller values improve geometric
+  fidelity but increase runtime and memory use. Typical values are in the
+  millimeter-to-centimeter range depending on scene size.
+- `area_ratio`: enables the ARCHIMED projected-area correction. This is usually
+  the right setting for parity with the historical implementation.
+- `scattering`: turns multiple scattering on or off.
+- `scattering_max_iter` and `scattering_stop_ratio`: stopping controls for the
+  iterative scattering solver.
+- `scattering_coeff_par` and `scattering_coeff_nir`: fallback scattering
+  coefficients used when a model omits a waveband in its
+  [`OpticalProperties`](@ref).
+- `radiation_timestep_minutes`: internal radiative substep used when a meteo
+  row covers a coarser time interval.
+
+Typical starting point for simple runs:
+
+`LightOptions(turtle_sectors=46, pixel_size=0.0025, scattering=true)`
 """
 Base.@kwdef struct LightOptions
     all_in_turtle::Bool = false
@@ -176,11 +382,47 @@ function LightOptions(old::LightOptions; kwargs...)
     return LightOptions(; params...)
 end
 
+"""
+    MeteoTable(rows, metadata)
+
+Normalized in-memory meteorological forcing table.
+
+`rows` is a vector of named tuples, and `metadata` stores site-level context
+such as latitude, altitude, and source file information.
+
+This is the interactive equivalent of a parsed meteorological CSV file.
+
+Typical row fields include:
+
+- time and date information such as `date`, `hour_start`, `hour_end`
+- radiative forcing such as `RI_SW_f`, `RI_PAR_f`, `RI_NIR_f`
+- optional sun diagnostics such as `sun_azimuth`, `sun_elevation`
+- optional partitioning inputs such as `direct_fraction` or `clearness`
+
+The table is usually passed through `prepare_meteo(meteo, options)` before
+running a series simulation.
+"""
 struct MeteoTable
     rows::Vector{NamedTuple}
     metadata::NamedTuple
 end
 
+"""
+    SceneNodeData
+
+Per-node geometric and semantic information extracted into a prepared
+[`SceneGeometry`](@ref).
+
+Fields:
+
+- `area`: component area in scene units after geometry preparation
+- `barycenter`: component barycenter in scene coordinates
+- `group`: functional group used for model matching
+- `type`: type name used for model matching
+- `source_topology_id`: original topology identifier from the source MTG or file
+- `object_id`: object identifier used to group components belonging to the same
+  plant or object when available
+"""
 struct SceneNodeData{T}
     area::T
     barycenter::NTuple{3,T}
@@ -190,6 +432,29 @@ struct SceneNodeData{T}
     object_id::Int
 end
 
+"""
+    SceneGeometry
+
+Prepared scene representation used by the light solver.
+
+It stores the merged mesh, face-to-node map, per-node metadata, source path,
+and optional xy bounds used during raster projection.
+
+This is the geometry object returned by `prepare_scene` or `read_scene`. It is
+the scene-side input consumed by the solver.
+
+Main fields:
+
+- `mtg`: prepared scene graph
+- `merged_mesh`: merged triangle mesh used by the projection engine
+- `face2node`: mapping from merged mesh faces back to scene node ids
+- `nodes`: per-node metadata and geometry summaries
+- `source_path`: origin of the scene when it came from disk
+- `scene_xy_bounds`: optional explicit xy limits for raster projection
+
+In most workflows you do not construct this type manually; instead you build or
+load a scene and then call `prepare_scene(...)`.
+"""
 mutable struct SceneGeometry{MTG,Mesh,T}
     mtg::MTG
     merged_mesh::Mesh
@@ -245,6 +510,48 @@ _scene_source_topology_id(scene::SceneGeometry, node_id::Integer, default=Int(no
 _scene_object_id(scene::SceneGeometry, node_id::Integer, default=-1) =
     _scene_node_field(scene, node_id, :object_id, default)
 
+"""
+    SkyState(sun_azimuth_deg, sun_elevation_deg, ri_par_f, ri_nir_f, direct_fraction, diffuse_fraction)
+
+Instantaneous radiative forcing state used to build the turtle and directional
+fluxes for one light step.
+
+Arguments:
+
+- `sun_azimuth_deg`: sun azimuth in degrees on the horizontal plane. The package
+  uses `0°` along `+y`, `90°` along `+x`, `180°` along `-y`, and `270°` along
+  `-x`. If your scene uses the common `x=east`, `y=north` convention, this means
+  `0°=north`, `90°=east`, `180°=south`, `270°=west`.
+- `sun_elevation_deg`: sun elevation in degrees above the horizon. Typical
+  daylight values are between `5` and `80`. Use `90` for a sun at zenith; in
+  simple examples, `89` is often a good practical choice when you want a nearly
+  vertical beam.
+- `ri_par_f`: incident PAR irradiance in `W m^-2` on a horizontal plane.
+  Typical daylight values are often in the `100-600` range. Clear midday
+  conditions are often around `300-500`.
+- `ri_nir_f`: incident NIR irradiance in `W m^-2` on a horizontal plane.
+  Typical daylight values are often in the `100-700` range, commonly of the
+  same order as or slightly larger than PAR.
+- `direct_fraction`: fraction of the shortwave forcing treated as direct beam.
+  Expected range is `[0, 1]`. Typical values are near `0.8-1.0` for clear-sky
+  conditions, around `0.3-0.7` for mixed conditions, and `0.0` for a fully
+  diffuse sky.
+- `diffuse_fraction`: fraction of the shortwave forcing treated as diffuse sky
+  radiation. Expected range is `[0, 1]`. In most use cases, it should satisfy
+  `direct_fraction + diffuse_fraction == 1`.
+
+This six-argument constructor stores `ri_sw_f = ri_par_f + ri_nir_f`
+automatically.
+
+Examples:
+
+- Nearly zenith, mostly direct forcing:
+  `SkyState(180.0, 89.0, 350.0, 250.0, 0.95, 0.05)`
+- Lower sun with mixed direct and diffuse light:
+  `SkyState(135.0, 35.0, 200.0, 180.0, 0.5, 0.5)`
+- Fully diffuse overcast step:
+  `SkyState(180.0, 45.0, 120.0, 130.0, 0.0, 1.0)`
+"""
 struct SkyState
     sun_azimuth_deg::Float64
     sun_elevation_deg::Float64
@@ -272,6 +579,12 @@ SkyState(
     diffuse_fraction,
 )
 
+"""
+    TurtleSector
+
+One directional sector of the ARCHIMED turtle, with its direction, weight, and
+source (`:sky`, `:sun`, or another source label).
+"""
 struct TurtleSector
     id::Int
     direction
@@ -279,10 +592,20 @@ struct TurtleSector
     source::Symbol
 end
 
+"""
+    TurtleGrid
+
+Collection of [`TurtleSector`](@ref)s used to discretize incoming radiation.
+"""
 struct TurtleGrid
     sectors::Vector{TurtleSector}
 end
 
+"""
+    DirectionalFluxes
+
+Per-sector PAR and NIR fluxes aligned with one [`TurtleGrid`](@ref).
+"""
 struct DirectionalFluxes
     sector_ids::Vector{Int}
     par::Vector{Float64}
@@ -299,12 +622,24 @@ struct InitialTotalSpectralNodeValues
     total::SpectralNodeValues
 end
 
+"""
+    FirstOrderResult
+
+Outputs of the first-order interception stage: projected area, incident power,
+and hit counts per node.
+"""
 struct FirstOrderResult
     projected_area_per_node::Dict{Int,Float64}
     incident_power::SpectralNodeValues
     hits_per_node::Dict{Int,Int}
 end
 
+"""
+    ScatteringResult
+
+Outputs of the multiple-scattering stage: added power per node, iteration
+count, and convergence flag.
+"""
 struct ScatteringResult
     added_power::SpectralNodeValues
     iterations::Int
@@ -351,6 +686,12 @@ function ScatteringPairCounts(pair_counts::Dict{Tuple{Int,Int},Int})
     return ScatteringPairCounts(to_nodes, from_nodes, counts)
 end
 
+"""
+    ScatteringTransferGraph
+
+Compact scene-scale topology used by the scattering solver to move energy
+between nodes.
+"""
 struct ScatteringTransferGraph
     pair_counts::ScatteringPairCounts
     all_hits::Dict{Int,Int}
@@ -390,6 +731,12 @@ function ScatteringTransferGraph(
     )
 end
 
+"""
+    LightBudget
+
+Per-node light budget for one simulation step, storing incident and absorbed
+fluxes and energies for PAR, NIR, and optional extra wavebands.
+"""
 struct LightBudget
     incident_flux::InitialTotalSpectralNodeValues
     incident_energy::InitialTotalSpectralNodeValues
@@ -399,6 +746,13 @@ struct LightBudget
     extra_energy_per_band::Dict{String,Dict{Int,Float64}}
 end
 
+"""
+    LightStepResult
+
+Complete result of one light simulation step, including the sky state, turtle,
+directional fluxes, first-order interception, optional scattering, and the
+integrated [`LightBudget`](@ref).
+"""
 struct LightStepResult
     sky::SkyState
     turtle::TurtleGrid
