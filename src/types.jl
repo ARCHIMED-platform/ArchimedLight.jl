@@ -199,9 +199,35 @@ mutable struct SceneGeometry{MTG,Mesh,T}
     scene_xy_bounds::Union{Nothing,NTuple{4,T}}
 end
 
+"""
+    scene_node(scene, node_id)
+
+Return the [`SceneNodeData`](@ref) entry for `node_id`, or `nothing` when the
+node is absent from `scene`.
+"""
 scene_node(scene::SceneGeometry, node_id::Integer) = get(scene.nodes, Int(node_id), nothing)
+
+"""
+    scene_node_ids(scene)
+
+Return the sorted geometry node ids present in `scene`.
+"""
 scene_node_ids(scene::SceneGeometry) = sort!(collect(keys(scene.nodes)))
+
+"""
+    node_areas(scene)
+
+Return a `Dict{Int,Float64}` mapping each geometry node id to its component area
+in the prepared scene.
+"""
 node_areas(scene::SceneGeometry) = Dict(nid => node.area for (nid, node) in scene.nodes)
+
+"""
+    node_barycenters(scene)
+
+Return a `Dict` mapping each geometry node id to its `(x, y, z)` barycenter in
+scene coordinates.
+"""
 node_barycenters(scene::SceneGeometry) = Dict(nid => node.barycenter for (nid, node) in scene.nodes)
 
 function _scene_node_field(scene::SceneGeometry, node_id::Integer, field::Symbol, default)

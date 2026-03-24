@@ -1,9 +1,3 @@
-"""
-    integrate_light(scene, models, first, scat, options; meteo_row=nothing, extra_initial_energy_per_band=..., extra_energy_per_band=..., step_duration_seconds=nothing, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
-
-Combine first-order and scattering results into per-node irradiance (`*_f`, W m^-2)
-and energy (`*_q`, J component^-1 timestep^-1) budgets, including absorbed light.
-"""
 function _zero_spectral_node_values(node_ids)
     SpectralNodeValues(
         Dict{Int,Float64}(nid => 0.0 for nid in node_ids),
@@ -72,6 +66,16 @@ function _scale_extra_band_energy(extra_q_per_band, step_duration_seconds::Float
     )
 end
 
+"""
+    integrate_light(scene, models, first, scat, options; meteo_row=nothing, extra_initial_energy_per_band=..., extra_energy_per_band=..., step_duration_seconds=nothing, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
+
+Combine first-order interception and scattering into per-node incident and
+absorbed light budgets.
+
+The result stores both irradiance-style outputs (`*_f`, W m^-2) and energy
+outputs (`*_q`, J component^-1 timestep^-1), plus optional extra-waveband
+energies when they were carried through the pipeline.
+"""
 function integrate_light(
     scene::SceneGeometry,
     models::LightModels,

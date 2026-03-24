@@ -65,6 +65,14 @@ function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
     error("No default MTG attribute name for `$field`.")
 end
 
+"""
+    attach_node_values!(scene, attr, values; fill_value=nothing)
+
+Attach a dictionary of per-node values to the MTG stored in `scene`.
+
+Only geometry nodes present in the prepared scene are updated. Missing node ids
+receive `fill_value`.
+"""
 function attach_node_values!(
     scene::SceneGeometry,
     attr::Symbol,
@@ -75,6 +83,49 @@ function attach_node_values!(
     _attach_node_values!(scene.mtg, _geometry_node_ids(scene), attr, values; fill_value=fill_value)
 end
 
+"""
+    attach_light_step!(scene, step; fields=[:incident_par_flux], names=Dict(), fill_value=nothing)
+
+Attach one [`LightStepResult`](@ref) back onto the scene MTG using ARCHIMED-style
+attribute names such as `Ri_PAR_f` and `Ra_PAR_q`.
+
+`fields` selects which budget components to export. Supported selectors are:
+
+- `:incident_par_initial_flux` => `Ri_PAR_0_f`
+- `:incident_nir_initial_flux` => `Ri_NIR_0_f`
+- `:incident_par_flux` => `Ri_PAR_f`
+- `:incident_nir_flux` => `Ri_NIR_f`
+- `:incident_par_initial_energy` => `Ri_PAR_0_q`
+- `:incident_nir_initial_energy` => `Ri_NIR_0_q`
+- `:incident_par_energy` => `Ri_PAR_q`
+- `:incident_nir_energy` => `Ri_NIR_q`
+- `:absorbed_par_initial_flux` => `Ra_PAR_0_f`
+- `:absorbed_nir_initial_flux` => `Ra_NIR_0_f`
+- `:absorbed_par_flux` => `Ra_PAR_f`
+- `:absorbed_nir_flux` => `Ra_NIR_f`
+- `:absorbed_par_initial_energy` => `Ra_PAR_0_q`
+- `:absorbed_nir_initial_energy` => `Ra_NIR_0_q`
+- `:absorbed_par_energy` => `Ra_PAR_q`
+- `:absorbed_nir_energy` => `Ra_NIR_q`
+
+`names` is an optional dictionary that remaps those exported fields to custom MTG
+attribute names. For example:
+
+```julia
+attach_light_step!(
+    scene,
+    step;
+    fields=[:incident_par_flux, :absorbed_par_energy],
+    names=Dict(
+        :incident_par_flux => :my_par_flux,
+        :absorbed_par_energy => :my_par_energy,
+    ),
+)
+```
+
+With that override, the values are attached on `:my_par_flux` and
+`:my_par_energy` instead of the default ARCHIMED names.
+"""
 function attach_light_step!(
     scene::SceneGeometry,
     step::LightStepResult;
@@ -93,6 +144,14 @@ function attach_light_step!(
     return scene.mtg
 end
 
+"""
+    attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fill_value=NaN)
+
+Attach a time series of [`LightStepResult`](@ref) values to the scene MTG.
+
+For each selected field, every geometry node receives a vector ordered like
+`steps`, which is convenient for downstream plotting or coupled simulations.
+"""
 function attach_light_series!(
     scene::SceneGeometry,
     steps::AbstractVector{<:LightStepResult};
