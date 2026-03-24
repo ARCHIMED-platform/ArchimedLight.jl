@@ -597,6 +597,7 @@ end
 
 function _refresh_scene!(scene::SceneGeometry)
     scene.mtg === nothing && error("Scene refresh requires an MTG-backed scene.")
+    PlantGeom.bump_scene_version!(scene.mtg)
     refreshed = prepare_scene(scene.mtg; source_path=scene.source_path, scene_xy_bounds=scene.scene_xy_bounds, relabel_ids=false)
     scene.merged_mesh = refreshed.merged_mesh
     scene.face2node = refreshed.face2node
