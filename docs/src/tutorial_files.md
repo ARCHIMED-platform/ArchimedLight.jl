@@ -5,11 +5,6 @@ This tutorial is the standard ARCHIMED workflow: a scene on disk, one or more mo
 It uses the deliberately small fixture under `example_1/`, because every file is compact enough to read directly.
 For the live figure in this page, the tutorial disables the dense automatic paving requested by `plot_paving: 80` and replaces it with a compact explicit ground patch, so the soil interception is visible and the plant does not disappear in a sea of tiny tiles.
 
-```@setup file_workflow
-using CairoMakie
-CairoMakie.activate!(type = "png")
-```
-
 ## Directory Layout
 
 The example folder contains:
@@ -69,8 +64,6 @@ For a single time step:
 ```@example file_workflow
 row = first(rows)
 step = run_light_step(scene, models, row, options)
-
-step
 ```
 
 For every meteo row:
@@ -83,7 +76,7 @@ Enabling `LightOptions(cache_radiation=true)` allows `run_light_series` to reuse
 
 ## Step 3: Inspect The Budget
 
-```@example file_workflow
+```julia
 budget = step.budget
 
 budget.incident_flux.initial.par
@@ -113,6 +106,7 @@ attach_light_step!(
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
 );
 ```
+
 This keeps the historical ARCHIMED attribute names on the nodes:
 
 - `Ri_PAR_f`
@@ -123,11 +117,15 @@ The figure below uses that attached `Ri_PAR_f` field, so you can verify that the
 
 ```@example file_workflow
 using PlantGeom, CairoMakie
+CairoMakie.activate!(type = "png") # Save as PNG to save sa-pace (wrt SVG)
+par_max = maximum(values(step.budget.incident_flux.total.par))
 
 fig, ax, p = plantviz(
     scene.mtg;
     color=:Ri_PAR_f,
     colormap=:thermal,
+    colorrange=(0.0, par_max),
+    # color_missing=:gray85,
     figure=(size=(900, 700),),
 )
 

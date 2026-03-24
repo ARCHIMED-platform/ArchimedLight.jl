@@ -670,14 +670,14 @@ scene xy bounds when omitted), inserted into the scene MTG, and the prepared
 scene caches are refreshed.
 """
 function add_ground!(
-    scene::SceneGeometry;
+    scene::SceneGeometry{T};
     z::Real=0.0,
     nx::Int=9,
     ny::Int=9,
     xy_bounds=nothing,
     group::AbstractString="pavement",
     type::AbstractString="Cobblestone",
-)
+) where {T<:MultiScaleTreeGraph.Node{N}} where N
     scene.mtg === nothing && error("add_ground! requires an MTG-backed scene.")
     bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
     bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
@@ -689,9 +689,9 @@ function add_ground!(
 
     for ix in 1:nx, iy in 1:ny
         x0 = x_edges[ix]
-        x1 = x_edges[ix + 1]
+        x1 = x_edges[ix+1]
         y0 = y_edges[iy]
-        y1 = y_edges[iy + 1]
+        y1 = y_edges[iy+1]
         points = GeometryBasics.Point3f[
             GeometryBasics.Point3f(Float32(x0), Float32(y0), Float32(z)),
             GeometryBasics.Point3f(Float32(x1), Float32(y0), Float32(z)),
@@ -706,7 +706,7 @@ function add_ground!(
         MultiScaleTreeGraph.Node(
             nid,
             scene.mtg,
-            MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), nid, root_scale + 1),
+            N(:+, Symbol(type), nid, root_scale + 1),
             Dict{Symbol,Any}(
                 :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
                 :functional_group => String(group),
