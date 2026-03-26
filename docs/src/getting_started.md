@@ -82,6 +82,40 @@ PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 fig
 ```
 
+If you do not want to reattach values onto the MTG just for visualization, the
+Makie package extension can render the prepared mesh directly from the light
+outputs:
+
+```@example getting_started
+using CairoMakie
+
+fig2, ax2, p2 = lightplot(
+    scene,
+    models,
+    options,
+    step;
+    color=:incident_par_flux,
+    colorrange=(0.0, step.sky.ri_par_f),
+)
+
+ax2.aspect = :data
+hidedecorations!(ax2)
+hidespines!(ax2)
+Colorbar(fig2[1, 2], p2.plots[1], label="Ri_PAR_f (W m^-2)")
+fig2
+```
+
+For a time series, keep the plot and only update `timestep` during `record`:
+
+```julia
+series = run_light_series(scene, models, meteo, options)
+fig, ax, p = lightplot(scene, models, options, series; color=:Ri_PAR_f)
+
+record(fig, "light_series.mp4", 1:length(series)) do t
+    p[:timestep][] = t
+end
+```
+
 By default, the `toricity` parameter is activated, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
 
 ## What To Read Next

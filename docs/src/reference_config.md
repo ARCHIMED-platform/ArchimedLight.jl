@@ -108,11 +108,9 @@ The difference is mostly conceptual and numerical. Keeping the sun explicit is u
 Maximum duration, in minutes, of the radiative substeps used inside a meteo interval.
 This is one of the key ARCHIMED ideas: the meteo time step and the radiative integration substep are not the same thing.
 
-If a meteo row spans 30 minutes and `radiation_timestep: 5`, the direct beam and sky decomposition are evaluated on smaller substeps and integrated back into one directional forcing state.
+If a meteo row spans 30 minutes and `radiation_timestep: 5`, the direct beam and sky decomposition are evaluated on smaller substeps and integrated back into one directional forcing state. In other words, a meteo row may cover a fairly long interval, but the sun position and the direct/diffuse partition can still change significantly inside that interval. `radiation_timestep` tells the solver how finely it should subdivide the meteo row before averaging those directional fluxes back together.
 
-This is one of the parameters that most clearly reflects an ARCHIMED modeling choice: the meteo step and the radiative integration step are not assumed to be the same thing. A meteo row may cover a fairly long interval, but the sun position and the direct/diffuse partition can still change significantly inside that interval. `radiation_timestep` tells the solver how finely it should subdivide the meteo row before averaging those directional fluxes back together.
-
-So if a meteo row spans 30 minutes and `radiation_timestep` is 5 minutes, the scene is not re-read or re-parameterized five times, but the incoming light is internally re-evaluated at smaller substeps and then integrated over the full interval. Smaller values therefore improve temporal fidelity, especially near sunrise, sunset, or whenever direct light changes rapidly, while larger values are cheaper but coarser. This parameter affects how the forcing is integrated in time, not how geometry is discretized.
+Smaller values therefore improve temporal fidelity, especially near sunrise, sunset, or whenever direct light changes rapidly, while larger values are cheaper but coarser.
 
 ### `pixel_size`
 
@@ -126,9 +124,9 @@ This parameter controls the horizontal sampling density of the projected pixel t
 
 The current runtime validates `0 < pixel_size <= 0.5` meters after conversion.
 
-This parameter is one of the main numerical controls in the whole model because first-order interception is computed by rasterizing projected geometry onto a regular horizontal grid. `pixel_size` therefore sets the spatial resolution of that projection. In the YAML file it is given in centimetres, but internally it is stored in meters.
+This parameter is one of the main numerical controls in the whole model because first-order interception is computed by rasterizing projected geometry onto a regular horizontal grid. `pixel_size` therefore sets the spatial resolution of that projection.
 
-Smaller pixels produce a finer approximation of canopy geometry. They resolve small gaps better, distinguish nearby components more clearly, and generally reduce discretization artefacts, but they also increase the number of pixels and the size of the hit tables the solver has to manage. Larger pixels make runs cheaper, but they can merge nearby organs into the same projected cell and smooth out the structure of the canopy. So when users change `pixel_size`, they are not changing a plant trait or a radiative property; they are changing the spatial resolution of the raster approximation.
+Smaller pixels produce a finer approximation of canopy geometry. They resolve small gaps better, distinguish nearby components more clearly, and generally reduce discretization artefacts, but they also increase the number of pixels and the size of the hit tables the solver has to manage. Larger pixels make runs cheaper, but they can merge nearby organs into the same projected cell and smooth out the structure of the canopy.
 
 ### `area_ratio`
 
