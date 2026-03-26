@@ -244,6 +244,10 @@ SUITE["Synthetic"]["stacked plates with scattering"] =
         options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=true, pixel_size=0.01)
     ) evals = 1
 
+SUITE["Docs"] = BenchmarkGroup()
+SUITE["Docs"]["home figure build"] =
+    @benchmarkable simulate_home_figure(PKG_ROOT) evals = 1
+
 function _leaf_benchmarks(group, prefix=String[])
     out = String[]
     for (name, item) in group
