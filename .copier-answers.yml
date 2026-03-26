@@ -1,0 +1,40 @@
+# Changes here will be overwritten by Copier
+AddAllcontributors: true
+AddCitationCFF: true
+AddCodeOfConduct: false
+AddContributionDocs: false
+AddCopierCI: true
+AddDocs: true
+AddDocsCI: true
+AddFormatterAndLinterConfigFiles: true
+AddGitHubPRTemplate: false
+AddGitHubTemplates: false
+AddLintCI: false
+AddLychee: true
+AddMacToCI: true
+AddPrecommit: false
+AddTagBotCI: true
+AddTestCI: true
+AddWinToCI: true
+Authors: Rémi Vezy <VEZY@users.noreply.github.com> and contributors
+CheckExplicitImports: true
+ConfigIndentation: 2
+ExplicitImportsChecklist: exclude_all_qualified_accesses_are_public
+GitHubActionVersionAutoUpdate: dependabot
+JuliaCompatAutoUpdate: dependabot
+JuliaIndentation: 4
+JuliaMinCIVersion: min
+JuliaMinVersion: '1.10'
+License: MIT
+LicenseCopyrightHolders: Rémi Vezy
+MarkdownIndentation: 2
+PackageName: ArchimedLight
+PackageOwner: VEZY
+PackageUUID: ca362a0f-208d-4994-8e0e-d922fd0d438a
+RunJuliaNightlyOnCI: false
+StrategyConfirmIncluded: true
+StrategyLevel: 2
+StrategyReviewExcluded: true
+TestingStrategy: testitem_basic
+UseCirrusCI: false
+_src_path: /Users/rvezy/.julia/packages/BestieTemplate/fOzc4

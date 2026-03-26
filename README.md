@@ -1,5 +1,12 @@
 # ArchimedLight.jl
 
+[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/stable)
+[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/dev)
+[![Test workflow status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
+[![Docs workflow Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
+[![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
+[![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
+
 Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
 
 ![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
@@ -107,19 +114,25 @@ Run the default fast suite:
 julia --project=test test/runtests.jl
 ```
 
-This runs core checks, fast manual fixtures, and synthetic scene unit tests in one command.
-`ARCHIMEDLIGHT_TEST_PROFILE` is reserved for `release` only.
+This runs the standalone `@testitem`s discovered from the `*-test.jl` files under `test/`,
+excluding the `:release`-tagged heavy regression item.
 
-Run one named synthetic case only:
+Run only tests with the `:fast` tag directly:
 
 ```bash
-ARCHIMEDLIGHT_SYNTHETIC_CASE=single_plate_direct julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :fast in ti.tags, verbose=true)'
 ```
 
-Run one named fast fixture case only:
+Run one tagged synthetic case directly:
 
 ```bash
-ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :single_plate_direct in ti.tags, verbose=true)'
+```
+
+Run one tagged fast fixture directly:
+
+```bash
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :simpleplant_16_toric in ti.tags, verbose=true)'
 ```
 
 Run the opt-in regression matrix against frozen Julia baselines:
@@ -146,10 +159,10 @@ The regression harness writes a machine-readable CSV report at
 `test/regression_matrix/reports/latest/regression_report.csv` by default and stores frozen
 fast-profile baselines under `test/regression_matrix/baselines/`.
 
-The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl`. Current case names include:
+The dedicated synthetic cases are defined in `test/synthetic-scenes-test.jl`. Current case names include:
 `single_plate_direct`, `stacked_scattering`, `toricity_wraparound`,
 `virtual_sensor_transparency`, `run_light_step_matches_staged`,
-`cache_radiation_parity`, and `missing_models`.
+`cache_radiation_parity`, `cached_scattering_series_parity`, and `missing_models`.
 
 Fast fixture inputs/references are under `test/fast_fixtures/` and are intended to be readable
 as usage examples.
@@ -197,28 +210,25 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
 Run release-only heavy regression:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
 ```
 
 You can also bypass artifacts and point directly to a local extracted release dataset:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
+```
+
+Run one release fixture directly by tag. Fixture ids are exposed as tags with `-` replaced by `_`:
+
+```bash
+ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :test_compare_simpleplant in ti.tags, verbose=true)'
 ```
 
 Release test scripts are local in this repository (`test/release/`) and consume only data from the
 artifact/dataset. During release runs, per-fixture progress is logged with start/end timestamps.
-
-Optional (release dataset fixture filter):
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release \
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-ARCHIMEDLIGHT_FIXTURE_FILTER=test-compare-simpleplant \
-julia --project=test test/runtests.jl
-```
 
 The regression matrix also has an optional release profile that reuses the same dataset root:
 
@@ -232,3 +242,20 @@ julia --project=test test/regression_matrix/runtests.jl
 
 The repository includes a separate benchmark project for `AirspeedVelocity.jl` under
 `benchmark/`.
+
+## How to Cite
+
+If you use ArchimedLight.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/VEZY/ArchimedLight.jl/blob/main/CITATION.cff).
+
+---
+
+### Contributors
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->

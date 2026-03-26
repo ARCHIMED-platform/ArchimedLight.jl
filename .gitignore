@@ -11,3 +11,14 @@ java_implementation/*
 /test/regression_matrix/reports/
 /benchmark/results/
 /benchmark/.asv/
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+*.rej
+.DS_Store
+.benchmarkci
+benchmark/*.json
+coverage
+env
+node_modules
+example_1/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar
