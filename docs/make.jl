@@ -1,22 +1,18 @@
 using ArchimedLight
 using Documenter
 
-DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
+DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive = true)
 
 include("generate_reference_figures.jl")
 generate_reference_figures()
 
 makedocs(;
-    modules=[ArchimedLight],
-    authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
-    sitename="ArchimedLight.jl",
-    checkdocs=:none,
-    format=Documenter.HTML(;
-        canonical="https://VEZY.github.io/ArchimedLight.jl",
-        edit_link="main",
-        assets=String[],
-    ),
-    pages=[
+    modules = [ArchimedLight],
+    authors = "Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
+    repo = "https://github.com/VEZY/ArchimedLight.jl/blob/{commit}{path}#{line}",
+    sitename = "ArchimedLight.jl",
+    format = Documenter.HTML(; canonical = "https://VEZY.github.io/ArchimedLight.jl"),
+    pages = [
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
         "Tutorials" => [
@@ -44,7 +40,4 @@ makedocs(;
     ],
 )
 
-deploydocs(;
-    repo="github.com/VEZY/ArchimedLight.jl",
-    devbranch="main",
-)
+deploydocs(; repo = "github.com/VEZY/ArchimedLight.jl")

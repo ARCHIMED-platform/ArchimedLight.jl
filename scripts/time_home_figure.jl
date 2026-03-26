@@ -23,5 +23,5 @@ display(trial)
 # 2026-03-18 12:03:14.892 - maximum memory usage 2277,72 MB
 
 # With Julia: 
-# Single result which took 1.723 s (12.55%) to evaluate,
-#  with a memory estimate of 1.70 GiB, allocs estimate: 12139938
+# Single result which took 1.6243 s (12.79%) to evaluate,
+#  with a memory estimate of 1.70 GiB, allocs estimate: 12139919.

@@ -1,3 +1,5 @@
+using ArchimedLight
+
 function load_fixture_inputs(path::AbstractString)
     config_path = isdir(path) ? joinpath(path, "config.yml") : String(path)
     raw = ArchimedLight._load_yaml_ordered(config_path)

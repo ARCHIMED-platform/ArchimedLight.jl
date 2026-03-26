@@ -1,6 +1,7 @@
 using AirspeedVelocity
 using ArchimedLight
 using BenchmarkTools
+using CairoMakie
 using Dates
 using GeometryBasics
 using StaticArrays: SVector
@@ -9,6 +10,8 @@ import LinearAlgebra: cross, norm
 const PKG_ROOT = dirname(dirname(pathof(ArchimedLight)))
 const FAST_FIXTURE_ROOT = joinpath(PKG_ROOT, "test", "fast_fixtures")
 const SUITE = BenchmarkGroup()
+
+include(joinpath(PKG_ROOT, "scripts", "generate_home_figure.jl"))
 
 function _fixture_paths(name::String)
     root = joinpath(FAST_FIXTURE_ROOT, name, "input")

@@ -1,4 +1,5 @@
 using TOML
+using ArchimedLight
 using CSV
 using Tables
 using Dates
@@ -18,7 +19,7 @@ end
 
 const _RELEASE_DATA_ROOT = let p = strip(get(ENV, "ARCHIMEDLIGHT_RELEASE_DATA_ROOT", ""))
     isempty(p) && error(
-        "ARCHIMEDLIGHT_RELEASE_DATA_ROOT is not set. test/test_release.jl should resolve dataset and export this variable before including release harness.",
+        "ARCHIMEDLIGHT_RELEASE_DATA_ROOT is not set. test/release-test.jl should resolve dataset and export this variable before including release harness.",
     )
     normpath(p)
 end
@@ -801,13 +802,7 @@ function compare_csv_reference(expected_path::AbstractString, observed_path::Abs
     return (ok=(missing == 0 && extra == 0 && mismatch == 0), missing=missing, extra=extra, mismatch=mismatch, detail=detail)
 end
 
-function fixture_filter_from_env()
-    raw = strip(get(ENV, "ARCHIMEDLIGHT_FIXTURE_FILTER", ""))
-    isempty(raw) && return String[]
-    String[s for s in split(raw, ',') if !isempty(strip(s))]
-end
-
-function select_fixtures(fxs::Vector{JuliaFixture}; names::Vector{String}=fixture_filter_from_env())
+function select_fixtures(fxs::Vector{JuliaFixture}; names::Vector{String}=String[])
     isempty(names) && return fxs
     keep = Set(names)
     return [fx for fx in fxs if fx.id in keep]
