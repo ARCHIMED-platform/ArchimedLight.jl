@@ -133,3 +133,10 @@ They can be passed explicitly to the pipeline helpers when you want to control t
 - read [Getting Started](getting_started.md) for the shortest runnable workflow
 - read [Composable Stages](stages.md) if you want the stage-by-stage pattern
 - read [Outputs](outputs.md) for the mapping between `LightBudget` fields and ARCHIMED attribute names
+
+
+## API List
+
+```@autodocs
+Modules = [ArchimedLight]
+```
