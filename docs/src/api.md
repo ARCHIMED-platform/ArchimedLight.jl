@@ -3,46 +3,6 @@
 This page is a compact guide to the public entry points of `ArchimedLight.jl`.
 The package is intentionally organized around a small number of composable stages rather than a large object-oriented surface.
 
-## Core Types
-
-The main runtime types are:
-
-```julia
-LightOptions
-LightModels
-MeteoTable
-SceneGeometry
-SkyState
-TurtleGrid
-DirectionalFluxes
-FirstOrderResult
-ScatteringResult
-LightBudget
-LightStepResult
-```
-
-```@docs
-OpticalProperties
-InterceptionModel
-EmitterModel
-TypeModel
-GroupModel
-LightModels
-LightOptions
-MeteoTable
-SceneNodeData
-SceneGeometry
-SkyState
-TurtleSector
-TurtleGrid
-DirectionalFluxes
-FirstOrderResult
-ScatteringResult
-ScatteringTransferGraph
-LightBudget
-LightStepResult
-```
-
 ## Input Loading
 
 Use these when your workflow starts from files:
