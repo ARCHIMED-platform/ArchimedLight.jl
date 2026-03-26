@@ -249,7 +249,7 @@ SUITE["Synthetic"]["stacked plates with scattering"] =
 
 SUITE["Docs"] = BenchmarkGroup()
 SUITE["Docs"]["home figure build"] =
-    @benchmarkable simulate_home_figure(; repo_root=PKG_ROOT) evals = 1
+    @benchmarkable simulate_home_figure(PKG_ROOT) evals = 1
 
 function _leaf_benchmarks(group, prefix=String[])
     out = String[]
