@@ -1,4 +1,6 @@
-@testset "Core smoke" begin
+@testitem "Core smoke" tags=[:core, :fast] begin
+    include(joinpath(@__DIR__, "support.jl"))
+
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
     selected = ArchimedLight.prepare_meteo(fixture.meteo, fixture.options)
     series = ArchimedLight.run_light_series(fixture.scene, fixture.models, fixture.meteo, fixture.options)
@@ -43,7 +45,7 @@
     @test raw_scene.mtg[:geometry] === nothing
 end
 
-@testset "SmallHitStack handles dense pixels" begin
+@testitem "SmallHitStack handles dense pixels" tags=[:core, :fast] begin
     stack = ArchimedLight.SmallHitStack()
     for i in 1:300
         push!(stack, (Float64(i), i))

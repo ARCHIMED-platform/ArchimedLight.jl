@@ -114,19 +114,25 @@ Run the default fast suite:
 julia --project=test test/runtests.jl
 ```
 
-This runs core checks, fast manual fixtures, and synthetic scene unit tests in one command.
-`ARCHIMEDLIGHT_TEST_PROFILE` is reserved for `release` only.
+This runs the standalone `@testitem`s discovered from the `*-test.jl` files under `test/`,
+excluding the `:release`-tagged heavy regression item.
 
-Run one named synthetic case only:
+Run only tests with the `:fast` tag directly:
 
 ```bash
-ARCHIMEDLIGHT_SYNTHETIC_CASE=single_plate_direct julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :fast in ti.tags, verbose=true)'
 ```
 
-Run one named fast fixture case only:
+Run one tagged synthetic case directly:
 
 ```bash
-ARCHIMEDLIGHT_FAST_FIXTURE_CASE=simpleplant_16_toric julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :single_plate_direct in ti.tags, verbose=true)'
+```
+
+Run one tagged fast fixture directly:
+
+```bash
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :simpleplant_16_toric in ti.tags, verbose=true)'
 ```
 
 Run the opt-in regression matrix against frozen Julia baselines:
@@ -153,10 +159,10 @@ The regression harness writes a machine-readable CSV report at
 `test/regression_matrix/reports/latest/regression_report.csv` by default and stores frozen
 fast-profile baselines under `test/regression_matrix/baselines/`.
 
-The dedicated synthetic cases are defined in `test/synthetic_scene_cases.jl`. Current case names include:
+The dedicated synthetic cases are defined in `test/synthetic-scenes-test.jl`. Current case names include:
 `single_plate_direct`, `stacked_scattering`, `toricity_wraparound`,
 `virtual_sensor_transparency`, `run_light_step_matches_staged`,
-`cache_radiation_parity`, and `missing_models`.
+`cache_radiation_parity`, `cached_scattering_series_parity`, and `missing_models`.
 
 Fast fixture inputs/references are under `test/fast_fixtures/` and are intended to be readable
 as usage examples.
@@ -204,28 +210,25 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
 Run release-only heavy regression:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
 ```
 
 You can also bypass artifacts and point directly to a local extracted release dataset:
 
 ```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release \
 ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test test/runtests.jl
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
+```
+
+Run one release fixture directly by tag. Fixture ids are exposed as tags with `-` replaced by `_`:
+
+```bash
+ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
+julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :test_compare_simpleplant in ti.tags, verbose=true)'
 ```
 
 Release test scripts are local in this repository (`test/release/`) and consume only data from the
 artifact/dataset. During release runs, per-fixture progress is logged with start/end timestamps.
-
-Optional (release dataset fixture filter):
-
-```bash
-ARCHIMEDLIGHT_TEST_PROFILE=release \
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-ARCHIMEDLIGHT_FIXTURE_FILTER=test-compare-simpleplant \
-julia --project=test test/runtests.jl
-```
 
 The regression matrix also has an optional release profile that reuses the same dataset root:
 
