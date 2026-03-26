@@ -1,5 +1,12 @@
 # ArchimedLight.jl
 
+[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/stable)
+[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/dev)
+[![Test workflow status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
+[![Docs workflow Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
+[![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
+[![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
+
 Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
 
 ![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
@@ -232,3 +239,20 @@ julia --project=test test/regression_matrix/runtests.jl
 
 The repository includes a separate benchmark project for `AirspeedVelocity.jl` under
 `benchmark/`.
+
+## How to Cite
+
+If you use ArchimedLight.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/VEZY/ArchimedLight.jl/blob/main/CITATION.cff).
+
+---
+
+### Contributors
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
