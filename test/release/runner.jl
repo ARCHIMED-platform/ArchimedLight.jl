@@ -4,7 +4,6 @@ using Dates
 
 function run_release_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
     started = now(UTC)
-    @info "Release fixture start" index=index total=total fixture=fx.id config=fx.config_path started_utc=string(started)
     @testset "$(fx.id)" begin
         data = fixture_runtime_data(fx)
         outdir = mktempdir()
@@ -25,7 +24,7 @@ function run_release_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
                     compare_csv_reference(ref_path, obs_path; label="$(fx.id):$(name)")
                 end
             if !cmp.ok
-                @info "Fixture numeric mismatch" fixture=fx.id file=name missing=cmp.missing extra=cmp.extra mismatch=cmp.mismatch detail=cmp.detail
+                @info "Fixture numeric mismatch" fixture = fx.id file = name missing = cmp.missing extra = cmp.extra mismatch = cmp.mismatch detail = cmp.detail
             end
             @test cmp.ok
         end
@@ -33,10 +32,9 @@ function run_release_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
         img_ref = fixture_reference_image_path(fx)
         @test isfile(img_ref)
         fig = render_fixture_montage(fx; data=data)
-        @test_reference img_ref fig by=ReferenceTests.psnr_equality(35)
+        @test_reference img_ref fig by = ReferenceTests.psnr_equality(35)
     end
     elapsed = round(time() - datetime2unix(started); digits=3)
-    @info "Release fixture done" index=index total=total fixture=fx.id elapsed_seconds=elapsed
     return nothing
 end
 
