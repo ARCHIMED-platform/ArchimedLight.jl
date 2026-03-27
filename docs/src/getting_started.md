@@ -3,6 +3,13 @@
 This page is the shortest path to your first light simulation.
 It uses the bundled coffee example from `example_2/`, which is also the source of the image on the home page.
 
+
+```@eval
+using PlantGeom, CairoMakie
+ops = read_ops("../../example_2/scene/coffee.ops")
+plantviz(ops, color = Dict("Mesh0" => :antiquewhite3, "Mesh1" => "#42A25ABD"))
+```
+
 ![Coffee example scene](assets/coffee_scene.png)
 
 ## What This Example Covers
@@ -96,6 +103,17 @@ fig2, ax2, p2 = lightplot(
 
 Colorbar(fig2[1, 2], p2.plots[1], label="Ri_PAR_f (W m^-2)")
 fig2
+```
+
+If you want to visualize the same toric result as a repeated tile, build a
+tiled render geometry from the scene plot bounds and reuse the same light
+result:
+
+```@example getting_started
+tiled = tile_light_geometry(scene, step; nx=3, ny=3)
+fig_inf, ax_inf, p_inf = lightplot(tiled, step; color=:incident_par_flux)
+Colorbar(fig_inf[1, 2], p_inf.plots[1], label="Ri_PAR_f (W m^-2)")
+fig_inf
 ```
 
 For a time series, we can generate the plot once and only update `timestep` during `record`, which is faster than regenerating the whole plot at every step:

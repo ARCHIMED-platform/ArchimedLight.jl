@@ -137,8 +137,16 @@ function ArchimedLight.lightplot(data::Union{LightStepResult,AbstractVector{<:Li
     lightplot(data; _lightplot_kwargs(kwargs)...)
 end
 
+function ArchimedLight.lightplot(geometry::LightRenderGeometry, data; kwargs...)
+    lightplot((geometry, data); _lightplot_kwargs(kwargs)...)
+end
+
 function ArchimedLight.lightplot!(axis, data::Union{LightStepResult,AbstractVector{<:LightStepResult}}; kwargs...)
     lightplot!(axis, data; _lightplot_kwargs(kwargs)...)
+end
+
+function ArchimedLight.lightplot!(axis, geometry::LightRenderGeometry, data; kwargs...)
+    lightplot!(axis, (geometry, data); _lightplot_kwargs(kwargs)...)
 end
 
 function ArchimedLight.lightplot(scene::SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)

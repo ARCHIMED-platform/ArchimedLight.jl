@@ -49,6 +49,122 @@ function light_render_geometry(steps::AbstractVector{<:LightStepResult})
     light_render_geometry(first(steps))
 end
 
+function _tile_offsets(n::Integer; centered::Bool=true)
+    n >= 1 || error("Tile replication count must be >= 1.")
+    centered ? collect(-(n ÷ 2):(n - n ÷ 2 - 1)) : collect(0:(n - 1))
+end
+
+function _tile_periods(
+    scene::SceneGeometry,
+    geometry::LightRenderGeometry;
+    xperiod::Union{Nothing,Real}=nothing,
+    yperiod::Union{Nothing,Real}=nothing,
+)
+    if (xperiod === nothing) != (yperiod === nothing)
+        error("Pass both `xperiod` and `yperiod`, or neither.")
+    end
+    if xperiod !== nothing
+        dx = Float64(xperiod)
+        dy = Float64(yperiod)
+    else
+        xmin, ymin, xmax, ymax = _extract_scene_xy_bounds(scene, geometry.vertices)
+        dx = Float64(xmax - xmin)
+        dy = Float64(ymax - ymin)
+    end
+    dx > 0.0 || error("Tile period along x must be > 0.")
+    dy > 0.0 || error("Tile period along y must be > 0.")
+    return dx, dy
+end
+
+"""
+    tile_light_geometry(scene, geometry; nx=1, ny=1, centered=true, xperiod=nothing, yperiod=nothing)
+    tile_light_geometry(scene, step; nx=1, ny=1, centered=true, xperiod=nothing, yperiod=nothing)
+    tile_light_geometry(scene, steps; nx=1, ny=1, centered=true, xperiod=nothing, yperiod=nothing)
+    tile_light_geometry(scene, models, options; nx=1, ny=1, centered=true, xperiod=nothing, yperiod=nothing)
+
+Repeat a render geometry `nx` times along x and `ny` times along y for
+visualizing toric or repeated scenes.
+
+By default, the tile period comes from the scene xy bounds, so the visual
+repetition matches the simulation plot box. Pass `xperiod` and `yperiod`
+explicitly to override that spacing.
+"""
+function tile_light_geometry(
+    scene::SceneGeometry,
+    geometry::LightRenderGeometry;
+    nx::Integer=1,
+    ny::Integer=1,
+    centered::Bool=true,
+    xperiod::Union{Nothing,Real}=nothing,
+    yperiod::Union{Nothing,Real}=nothing,
+)
+    x_offsets = _tile_offsets(nx; centered=centered)
+    y_offsets = _tile_offsets(ny; centered=centered)
+    dx, dy = _tile_periods(scene, geometry; xperiod=xperiod, yperiod=yperiod)
+
+    n_vertices = length(geometry.vertices)
+    n_faces = length(geometry.faces)
+    total_tiles = length(x_offsets) * length(y_offsets)
+
+    total_tiles == 1 && return geometry
+    n_vertices == 0 && return LightRenderGeometry(copy(geometry.vertices), copy(geometry.faces), copy(geometry.face2node))
+
+    vertex_type = eltype(geometry.vertices)
+    face_type = eltype(geometry.faces)
+    tiled_vertices = Vector{vertex_type}(undef, total_tiles * n_vertices)
+    tiled_faces = Vector{face_type}(undef, total_tiles * n_faces)
+    tiled_face2node = Vector{Int}(undef, total_tiles * n_faces)
+
+    vertex_cursor = 0
+    face_cursor = 0
+    for yoff in y_offsets, xoff in x_offsets
+        tx = dx * xoff
+        ty = dy * yoff
+        for i in eachindex(geometry.vertices)
+            v = geometry.vertices[i]
+            tiled_vertices[vertex_cursor + i] = vertex_type(v[1] + tx, v[2] + ty, v[3])
+        end
+        for i in eachindex(geometry.faces)
+            f = geometry.faces[i]
+            tiled_faces[face_cursor + i] = face_type(
+                Int(f[1]) + vertex_cursor,
+                Int(f[2]) + vertex_cursor,
+                Int(f[3]) + vertex_cursor,
+            )
+            tiled_face2node[face_cursor + i] = geometry.face2node[i]
+        end
+        vertex_cursor += n_vertices
+        face_cursor += n_faces
+    end
+
+    LightRenderGeometry(tiled_vertices, tiled_faces, tiled_face2node)
+end
+
+function tile_light_geometry(
+    scene::SceneGeometry,
+    step::LightStepResult;
+    kwargs...,
+)
+    tile_light_geometry(scene, light_render_geometry(step); kwargs...)
+end
+
+function tile_light_geometry(
+    scene::SceneGeometry,
+    steps::AbstractVector{<:LightStepResult};
+    kwargs...,
+)
+    tile_light_geometry(scene, light_render_geometry(steps); kwargs...)
+end
+
+function tile_light_geometry(
+    scene::SceneGeometry,
+    models::LightModels,
+    options::LightOptions;
+    kwargs...,
+)
+    tile_light_geometry(scene, light_render_geometry(scene, models, options); kwargs...)
+end
+
 """
     light_metric_values(step, selector)
     light_metric_values(steps, selector; timestep=1)

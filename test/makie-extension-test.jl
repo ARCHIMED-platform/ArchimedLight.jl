@@ -74,6 +74,15 @@
     @test all(isapprox.(observed_s, expected_s; atol=1f-6, rtol=1f-6))
     @test length(Makie.to_value(child_s[1]).color) == 3 * length(expected_s)
 
+    tiled_geometry = ArchimedLight.tile_light_geometry(fixture.scene, step; nx=2, ny=2, centered=false)
+    @test length(tiled_geometry.vertices) == 4 * length(render_geometry.vertices)
+    @test length(tiled_geometry.faces) == 4 * length(render_geometry.faces)
+    @test tiled_geometry.face2node == repeat(render_geometry.face2node, 4)
+
+    fig_t, _, plt_t = ArchimedLight.lightplot(tiled_geometry, step; color=:Ri_PAR_f)
+    tiled_expected = ArchimedLight.light_face_values(tiled_geometry, step; color=:Ri_PAR_f)
+    @test all(isapprox.(Makie.to_value(plt_t[:light_color]), tiled_expected; atol=1f-6, rtol=1f-6))
+
     fig_v, _, plt_v = ArchimedLight.lightplot(step; color=:Ri_PAR_f, interpolate=true)
     observed_v = copy(Makie.to_value(plt_v[:light_color]))
     expected_v = ArchimedLight.light_vertex_values(step; color=:Ri_PAR_f)
@@ -111,6 +120,7 @@
 
     CairoMakie.empty!(fig)
     CairoMakie.empty!(fig_s)
+    CairoMakie.empty!(fig_t)
     CairoMakie.empty!(fig_v)
     CairoMakie.empty!(metric_fig)
 end
