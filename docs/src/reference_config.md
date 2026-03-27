@@ -215,13 +215,19 @@ Enable the periodic wrapping of the plot in the horizontal plane.
 
 This is how ARCHIMED represents repeated orchard or crop patterns with a finite representative tile.
 
-`toricity` is not just a technical switch; it is a geometric hypothesis about the plot. When it is enabled, the plot is treated as one tile of an infinite periodic repetition in the horizontal plane. Rays leaving one side of the plot re-enter from the opposite side, so the canopy no longer has true horizontal borders in the radiative sense.
+When it is enabled, the plot is treated as one tile of an infinite periodic repetition in the horizontal plane. Rays leaving one side of the plot re-enter from the opposite side, so the canopy no longer has true horizontal borders in the radiative sense.
 
 That can be very appropriate for repeated crop rows or orchard motifs, because it removes edge effects that would otherwise be artefacts of simulating only one finite tile. But it would be the wrong choice for an isolated plant or a genuinely finite experimental plot, because then those edge losses are part of the situation being modeled. In other words, `toricity` changes the geometry that the solver "sees", not merely the efficiency of the calculation.
 
+For reference, we call this option "toricity" because it effectively turns the horizontal plane into a torus. The vertical dimension remains unchanged, so the plot is still finite in height, but the horizontal plane wraps around on itself like a donut:
+
 ![Flat plot turned into a torus](assets/torus_from_rectangle.gif)
 
+So if you simulate a scene with `toricity: true` and then visualize the result, you should see projected shadow patterns across the horizontal edges, as if the plot were repeated infinitely in all horizontal directions. For example, the coffee scene with toricity enabled looks like this:
+
 ![Coffee scene with toricity](assets/coffee_scene_toricity.png)
+
+We can see that there is a shadow on the ground, on all corners, because the coffee plant is put on the bottom-right corner of the plot and therefore casts a shadow that wraps around the horizontal edges. The same toric result repeated for visualization looks like this:
 
 ![Same toric result repeated for visualization](assets/coffee_scene_toricity_4_times.png)
 
@@ -252,9 +258,9 @@ meteo_range: 2, 5
 meteo_range: 2016/07/01 08:00:00, 2016/07/01 12:00:00
 ```
 
-`meteo_range` is simply a selection mechanism. It does not change the physics of one timestep; it changes which rows from the meteo file are actually simulated. That makes it useful whenever a full meteo file contains more data than the run you are trying to reproduce, inspect, or debug.
+`meteo_range` simply helps select the meteo rows. That makes it useful whenever a full meteo file contains more data than the run you are trying to reproduce, inspect, or debug.
 
-The range is applied during `prepare_meteo`, after the sequence has been validated, and it can be expressed either with row indices or with datetimes. After that, the optional `active` field in the meteo table can still remove rows one by one. The datetime form uses the same closed-interval overlap logic as the historical Java implementation, so it is suitable for parity-oriented subsets as well as for ordinary trimming of a long forcing file.
+The range is applied during `prepare_meteo`, after the sequence has been validated, and it can be expressed either with row indices or with datetimes. After that, the optional `active` field in the meteo table can still remove rows one by one.
 
 ### `pixel_hit_stack_mode`
 

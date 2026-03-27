@@ -13,6 +13,7 @@ include("visualization.jl")
 export MeteoTable
 export SceneNodeData
 export SceneGeometry
+export LightRenderGeometry
 export LightModels
 export GroupModel
 export TypeModel
@@ -57,6 +58,7 @@ export run_light_series
 export attach_node_values!
 export attach_light_step!
 export attach_light_series!
+export light_render_geometry
 export light_metric_values
 export light_face_values
 export light_vertex_values

@@ -5,7 +5,7 @@ using GeometryBasics
 using Makie
 import Makie: Attributes, automatic, colormap_attributes!, generic_plot_attributes!, shading_attributes!
 
-Makie.@recipe(LightPlot, scene, models, options, data) do scene
+Makie.@recipe(LightPlot, payload) do scene
     attr = Attributes(
         color=:incident_par_flux,
         timestep=1,
@@ -61,13 +61,18 @@ end
 
 Makie.documented_attributes(::Type{<:LightPlot}) = _LIGHTPLOT_ATTRIBUTES
 
-Makie.preferred_axis_type(::LightPlot) = Makie.Axis3
+Makie.preferred_axis_type(::LightPlot) = Makie.LScene
+
+_payload_geometry(payload::Union{LightStepResult,AbstractVector{<:LightStepResult}}) = ArchimedLight.light_render_geometry(payload)
+_payload_geometry(payload::Tuple{LightRenderGeometry,Any}) = first(payload)
+_payload_data(payload::Union{LightStepResult,AbstractVector{<:LightStepResult}}) = payload
+_payload_data(payload::Tuple{LightRenderGeometry,Any}) = last(payload)
 
 function Makie.plot!(plot::LightPlot)
-    map!(plot.attributes, [:scene, :models, :options], :light_geometry) do scene, models, options
-        ArchimedLight._scene_geometry_for_interception(scene, models, options)
+    map!(plot.attributes, :payload, :light_geometry) do payload
+        _payload_geometry(payload)
     end
-    map!(plot.attributes, :light_geometry, :light_mesh) do geometry
+    map!(plot.attributes, :light_geometry, :light_base_mesh) do geometry
         points = GeometryBasics.Point3d[
             GeometryBasics.Point3d(v[1], v[2], v[3]) for v in geometry.vertices
         ]
@@ -75,27 +80,48 @@ function Makie.plot!(plot::LightPlot)
     end
     map!(
         plot.attributes,
-        [:light_geometry, :data, :color, :timestep, :interpolate, :fill_value],
+        [:light_geometry, :payload, :color, :timestep, :interpolate, :fill_value],
         :light_color,
-    ) do geometry, data, color, timestep, interpolate, fill_value
+    ) do geometry, payload, color, timestep, interpolate, fill_value
         ArchimedLight._light_color_values(
             geometry,
-            data,
+            _payload_data(payload),
             color;
             timestep=Int(timestep),
             interpolate=Bool(interpolate),
             fill_value=Float64(fill_value),
         )
     end
+    map!(
+        plot.attributes,
+        [:payload, :color, :fill_value, :colorrange],
+        :light_colorrange,
+    ) do payload, color, fill_value, colorrange
+        colorrange === automatic || return colorrange
+        default_colorrange = ArchimedLight._automatic_light_colorrange(
+            _payload_data(payload),
+            color;
+            fill_value=Float64(fill_value),
+        )
+        isnothing(default_colorrange) ? automatic : default_colorrange
+    end
+    map!(
+        plot.attributes,
+        [:light_base_mesh, :light_color, :interpolate],
+        :light_mesh,
+    ) do mesh, color, interpolate
+        float_color = Float32.(color)
+        mesh_color = Bool(interpolate) ? float_color : GeometryBasics.per_face(float_color, GeometryBasics.faces(mesh))
+        GeometryBasics.mesh(mesh, color=mesh_color)
+    end
 
     mesh!(
         plot,
         plot[:light_mesh];
-        color=plot[:light_color],
         interpolate=plot[:interpolate],
         shading=plot[:shading],
         colormap=plot[:colormap],
-        colorrange=plot[:colorrange],
+        colorrange=plot[:light_colorrange],
         lowclip=plot[:lowclip],
         highclip=plot[:highclip],
         nan_color=plot[:nan_color],
@@ -107,12 +133,22 @@ end
 _lightplot_kwargs(kwargs) = _lightplot_kwargs(NamedTuple(kwargs))
 _lightplot_kwargs(kwargs::NamedTuple) = haskey(kwargs, :cycle) ? kwargs : (; kwargs..., cycle=[])
 
-function ArchimedLight.lightplot(scene, models, options, data; kwargs...)
-    lightplot(scene, models, options, data; _lightplot_kwargs(kwargs)...)
+function ArchimedLight.lightplot(data::Union{LightStepResult,AbstractVector{<:LightStepResult}}; kwargs...)
+    lightplot(data; _lightplot_kwargs(kwargs)...)
 end
 
-function ArchimedLight.lightplot!(axis, scene, models, options, data; kwargs...)
-    lightplot!(axis, scene, models, options, data; _lightplot_kwargs(kwargs)...)
+function ArchimedLight.lightplot!(axis, data::Union{LightStepResult,AbstractVector{<:LightStepResult}}; kwargs...)
+    lightplot!(axis, data; _lightplot_kwargs(kwargs)...)
+end
+
+function ArchimedLight.lightplot(scene::SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
+    payload = (ArchimedLight.light_render_geometry(scene, models, options), data)
+    lightplot(payload; _lightplot_kwargs(kwargs)...)
+end
+
+function ArchimedLight.lightplot!(axis, scene::SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
+    payload = (ArchimedLight.light_render_geometry(scene, models, options), data)
+    lightplot!(axis, payload; _lightplot_kwargs(kwargs)...)
 end
 
 end

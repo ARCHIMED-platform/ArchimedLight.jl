@@ -2494,6 +2494,9 @@ function _scene_geometry_for_interception(scene::SceneGeometry, models::LightMod
     )
 end
 
+_light_render_geometry(geometry::InterceptionSceneData) =
+    LightRenderGeometry(geometry.vertices, geometry.faces, geometry.face2node)
+
 function _interception_area_per_node_from_geometry(geometry::InterceptionSceneData)
     area = zeros(Float64, length(geometry.node_ids))
     @inbounds for i in eachindex(geometry.faces)

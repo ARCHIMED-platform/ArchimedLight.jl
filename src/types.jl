@@ -465,6 +465,20 @@ mutable struct SceneGeometry{MTG,Mesh,T}
 end
 
 """
+    LightRenderGeometry
+
+Render-ready geometry used to visualize one simulated light result.
+
+This stores the exact face subset and face-to-node mapping used by the light
+solver after model-dependent filtering has been applied.
+"""
+struct LightRenderGeometry
+    vertices
+    faces
+    face2node::Vector{Int}
+end
+
+"""
     scene_node(scene, node_id)
 
 Return the [`SceneNodeData`](@ref) entry for `node_id`, or `nothing` when the
@@ -751,7 +765,8 @@ end
 
 Complete result of one light simulation step, including the sky state, turtle,
 directional fluxes, first-order interception, optional scattering, and the
-integrated [`LightBudget`](@ref).
+integrated [`LightBudget`](@ref). Results returned by `run_light_step` and
+`run_light_series` also carry the render geometry needed by `lightplot`.
 """
 struct LightStepResult
     sky::SkyState
@@ -761,7 +776,18 @@ struct LightStepResult
     scattering::Union{Nothing,ScatteringResult}
     budget::LightBudget
     extra_band_irradiance::Dict{String,Float64}
+    render_geometry::Union{Nothing,LightRenderGeometry}
 end
+
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing)
 
 function _format_decimal(value::Real; digits::Int=3)
     x = round(Float64(value); digits=digits)

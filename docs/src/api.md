@@ -81,13 +81,26 @@ attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fi
 These helpers expose direct mesh coloring and the Makie package extension:
 
 ```julia
+light_render_geometry(scene, models, options)
+light_render_geometry(step)
+light_render_geometry(steps)
 light_metric_values(step, selector)
 light_metric_values(steps, selector; timestep=1)
+light_face_values(data; color=:incident_par_flux, timestep=1, fill_value=NaN)
+light_vertex_values(data; color=:incident_par_flux, timestep=1, fill_value=NaN)
 light_face_values(scene, models, options, data; color=:incident_par_flux, timestep=1, fill_value=NaN)
 light_vertex_values(scene, models, options, data; color=:incident_par_flux, timestep=1, fill_value=NaN)
+lightplot(step; color=:incident_par_flux, timestep=1, interpolate=false, ...)
+lightplot(steps; color=:incident_par_flux, timestep=1, interpolate=false, ...)
+lightplot!(axis, step; color=:incident_par_flux, timestep=1, interpolate=false, ...)
+lightplot!(axis, steps; color=:incident_par_flux, timestep=1, interpolate=false, ...)
 lightplot(scene, models, options, data; color=:incident_par_flux, timestep=1, interpolate=false, ...)
 lightplot!(axis, scene, models, options, data; color=:incident_par_flux, timestep=1, interpolate=false, ...)
 ```
+
+For `lightplot(steps; colorrange=automatic)`, the Makie extension keeps a
+single color range across the whole series so animated timesteps remain
+comparable.
 
 ## Backend Types
 

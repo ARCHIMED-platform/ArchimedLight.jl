@@ -17,7 +17,8 @@ It uses the bundled coffee example from `example_2/`, which is also the source o
 ## Minimal Run
 
 ```@setup getting_started
-using ArchimedLight, PlantGeom, CairoMakie
+using CairoMakie, ArchimedLight, PlantGeom
+using Dates
 CairoMakie.activate!(type = "png")
 ```
 
@@ -29,8 +30,6 @@ config = joinpath(repo_root, "example_2", "config.yml")
 options, scene, meteo, models = read_config(config)
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)
-
-step
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -42,7 +41,7 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 
 ## Attach Results Back Onto The Scene
 
-`ArchimedLight.jl` keeps the numeric results in Julia objects by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
+`ArchimedLight.jl` keeps the simulation results in the `LightStepResult` by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
 ```@example getting_started
 attach_light_step!(
@@ -50,7 +49,11 @@ attach_light_step!(
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
 )
+```
 
+This way you can inspect the results using the powerful MTG query system, or save the results to disk with the topology and geometry of the original scene:
+
+```@example getting_started
 out_path = joinpath(mktempdir(), "coffee_step.opf")
 write_scene(out_path, scene)
 
@@ -82,41 +85,58 @@ PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 fig
 ```
 
-If you do not want to reattach values onto the MTG just for visualization, the
-Makie package extension can render the prepared mesh directly from the light
-outputs:
+If you do not want to reattach values onto the MTG just for visualization, ArchimedLight.jl also provides a helper that plots directly from the `LightStepResult` (this is more performant):
 
 ```@example getting_started
-using CairoMakie
-
 fig2, ax2, p2 = lightplot(
-    scene,
-    models,
-    options,
     step;
     color=:incident_par_flux,
-    colorrange=(0.0, step.sky.ri_par_f),
+    colormap=:thermal,
 )
 
-ax2.aspect = :data
-hidedecorations!(ax2)
-hidespines!(ax2)
 Colorbar(fig2[1, 2], p2.plots[1], label="Ri_PAR_f (W m^-2)")
 fig2
 ```
 
-For a time series, keep the plot and only update `timestep` during `record`:
+For a time series, we can generate the plot once and only update `timestep` during `record`, which is faster than regenerating the whole plot at every step:
 
-```julia
+```@example getting_started
+# Generating a series of meteo row to simulate a day:
+meteo = MeteoTable(
+    [
+        (
+            date=Date(2020, 6, 21),
+            hour_start=Time("06:00:00") + Hour(i-1),
+            duration=Hour(1),
+            clearness=0.6,
+            relativeHumidity=60.0,
+        )
+    for i in 1:10],
+    (latitude=15.0, file="interactive",),
+)
+
+options = LightOptions(turtle_sectors=16, all_in_turtle=true, radiation_timestep_minutes=5, pixel_size=0.003, toricity=true)
 series = run_light_series(scene, models, meteo, options)
-fig, ax, p = lightplot(scene, models, options, series; color=:Ri_PAR_f)
 
-record(fig, "light_series.mp4", 1:length(series)) do t
+fig = Figure(resolution=(980, 700))
+ax = Axis3(fig[1, 1], title="Intercepted PAR flux over time (06:00)", azimuth=π/4, elevation = π/6, aspect=:data, perspectiveness= 0.4)
+p = lightplot!(ax, series; color=:Ri_PAR_f, colormap=:thermal)
+Colorbar(fig[1, 2], p.plots[1], label="Ri_PAR_f (W m^-2)")
+fig
+
+record(fig, "light_series.gif", 1:length(series), framerate = 1) do t
+    ax.title[] = """Intercepted PAR flux over time ($(Time("06:00") + Hour(t-1)))"""
     p[:timestep][] = t
 end
 ```
 
-By default, the `toricity` parameter is activated, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
+![](light_series.gif)
+
+When `colorrange` is left automatic on a series plot, `lightplot(series)` uses
+one color scale for the whole series so the same value maps to the same color
+at every timestep.
+
+The `toricity` parameter is activated here, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
 
 ## What To Read Next
 
