@@ -15,12 +15,9 @@ using CairoMakie, PlantGeom
 
 repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
 ops_path = joinpath(repo_root, "example_2", "scene", "coffee.ops")
-ops = read_ops(ops_path, relaxed=true)
-plantviz(ops)
+scene_preview = read_scene(ops_path)
+plantviz(scene_preview.mtg, color = Dict("Mesh0" => :gray87, "Mesh1" => "#42A25ABD"))
 ```
-
-
-![Coffee example scene](assets/coffee_scene.png)
 
 ## What This Example Covers
 
