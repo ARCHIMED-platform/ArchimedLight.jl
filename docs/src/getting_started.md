@@ -86,6 +86,7 @@ fig, ax, p = plantviz(
     scene.mtg;
     color=:Ri_PAR_f,
     colormap=:thermal,
+    colorrange=(0.0, maximum(values(step.budget.incident_flux.total.par))), # This is automatic by default, but we set it explicitly here to show how to control it.
     figure=(size=(980, 700),),
 )
 
