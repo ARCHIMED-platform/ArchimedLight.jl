@@ -2,8 +2,22 @@
 
 This page is the shortest path to your first light simulation.
 It uses the bundled coffee example from `example_2/`, which is also the source of the image on the home page.
+Here is how to plot it:
 
-![Coffee example scene](assets/coffee_scene.png)
+```@setup getting_started
+using CairoMakie, ArchimedLight, PlantGeom
+using Dates
+CairoMakie.activate!(type = "png")
+```
+
+```@example getting_started
+using CairoMakie, PlantGeom
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+ops_path = joinpath(repo_root, "example_2", "scene", "coffee.ops")
+scene_preview = read_scene(ops_path)
+plantviz(scene_preview.mtg, color = Dict("Mesh0" => :gray87, "Mesh1" => "#42A25ABD"))
+```
 
 ## What This Example Covers
 
@@ -16,11 +30,6 @@ It uses the bundled coffee example from `example_2/`, which is also the source o
 
 ## Minimal Run
 
-```@setup getting_started
-using ArchimedLight, PlantGeom, CairoMakie
-CairoMakie.activate!(type = "png")
-```
-
 ```@example getting_started
 using ArchimedLight
 
@@ -29,8 +38,6 @@ config = joinpath(repo_root, "example_2", "config.yml")
 options, scene, meteo, models = read_config(config)
 row = first(prepare_meteo(meteo, options).rows)
 step = run_light_step(scene, models, row, options)
-
-step
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -42,7 +49,7 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 
 ## Attach Results Back Onto The Scene
 
-`ArchimedLight.jl` keeps the numeric results in Julia objects by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
+`ArchimedLight.jl` keeps the simulation results in the `LightStepResult` by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
 ```@example getting_started
 attach_light_step!(
@@ -50,7 +57,11 @@ attach_light_step!(
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
 )
+```
 
+This way you can inspect the results using the powerful MTG query system, or save the results to disk with the topology and geometry of the original scene:
+
+```@example getting_started
 out_path = joinpath(mktempdir(), "coffee_step.opf")
 write_scene(out_path, scene)
 
@@ -75,6 +86,7 @@ fig, ax, p = plantviz(
     scene.mtg;
     color=:Ri_PAR_f,
     colormap=:thermal,
+    colorrange=(0.0, maximum(values(step.budget.incident_flux.total.par))), # This is automatic by default, but we set it explicitly here to show how to control it.
     figure=(size=(980, 700),),
 )
 
@@ -82,7 +94,69 @@ PlantGeom.colorbar(fig[1, 2], p, label="Ri_PAR_f (W m^-2)")
 fig
 ```
 
-By default, the `toricity` parameter is activated, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
+If you do not want to reattach values onto the MTG just for visualization, ArchimedLight.jl also provides a helper that plots directly from the `LightStepResult` (this is more performant):
+
+```@example getting_started
+fig2, ax2, p2 = lightplot(
+    step;
+    color=:incident_par_flux,
+    colormap=:thermal,
+)
+
+Colorbar(fig2[1, 2], p2.plots[1], label="Ri_PAR_f (W m^-2)")
+fig2
+```
+
+If you want to visualize the same toric result as a repeated tile, build a
+tiled render geometry from the scene plot bounds and reuse the same light
+result:
+
+```@example getting_started
+tiled = tile_light_geometry(scene, step; nx=3, ny=3)
+fig_inf, ax_inf, p_inf = lightplot(tiled, step; color=:incident_par_flux)
+Colorbar(fig_inf[1, 2], p_inf.plots[1], label="Ri_PAR_f (W m^-2)")
+fig_inf
+```
+
+For a time series, we can generate the plot once and only update `timestep` during `record`, which is faster than regenerating the whole plot at every step:
+
+```@example getting_started
+# Generating a series of meteo row to simulate a day:
+meteo = MeteoTable(
+    [
+        (
+            date=Date(2020, 6, 21),
+            hour_start=Time("06:00:00") + Hour(i-1),
+            duration=Hour(1),
+            clearness=0.6,
+            relativeHumidity=60.0,
+        )
+    for i in 1:10],
+    (latitude=15.0, file="interactive",),
+)
+
+options = LightOptions(turtle_sectors=16, all_in_turtle=true, radiation_timestep_minutes=5, pixel_size=0.003, toricity=true)
+series = run_light_series(scene, models, meteo, options)
+
+fig = Figure(resolution=(980, 700))
+ax = Axis3(fig[1, 1], title="Intercepted PAR flux over time (06:00)", azimuth=π/4, elevation = π/6, aspect=:data, perspectiveness= 0.4)
+p = lightplot!(ax, series; color=:Ri_PAR_f, colormap=:thermal)
+Colorbar(fig[1, 2], p.plots[1], label="Ri_PAR_f (W m^-2)")
+fig
+
+record(fig, "light_series.gif", 1:length(series), framerate = 1) do t
+    ax.title[] = """Intercepted PAR flux over time ($(Time("06:00") + Hour(t-1)))"""
+    p[:timestep][] = t
+end
+```
+
+![](light_series.gif)
+
+When `colorrange` is left automatic on a series plot, `lightplot(series)` uses
+one color scale for the whole series so the same value maps to the same color
+at every timestep.
+
+The `toricity` parameter is activated here, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with `toricity=false` in the config.
 
 ## What To Read Next
 

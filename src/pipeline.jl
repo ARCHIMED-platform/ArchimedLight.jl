@@ -969,6 +969,12 @@ function run_light_step(
     else
         first = compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
     end
+    render_geometry =
+        if prepared === nothing
+            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
+        else
+            _light_render_geometry(prepared.geometry)
+        end
     scat = _compute_scattering_with_flags(
         scene,
         models,
@@ -1006,7 +1012,7 @@ function run_light_step(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
+    LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, render_geometry)
 end
 
 """
@@ -1030,6 +1036,12 @@ function run_light_series(
     use_cache = _can_use_series_radiation_cache(ib) && (options.cache_radiation || options.scattering)
     cache = Dict{UInt64,SectorResponsesCache}()
     prepared = ib isa RasterCPUBackend ? _prepare_interception_data(scene, models, options; include_budget_maps=true) : nothing
+    render_geometry =
+        if prepared === nothing
+            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
+        else
+            _light_render_geometry(prepared.geometry)
+        end
     rows_eff = _prepare_meteo_rows_for_series(meteo, options)
     out = Vector{LightStepResult}(undef, length(rows_eff))
     for i in eachindex(rows_eff)
@@ -1087,7 +1099,7 @@ function run_light_series(
             absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
             absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
         )
-        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr)
+        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, render_geometry)
     end
     out
 end
