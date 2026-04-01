@@ -144,13 +144,15 @@ p = lightplot!(ax, series; color=:Ri_PAR_f, colormap=:thermal)
 Colorbar(fig[1, 2], p.plots[1], label="Ri_PAR_f (W m^-2)")
 fig
 
-record(fig, "light_series.gif", 1:length(series), framerate = 1) do t
+record(fig, "light_series.mp4", 1:length(series), framerate = 1) do t
     ax.title[] = """Intercepted PAR flux over time ($(Time("06:00") + Hour(t-1)))"""
     p[:timestep][] = t
 end
 ```
 
-![](light_series.gif)
+```@raw html
+<video autoplay loop muted playsinline controls src="./light_series.mp4" />
+```
 
 When `colorrange` is left automatic on a series plot, `lightplot(series)` uses
 one color scale for the whole series so the same value maps to the same color
