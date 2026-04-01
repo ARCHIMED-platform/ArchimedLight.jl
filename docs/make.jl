@@ -13,9 +13,15 @@ generate_reference_figures()
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
-    repo="https://github.com/VEZY/ArchimedLight.jl/blob/{commit}{path}#{line}",
+    repo=Documenter.Remotes.GitHub("VEZY", "ArchimedLight.jl"),
     sitename="ArchimedLight.jl",
-    format=Documenter.HTML(; canonical="https://VEZY.github.io/ArchimedLight.jl"),
+    format=Documenter.HTML(
+        prettyurls=get(ENV, "CI", "false") == "true",
+        canonical="https://VEZY.github.io/ArchimedLight.jl",
+        edit_link="main",
+        assets=String[],
+        size_threshold=700000,
+    ),
     pages=[
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
@@ -44,4 +50,4 @@ makedocs(;
     ],
 )
 
-deploydocs(; repo="github.com/VEZY/ArchimedLight.jl")
+deploydocs(; repo="github.com/VEZY/ArchimedLight.jl.git", devbranch="main", push_preview=true)
