@@ -6,11 +6,10 @@ updates:
     schedule:
       interval: "weekly"
   - package-ecosystem: "julia"
-    directories:
-      - "/"
+    directory: "/"
     schedule:
       interval: "weekly"
-    ignore:
-      # Ignore itself so `path = ".."` in subdir/Project.toml doesn't trigger it
-      - dependency-name: "ArchimedLight"
-
+    groups: # uncomment to group all julia package updates into a single PR
+      all-julia-packages:
+        patterns:
+          - "*"
