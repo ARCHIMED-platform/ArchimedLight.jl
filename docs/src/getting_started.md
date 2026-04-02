@@ -129,7 +129,6 @@ meteo = MeteoTable(
             hour_start=Time("06:00:00") + Hour(i-1),
             duration=Hour(1),
             clearness=0.6,
-            relativeHumidity=60.0,
         )
     for i in 1:10],
     (latitude=15.0, file="interactive",),

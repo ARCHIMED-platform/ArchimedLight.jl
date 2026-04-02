@@ -70,7 +70,7 @@ ARCHIMED-style meteo files often begin with metadata comments such as:
 #' name: Aquiares
 #' latitude: 15.0
 #' altitude: 100.0
-#' use: relativeHumidity clearness
+#' use: clearness
 ```
 
 ### Dynamically In Julia
@@ -333,8 +333,6 @@ meteo = MeteoTable(
             latitude=15.0,
             RI_PAR_f=350.0,
             RI_NIR_f=250.0,
-            relativeHumidity=60.0,
-            use="relativeHumidity",
         ),
     ],
     (latitude=15.0, file="interactive",),
@@ -381,10 +379,12 @@ Historical files may also contain:
 - `VPD`
 - `wind`
 - `atmosphereCO2_ppm`
+- `Re_SW_f`
 
 Those variables were important in the original ARCHIMED energy-balance and
-photosynthesis workflows. In the current light-only package, they are mostly
-contextual unless a specific forcing reconstruction uses them.
+photosynthesis workflows. In the current light-only package, they are ignored
+by the light solver. They may remain in legacy files without changing the
+result, but they are not required.
 
 ## Practical Advice
 

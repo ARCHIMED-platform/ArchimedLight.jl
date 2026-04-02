@@ -254,53 +254,6 @@ function _use_tokens(row)
     return String[]
 end
 
-function _has_any_column(row, candidates::Vector{Symbol})
-    names = propertynames(row)
-    for c in candidates
-        c in names && return true
-    end
-    return false
-end
-
-function _normalize_humidity_use_token(token::AbstractString)
-    s = lowercase(strip(String(token)))
-    if s in ("relativehumidity", "relative_humidity", "rh")
-        return "relativeHumidity"
-    elseif s == "vpd"
-        return "VPD"
-    end
-    return ""
-end
-
-function _validate_meteo_humidity_inputs(use_tokens::AbstractVector{<:AbstractString}, row)
-    has_rh = _has_any_column(row, [:relativeHumidity, :relative_humidity, :RH, :rh])
-    has_vpd = _has_any_column(row, [:VPD, :vpd])
-
-    uses = String[]
-    for u in use_tokens
-        uu = _normalize_humidity_use_token(u)
-        isempty(uu) || push!(uses, uu)
-    end
-    uses = unique(uses)
-
-    if any(==("relativeHumidity"), uses) && !has_rh
-        error("meteo consistency error: missing relativeHumidity column specified in 'use' line")
-    end
-    if any(==("VPD"), uses) && !has_vpd
-        error("meteo consistency error: missing VPD column specified in 'use' line")
-    end
-
-    if has_rh && has_vpd
-        isempty(uses) && error("meteo consistency error: missing 'use' for columns relativeHumidity/VPD")
-        length(uses) == 1 || error("meteo consistency error: multiple uses: relativeHumidity/VPD")
-    elseif !has_rh && !has_vpd
-        error("meteo consistency error: missing column relativeHumidity/VPD")
-    else
-        # Exactly one humidity source is available.
-        length(uses) <= 1 || error("meteo consistency error: multiple uses: relativeHumidity/VPD")
-    end
-end
-
 function _validate_meteo_radiation_inputs(use_tokens::AbstractVector{<:AbstractString}, has_cl::Bool, has_sw::Bool, has_par::Bool, has_nir::Bool)
     key_cl = "clearness"
     keys_set2 = ("RI_SW_f", "RI_PAR_f", "RI_NIR_f")
@@ -573,7 +526,6 @@ function compute_sky(meteo_row, options::LightOptions)
     clearness = clearness_raw
 
     use_tokens = _use_tokens(meteo_row)
-    _validate_meteo_humidity_inputs(use_tokens, meteo_row)
     _validate_meteo_radiation_inputs(
         use_tokens,
         !isnan(clearness_raw),

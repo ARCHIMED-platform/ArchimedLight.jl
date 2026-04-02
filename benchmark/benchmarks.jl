@@ -113,13 +113,11 @@ function _synthetic_meteo_row(;
         hour_end=Dates.format(Dates.Time(end_dt), Dates.DateFormat("HH:MM:SS")),
         step_duration=duration_seconds,
         latitude=0.0,
-        relativeHumidity=60.0,
         RI_PAR_f=ri_par_f,
         RI_NIR_f=ri_nir_f,
         direct_fraction=direct_fraction,
         sun_azimut=sun_azimut,
         sun_elevation=sun_elevation,
-        use="relativeHumidity RI_PAR_f",
     )
 end
 
