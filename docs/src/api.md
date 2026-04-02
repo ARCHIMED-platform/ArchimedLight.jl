@@ -25,7 +25,7 @@ options, scene, meteo, models = read_config("config.yml")
 
 ### Model options
 
-The light interception model is configured by passing a `LightOptions` struct to the pipeline stages. You can construct this struct directly in Julia, *e.g.*:
+The light interception model is configured by passing a [`LightOptions`](@ref) struct to the pipeline stages. You can construct this struct directly in Julia, *e.g.*:
 
 ```julia
 LightOptions(; turtle_sectors=16, pixel_size=0.01, toricity=true, scattering=false, ...)
