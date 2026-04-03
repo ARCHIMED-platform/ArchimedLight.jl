@@ -35,6 +35,7 @@ export ScatteringResult
 export ScatteringTransferGraph
 export LightBudget
 export LightStepResult
+export LightSimulationCache
 
 export read_scene
 export prepare_scene
@@ -46,6 +47,8 @@ export read_options
 export read_config
 export read_meteo
 export prepare_meteo
+export prepare_light_cache
+export cache_summary
 export compute_sky
 export build_turtle
 export compute_directional_fluxes

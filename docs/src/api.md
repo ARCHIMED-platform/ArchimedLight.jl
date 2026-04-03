@@ -39,6 +39,7 @@ Use these when inputs already exist as Julia data structures:
 prepare_scene(mtg; source_path="interactive.opf", scene_xy_bounds=nothing, relabel_ids=false)
 prepare_models(models_or_groups)
 prepare_meteo(meteo, options)
+prepare_light_cache(scene, models, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing, memory_limit_bytes=nothing)
 ```
 
 Two scene-editing helpers are especially useful:
@@ -74,7 +75,32 @@ When you do not need manual control over the intermediate stages:
 ```julia
 run_light_step(scene, models, meteo_row, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)
 run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)
+run_light_step(cache, meteo_row)
+run_light_series(cache, meteo)
+cache_summary(cache)
 ```
+
+## Reusable Cache
+
+For repeated runs on the same scene, especially in growth loops where the scene
+is updated only occasionally, you can build a reusable cache once and then run
+steps manually:
+
+```julia
+cache = prepare_light_cache(scene, models, options)
+step1 = run_light_step(cache, rows[1])
+step2 = run_light_step(cache, rows[2])
+summary = cache_summary(cache)
+
+# Rebuild explicitly after geometry or optics change
+cache = prepare_light_cache(updated_scene, updated_models, options)
+```
+
+`prepare_light_cache` uses a tiered policy internally:
+
+- `:full` keeps all seen turtle responses in memory
+- `:partial` keeps a bounded LRU cache for large moving-sun series
+- `:topology_fallback` reuses prepared geometry/topology only when a full-response cache would be too large or unsupported
 
 ## Scene Attachment Helpers
 

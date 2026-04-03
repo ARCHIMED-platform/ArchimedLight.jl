@@ -2,6 +2,40 @@ _incident_par_initial_flux(budget) = budget.incident_flux.initial.par
 _incident_par_initial_energy(budget) = budget.incident_energy.initial.par
 _incident_par_energy(budget) = budget.incident_energy.total.par
 
+function _dicts_close(a::Dict, b::Dict; atol::Float64=1e-9, rtol::Float64=1e-9)
+    keys(a) == keys(b) || return false
+    for k in keys(a)
+        isapprox(a[k], b[k]; atol=atol, rtol=rtol) || return false
+    end
+    return true
+end
+
+function _budgets_close(a, b; atol::Float64=1e-9, rtol::Float64=1e-9)
+    _dicts_close(a.incident_flux.initial.par, b.incident_flux.initial.par; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_flux.initial.nir, b.incident_flux.initial.nir; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_flux.total.par, b.incident_flux.total.par; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_flux.total.nir, b.incident_flux.total.nir; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_energy.initial.par, b.incident_energy.initial.par; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_energy.initial.nir, b.incident_energy.initial.nir; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_energy.total.par, b.incident_energy.total.par; atol=atol, rtol=rtol) ||
+        return false
+    _dicts_close(a.incident_energy.total.nir, b.incident_energy.total.nir; atol=atol, rtol=rtol) ||
+        return false
+    keys(a.extra_initial_energy_per_band) == keys(b.extra_initial_energy_per_band) || return false
+    keys(a.extra_energy_per_band) == keys(b.extra_energy_per_band) || return false
+    for band in keys(a.extra_initial_energy_per_band)
+        _dicts_close(a.extra_initial_energy_per_band[band], b.extra_initial_energy_per_band[band]; atol=atol, rtol=rtol) || return false
+        _dicts_close(a.extra_energy_per_band[band], b.extra_energy_per_band[band]; atol=atol, rtol=rtol) || return false
+    end
+    return true
+end
+
 function _synthetic_options(;
     sectors::Int=1,
     all_in_turtle::Bool=false,

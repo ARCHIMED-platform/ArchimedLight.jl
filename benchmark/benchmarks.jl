@@ -228,6 +228,28 @@ SUITE["Run light"]["series"]["simpleplant cached"] =
         options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false)
     ) evals = 1
 
+SUITE["Run light"]["series"]["simpleplant prepared cache"] =
+    @benchmarkable ArchimedLight.run_light_series(cache, meteo) setup = (
+        scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
+        meteo = SIMPLEPLANT.meteo;
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false);
+        cache = ArchimedLight.prepare_light_cache(scene, models, options)
+    ) evals = 1
+
+SUITE["Run light"]["series"]["simpleplant prepared cache manual loop"] =
+    @benchmarkable begin
+        for row in meteo.rows
+            ArchimedLight.run_light_step(cache, row)
+        end
+    end setup = (
+        scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
+        meteo = SIMPLEPLANT.meteo;
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false);
+        cache = ArchimedLight.prepare_light_cache(scene, models, options)
+    ) evals = 1
+
 SUITE["Synthetic"] = BenchmarkGroup()
 SUITE["Synthetic"]["first order stacked plates"] =
     @benchmarkable ArchimedLight.run_light_step(scene, models, meteo_row, options) setup = (
