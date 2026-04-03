@@ -108,6 +108,91 @@ end
     end
 end
 
+@testitem "Synthetic case PlantMeteo TimeStepTable input" tags = [:synthetic, :fast, :plantmeteo_timestep_table] setup = [HelperModule] begin
+    using Dates
+
+    PM = ArchimedLight.PlantMeteo
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(cache_radiation=true)
+
+    rows = [
+        (
+            date=DateTime(2020, 6, 21, 12, 0, 0),
+            duration=Hour(1),
+            Ri_PAR_f=120.0,
+            Ri_NIR_f=80.0,
+            clearness=0.6,
+        ),
+        (
+            date=DateTime(2020, 6, 21, 13, 0, 0),
+            duration=Hour(1),
+            Ri_PAR_f=140.0,
+            Ri_NIR_f=60.0,
+            clearness=0.6,
+        ),
+    ]
+    meteo = PM.TimeStepTable(rows, (latitude=15.0, source="synthetic_pm_namedtuple"))
+
+    selected = ArchimedLight.prepare_meteo(meteo, options)
+    series = ArchimedLight.run_light_series(scene, models, meteo, options)
+    step = ArchimedLight.run_light_step(scene, models, first(selected), options)
+    step_raw = ArchimedLight.run_light_step(scene, models, first(meteo), options)
+
+    @test selected isa PM.TimeStepTable
+    @test length(selected) == 2
+    @test length(series) == 2
+    @test first(selected).Ri_PAR_f == 120.0
+    @test step.budget.incident_energy.total.par == series[1].budget.incident_energy.total.par
+    @test step_raw.budget.incident_energy.total.par == series[1].budget.incident_energy.total.par
+end
+
+@testitem "Synthetic case PlantMeteo Atmosphere input" tags = [:synthetic, :fast, :plantmeteo_atmosphere] setup = [HelperModule] begin
+    using Dates
+
+    PM = ArchimedLight.PlantMeteo
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(cache_radiation=false)
+
+    rows = PM.Atmosphere[
+        PM.Atmosphere(date=DateTime(2020, 6, 21, 12, 0, 0), duration=Hour(1), T=25.0, Wind=1.0, Rh=0.6, Ri_PAR_f=120.0, Ri_NIR_f=80.0, clearness=0.6),
+        PM.Atmosphere(date=DateTime(2020, 6, 21, 13, 0, 0), duration=Hour(1), T=26.0, Wind=1.0, Rh=0.6, Ri_PAR_f=100.0, Ri_NIR_f=50.0, clearness=0.5),
+    ]
+    meteo = PM.TimeStepTable(rows, (latitude=15.0, source="synthetic_pm_atmosphere"))
+
+    series = ArchimedLight.run_light_series(scene, models, meteo, options)
+    sky = ArchimedLight.compute_sky(first(meteo), options)
+
+    @test length(series) == 2
+    @test isapprox(sky.ri_par_f, 120.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(sky.ri_nir_f, 80.0; atol=1e-9, rtol=1e-9)
+end
+
+@testitem "Synthetic case generic table input" tags = [:synthetic, :fast, :generic_table_input] setup = [HelperModule] begin
+    PM = ArchimedLight.PlantMeteo
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(cache_radiation=false)
+
+    meteo = [
+        (date="2020/06/21", hour_start="12:00:00", hour_end="13:00:00", latitude=15.0, T=25.0, Rh=0.60, Wind=1.0, Ri_SW_f=200.0, clearness=0.6, Cₐ=380.0),
+        (date="2020/06/21", hour_start="13:00:00", hour_end="14:00:00", latitude=15.0, T=26.0, Rh=0.60, Wind=1.0, Ri_SW_f=240.0, clearness=0.6, Cₐ=380.0),
+    ]
+
+    selected = ArchimedLight.prepare_meteo(meteo, options)
+    series = ArchimedLight.run_light_series(scene, models, meteo, options)
+    meteo_read = ArchimedLight.read_meteo(meteo)
+    sky = ArchimedLight.compute_sky(first(selected), options)
+
+    @test selected isa PM.TimeStepTable
+    @test length(selected) == 2
+    @test length(series) == 2
+    @test meteo_read isa ArchimedLight.MeteoTable
+    @test first(selected).Ri_SW_f == 200.0
+    @test isapprox(sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
+end
+
 @testitem "Synthetic case cached_scattering_series_parity" tags = [:synthetic, :fast, :cached_scattering_series_parity] setup = [HelperModule] begin
     using Dates
     scene = HelperModule._synthetic_horizontal_scene([
