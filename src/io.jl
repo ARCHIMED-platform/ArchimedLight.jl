@@ -777,10 +777,14 @@ function _positive_duration_seconds(v; field_name::AbstractString="step_duration
     PlantMeteo.positive_duration_seconds(v; field_name=field_name)
 end
 
+function _table_column(data, name::Symbol)
+    Tables.getcolumn(Tables.columns(data), name)
+end
+
 function _normalize_raw_meteo_dates(data)
-    hasproperty(data, :date) || return data
+    :date in Tables.columnnames(data) || return data
     hour_fmt = Dates.DateFormat("HH:MM:SS")
-    date_only = (; date=getproperty(data, :date))
+    date_only = (; date=data.date)
     for date_fmt in (
         Dates.DateFormat("yyyy-mm-ddTHH:MM:SS.s"),
         Dates.DateFormat("yyyy/mm/dd"),
@@ -806,12 +810,13 @@ function _table_metadata_namedtuple(data)
 end
 
 function _as_plantmeteo_table(data)
-    transformed = data
-    if !hasproperty(transformed, :date) && hasproperty(transformed, :DateTime)
-        transformed = PlantMeteo.set_column(transformed, :date, getproperty(transformed, :DateTime))
+    transformed = Tables.columntable(data)
+    column_names = Tables.columnnames(data)
+    if !(:date in column_names) && :DateTime in column_names
+        transformed = PlantMeteo.set_column(transformed, :date, transformed.DateTime)
     end
     transformed = _normalize_raw_meteo_dates(transformed)
-    if !hasproperty(transformed, :duration)
+    if !(:duration in column_names)
         duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
         transformed = PlantMeteo.set_column(transformed, :duration, duration)
     end

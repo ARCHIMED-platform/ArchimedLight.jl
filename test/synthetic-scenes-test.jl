@@ -175,18 +175,10 @@ end
     models = HelperModule._default_synthetic_models()
     options = HelperModule._synthetic_options(cache_radiation=false)
 
-    meteo = (
-        date=["2020/06/21", "2020/06/21"],
-        hour_start=["12:00:00", "13:00:00"],
-        hour_end=["13:00:00", "14:00:00"],
-        latitude=[15.0, 15.0],
-        T=[25.0, 26.0],
-        Rh=[0.60, 0.60],
-        Wind=[1.0, 1.0],
-        Ri_SW_f=[200.0, 240.0],
-        clearness=[0.6, 0.6],
-        Cₐ=[380.0, 380.0],
-    )
+    meteo = [
+        (date="2020/06/21", hour_start="12:00:00", hour_end="13:00:00", latitude=15.0, T=25.0, Rh=0.60, Wind=1.0, Ri_SW_f=200.0, clearness=0.6, Cₐ=380.0),
+        (date="2020/06/21", hour_start="13:00:00", hour_end="14:00:00", latitude=15.0, T=26.0, Rh=0.60, Wind=1.0, Ri_SW_f=240.0, clearness=0.6, Cₐ=380.0),
+    ]
 
     selected = ArchimedLight.prepare_meteo(meteo, options)
     series = ArchimedLight.run_light_series(scene, models, meteo, options)
