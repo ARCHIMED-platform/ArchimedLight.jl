@@ -408,9 +408,9 @@ function _directional_flux_substeps(meteo_row, sky::SkyState, options::LightOpti
     doy = Dates.dayofyear(date)
     start_h, end_h = _row_step_hours(meteo_row)
 
-    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
-    ri_par_raw = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)
-    ri_nir_raw = _row_value(meteo_row, [:RI_NIR_f, :NIR, :nir], NaN)
+    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global], NaN)
+    ri_par_raw = _row_value(meteo_row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par], NaN)
+    ri_nir_raw = _row_value(meteo_row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir], NaN)
     global_from_input = !isnan(ri_sw_raw) || !isnan(ri_par_raw) || !isnan(ri_nir_raw)
 
     clearness_raw = _row_value(meteo_row, [:clearness, :Kt], NaN)

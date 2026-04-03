@@ -795,6 +795,29 @@ function _normalize_raw_meteo_dates(data)
     return data
 end
 
+function _table_metadata_namedtuple(data)
+    meta =
+        try
+            PlantMeteo.table_metadata(data)
+        catch
+            NamedTuple()
+        end
+    _meta_to_namedtuple(meta)
+end
+
+function _as_plantmeteo_table(data)
+    transformed = data
+    if !hasproperty(transformed, :date) && hasproperty(transformed, :DateTime)
+        transformed = PlantMeteo.set_column(transformed, :date, getproperty(transformed, :DateTime))
+    end
+    transformed = _normalize_raw_meteo_dates(transformed)
+    if !hasproperty(transformed, :duration)
+        duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
+        transformed = PlantMeteo.set_column(transformed, :duration, duration)
+    end
+    PlantMeteo.TimeStepTable(transformed, _table_metadata_namedtuple(data))
+end
+
 """
     read_meteo(path)::MeteoTable
 
@@ -827,4 +850,13 @@ function read_meteo(path::AbstractString)
     raw_rows = _rows_to_namedtuples(weather)
     rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
     MeteoTable(rows, meta_nt)
+end
+
+function read_meteo(data)
+    Tables.istable(typeof(data)) || error("Unsupported meteo input: expected a path or a Tables.jl-compatible table.")
+    data isa MeteoTable && return data
+    data isa PlantMeteo.TimeStepTable && return MeteoTable(_meteo_rows(data), _meteo_metadata(data))
+
+    meteo = _as_plantmeteo_table(data)
+    MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
 end
