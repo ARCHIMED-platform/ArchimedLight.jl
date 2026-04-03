@@ -1192,7 +1192,7 @@ function _report_series_progress!(
         _format_progress_seconds(remaining),
         ")",
     )
-    if force || i == n
+    if i == n
         print(io, "\n")
     end
     flush(io)
