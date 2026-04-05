@@ -214,11 +214,123 @@ end
 
     @test length(series0) == length(series1)
     for i in eachindex(series0)
-        @test series0[i].budget.incident_flux.total.par == series1[i].budget.incident_flux.total.par
-        @test series0[i].budget.incident_flux.total.nir == series1[i].budget.incident_flux.total.nir
-        @test series0[i].budget.incident_energy.total.par == series1[i].budget.incident_energy.total.par
-        @test series0[i].budget.incident_energy.total.nir == series1[i].budget.incident_energy.total.nir
+        @test HelperModule._budgets_close(series0[i].budget, series1[i].budget; atol=1e-9, rtol=1e-9)
     end
+end
+
+@testitem "Synthetic case light_cache_manual_api" tags = [:synthetic, :fast, :light_cache_manual_api] setup = [HelperModule] begin
+    using Dates
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true)
+    rows = [
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=100.0, ri_nir_f=50.0),
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(14), duration_seconds=900.0, ri_par_f=90.0, ri_nir_f=60.0),
+    ]
+    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_manual_cache"))
+
+    cache = ArchimedLight.prepare_light_cache(scene, models, options)
+    summary0 = ArchimedLight.cache_summary(cache)
+    @test summary0.mode == :full
+    @test summary0.cached_turtle_count == 0
+
+    series_cached = ArchimedLight.run_light_series(cache, meteo)
+    series_uncached = ArchimedLight.run_light_series(scene, models, meteo, HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false))
+
+    @test length(series_cached) == length(series_uncached)
+    for i in eachindex(series_cached)
+        @test HelperModule._budgets_close(series_cached[i].budget, series_uncached[i].budget; atol=1e-9, rtol=1e-9)
+    end
+
+    step_cached = ArchimedLight.run_light_step(cache, rows[1])
+    step_uncached = ArchimedLight.run_light_step(scene, models, rows[1], HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false))
+    @test HelperModule._budgets_close(step_cached.budget, step_uncached.budget; atol=1e-9, rtol=1e-9)
+
+    summary1 = ArchimedLight.cache_summary(cache)
+    @test summary1.cached_turtle_count == 1
+    @test summary1.cached_full_response_sector_count > 0
+
+    scene2 = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.5, group="middle", type="plate", object_id=3),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    cache2 = ArchimedLight.prepare_light_cache(scene2, models, options)
+    step_rebuilt = ArchimedLight.run_light_step(cache2, rows[1])
+    @test !HelperModule._budgets_close(step_cached.budget, step_rebuilt.budget; atol=1e-9, rtol=1e-9)
+end
+
+@testitem "Synthetic case light_cache_extra_band_parity" tags = [:synthetic, :fast, :light_cache_extra_band_parity] setup = [HelperModule] begin
+    using Dates
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    models = HelperModule._default_synthetic_models()
+    cached_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true)
+    uncached_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false)
+    row0 = merge(HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0), (RI_UV_F=25.0,))
+    row1 = merge(HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=600.0, ri_par_f=100.0, ri_nir_f=60.0), (RI_UV_F=10.0,))
+    meteo = ArchimedLight.MeteoTable([row0, row1], (; source="synthetic_extra_band_cache"))
+
+    cached = ArchimedLight.run_light_series(scene, models, meteo, cached_options)
+    uncached = ArchimedLight.run_light_series(scene, models, meteo, uncached_options)
+
+    @test length(cached) == length(uncached)
+    for i in eachindex(cached)
+        @test HelperModule._budgets_close(cached[i].budget, uncached[i].budget; atol=1e-9, rtol=1e-9)
+    end
+end
+
+@testitem "Synthetic case light_cache_partial_lru" tags = [:synthetic, :fast, :light_cache_partial_lru] setup = [HelperModule] begin
+    using Dates
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=true)
+    probe = ArchimedLight.prepare_light_cache(scene, models, options; memory_limit_bytes=10^9)
+
+    row_a = HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(9), sun_azimut=120.0, sun_elevation=30.0)
+    row_b = HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(15), sun_azimut=240.0, sun_elevation=35.0)
+
+    summary0 = ArchimedLight.cache_summary(probe)
+    @test summary0.mode == :partial
+
+    step_probe = ArchimedLight.run_light_step(probe, row_a)
+    probe_bytes = ArchimedLight.cache_summary(probe).resident_bytes
+    @test probe_bytes > 0
+
+    cache = ArchimedLight.prepare_light_cache(scene, models, options; memory_limit_bytes=probe_bytes + max(div(probe_bytes, 10), 1))
+
+    step_a = ArchimedLight.run_light_step(cache, row_a)
+    step_b = ArchimedLight.run_light_step(cache, row_b)
+    uncached_a = ArchimedLight.run_light_step(scene, models, row_a, HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=false))
+    uncached_b = ArchimedLight.run_light_step(scene, models, row_b, HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=false))
+
+    @test HelperModule._budgets_close(step_a.budget, uncached_a.budget; atol=1e-9, rtol=1e-9)
+    @test HelperModule._budgets_close(step_b.budget, uncached_b.budget; atol=1e-9, rtol=1e-9)
+
+    summary = ArchimedLight.cache_summary(cache)
+    @test summary.cached_turtle_count <= 1
+    @test summary.resident_bytes <= cache.memory_limit_bytes
+end
+
+@testitem "Synthetic case light_cache_topology_fallback" tags = [:synthetic, :fast, :light_cache_topology_fallback] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true)
+    row = merge(HelperModule._synthetic_meteo_row(), (RI_UV_F=20.0,))
+
+    cache = ArchimedLight.prepare_light_cache(scene, models, options; memory_limit_bytes=1)
+    summary = ArchimedLight.cache_summary(cache)
+    @test summary.mode == :topology_fallback
+
+    cached = ArchimedLight.run_light_step(cache, row)
+    uncached = ArchimedLight.run_light_step(scene, models, row, HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false))
+    @test HelperModule._budgets_close(cached.budget, uncached.budget; atol=1e-9, rtol=1e-9)
 end
 
 @testitem "Synthetic case missing_models" tags = [:synthetic, :fast, :missing_models] setup = [HelperModule] begin

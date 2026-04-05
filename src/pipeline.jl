@@ -967,6 +967,532 @@ function _can_use_series_radiation_cache(::InterceptionBackend)
     false
 end
 
+mutable struct TurtleLightCacheEntry
+    key::UInt64
+    turtle::TurtleGrid
+    responses_cache::SectorResponsesCache
+    par_added_per_sector::Vector{Union{Nothing,Vector{Float64}}}
+    nir_added_per_sector::Vector{Union{Nothing,Vector{Float64}}}
+    extra_added_per_sector::Dict{String,Vector{Union{Nothing,Vector{Float64}}}}
+    par_iterations_per_sector::Vector{Int}
+    nir_iterations_per_sector::Vector{Int}
+    par_converged_per_sector::Vector{Bool}
+    nir_converged_per_sector::Vector{Bool}
+    extra_iterations_per_sector::Dict{String,Vector{Int}}
+    extra_converged_per_sector::Dict{String,Vector{Bool}}
+    resident_bytes::Int
+    last_used_tick::Int
+end
+
+mutable struct LightSimulationCache
+    scene::SceneGeometry
+    models::LightModels
+    options::LightOptions
+    interception_backend::Any
+    resolved_interception_backend::InterceptionBackend
+    scattering_mode::Symbol
+    scattering_backend::Union{Nothing,ScatteringBackend}
+    prepared::Union{Nothing,PreparedInterceptionData}
+    render_geometry::LightRenderGeometry
+    mode::Symbol
+    estimated_entry_bytes::Int
+    memory_limit_bytes::Int
+    resident_bytes::Int
+    tick::Int
+    entries::Dict{UInt64,TurtleLightCacheEntry}
+end
+
+function _default_light_cache_memory_limit()
+    fallback = 512 * 1024 * 1024
+    try
+        total = Sys.total_memory()
+        total > 0 || return fallback
+        return max(128 * 1024 * 1024, min(fallback, Int(fld(total, 8))))
+    catch
+        return fallback
+    end
+end
+
+function _estimate_light_cache_entry_bytes(prepared::PreparedInterceptionData, options::LightOptions)
+    n_nodes = length(prepared.geometry.node_ids)
+    n_sectors = max(options.turtle_sectors + (options.all_in_turtle ? 0 : 1), 1)
+    base_sector_bytes = n_nodes * (sizeof(Float64) + sizeof(Int))
+    scatter_sector_bytes = options.scattering ? n_nodes * 2 * sizeof(Float64) : 0
+    return n_sectors * (base_sector_bytes + scatter_sector_bytes)
+end
+
+@inline function _dense_vector_from_node_values(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
+    out = zeros(Float64, length(geometry.node_ids))
+    for (nid, v) in values
+        out[geometry.node_index[nid]] = v
+    end
+    return out
+end
+
+function _float_dict_from_dense(node_ids::Vector{Int}, values::Vector{Float64})
+    out = Dict{Int,Float64}()
+    @inbounds for i in eachindex(node_ids)
+        v = values[i]
+        iszero(v) && continue
+        out[node_ids[i]] = v
+    end
+    return out
+end
+
+@inline function _accumulate_scaled!(dst::Vector{Float64}, src::Vector{Float64}, scale::Float64)
+    iszero(scale) && return dst
+    @inbounds for i in eachindex(dst)
+        dst[i] += src[i] * scale
+    end
+    return dst
+end
+
+@inline function _unit_directional_fluxes(turtle::TurtleGrid, sector_idx::Int; par::Float64=0.0, nir::Float64=0.0)
+    ids = [s.id for s in turtle.sectors]
+    n = length(ids)
+    par_flux = zeros(Float64, n)
+    nir_flux = zeros(Float64, n)
+    par != 0.0 && (par_flux[sector_idx] = par)
+    nir != 0.0 && (nir_flux[sector_idx] = nir)
+    return DirectionalFluxes(ids, par_flux, nir_flux)
+end
+
+function _cache_supports_full_response(
+    prepared::Union{Nothing,PreparedInterceptionData},
+    ib::InterceptionBackend,
+)
+    prepared !== nothing || return false
+    ib isa RasterCPUBackend || return false
+    return isempty(prepared.emitter_nodes)
+end
+
+function _cache_mode_for(
+    prepared::Union{Nothing,PreparedInterceptionData},
+    options::LightOptions,
+    ib::InterceptionBackend,
+    memory_limit_bytes::Int,
+)
+    _cache_supports_full_response(prepared, ib) || return :topology_fallback
+    estimate = _estimate_light_cache_entry_bytes(prepared, options)
+    estimate <= memory_limit_bytes || return :topology_fallback
+    return options.all_in_turtle ? :full : :partial
+end
+
+function prepare_light_cache(
+    scene::SceneGeometry,
+    models::LightModels,
+    options::LightOptions;
+    interception_backend=:raster_cpu,
+    scattering_mode::Symbol=:raycast,
+    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    memory_limit_bytes=nothing,
+)
+    ib = _resolve_interception_backend(interception_backend)
+    prepared = ib isa RasterCPUBackend ? _prepare_interception_data(scene, models, options; include_budget_maps=true) : nothing
+    render_geometry =
+        if prepared === nothing
+            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
+        else
+            _light_render_geometry(prepared.geometry)
+        end
+    limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
+    limit = max(limit, 1)
+    estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
+    mode = _cache_mode_for(prepared, options, ib, limit)
+    return LightSimulationCache(
+        scene,
+        models,
+        options,
+        interception_backend,
+        ib,
+        scattering_mode,
+        scattering_backend,
+        prepared,
+        render_geometry,
+        mode,
+        estimated,
+        limit,
+        0,
+        0,
+        Dict{UInt64,TurtleLightCacheEntry}(),
+    )
+end
+
+function cache_summary(cache::LightSimulationCache)
+    cached_sector_count = sum(length(entry.turtle.sectors) for entry in values(cache.entries); init=0)
+    cached_full_response_sector_count =
+        sum(
+            count(x -> !isnothing(x), entry.par_added_per_sector) +
+            count(x -> !isnothing(x), entry.nir_added_per_sector) +
+            sum(count(x -> !isnothing(x), band_values) for band_values in values(entry.extra_added_per_sector); init=0)
+            for entry in values(cache.entries);
+            init=0,
+        )
+    return (
+        mode=cache.mode,
+        estimated_entry_bytes=cache.estimated_entry_bytes,
+        resident_bytes=cache.resident_bytes,
+        cached_turtle_count=length(cache.entries),
+        cached_sector_count=cached_sector_count,
+        cached_full_response_sector_count=cached_full_response_sector_count,
+        memory_limit_bytes=cache.memory_limit_bytes,
+        full_response_enabled=cache.mode != :topology_fallback,
+    )
+end
+
+@inline _series_progress_enabled(io::IO=stderr) = io isa Base.TTY
+
+function _format_progress_seconds(seconds::Float64)
+    if !isfinite(seconds)
+        return "?"
+    elseif seconds < 60
+        return string(round(seconds; digits=1), "s")
+    else
+        minutes = floor(Int, seconds ÷ 60)
+        rem_seconds = seconds - 60 * minutes
+        return string(minutes, "m", lpad(string(round(rem_seconds; digits=1)), 4, '0'), "s")
+    end
+end
+
+function _report_series_progress!(
+    io::IO,
+    cache::LightSimulationCache,
+    i::Int,
+    n::Int,
+    started_ns::UInt64,
+    last_report_ns::Base.RefValue{UInt64};
+    force::Bool=false,
+)
+    _series_progress_enabled(io) || return nothing
+    now_ns = time_ns()
+    min_interval_ns = 2_000_000_000
+    min_step_delta = max(cld(n, 100), 1)
+    !force && i < n && (now_ns - last_report_ns[] < min_interval_ns) && (i % min_step_delta != 0) && return nothing
+    elapsed = (now_ns - started_ns) / 1.0e9
+    rate = elapsed > 0 ? i / elapsed : 0.0
+    remaining = rate > 0 ? (n - i) / rate : Inf
+    pct = n > 0 ? 100 * i / n : 100.0
+    mode_label =
+        cache.mode === :full ? "full-cache" :
+        cache.mode === :partial ? "partial-cache" :
+        "topology-fallback"
+    print(
+        io,
+        "\r[ArchimedLight] run_light_series ",
+        i,
+        "/",
+        n,
+        " (",
+        round(pct; digits=1),
+        "%, ",
+        mode_label,
+        ", elapsed=",
+        _format_progress_seconds(elapsed),
+        ", eta=",
+        _format_progress_seconds(remaining),
+        ")",
+    )
+    if i == n
+        print(io, "\n")
+    end
+    flush(io)
+    last_report_ns[] = now_ns
+    return nothing
+end
+
+function _touch_cache_entry!(cache::LightSimulationCache, entry::TurtleLightCacheEntry)
+    cache.tick += 1
+    entry.last_used_tick = cache.tick
+    return entry
+end
+
+function _evict_cache_entries!(cache::LightSimulationCache, required_bytes::Int; protect_key::Union{Nothing,UInt64}=nothing)
+    cache.mode == :partial || return nothing
+    while cache.resident_bytes + required_bytes > cache.memory_limit_bytes && !isempty(cache.entries)
+        victim_key = nothing
+        victim_tick = typemax(Int)
+        for (key, entry) in cache.entries
+            key == protect_key && continue
+            if entry.last_used_tick < victim_tick
+                victim_key = key
+                victim_tick = entry.last_used_tick
+            end
+        end
+        victim_key === nothing && break
+        victim = cache.entries[victim_key]
+        cache.resident_bytes = max(cache.resident_bytes - victim.resident_bytes, 0)
+        delete!(cache.entries, victim_key)
+    end
+    return nothing
+end
+
+function _build_turtle_cache_entry!(
+    cache::LightSimulationCache,
+    key::UInt64,
+    turtle::TurtleGrid,
+)
+    prepared = cache.prepared
+    prepared === nothing && error("Cannot build full-response cache entry without prepared interception data.")
+    responses = _build_sector_responses(prepared, cache.scene, cache.models, turtle, cache.options)
+    n = length(turtle.sectors)
+    base_bytes =
+        length(prepared.geometry.node_ids) * n * (sizeof(Float64) + sizeof(Int))
+    cache.mode == :partial && _evict_cache_entries!(cache, base_bytes)
+    entry = TurtleLightCacheEntry(
+        key,
+        turtle,
+        responses,
+        fill(nothing, n),
+        fill(nothing, n),
+        Dict{String,Vector{Union{Nothing,Vector{Float64}}}}(),
+        zeros(Int, n),
+        zeros(Int, n),
+        fill(true, n),
+        fill(true, n),
+        Dict{String,Vector{Int}}(),
+        Dict{String,Vector{Bool}}(),
+        base_bytes,
+        0,
+    )
+    cache.entries[key] = entry
+    cache.resident_bytes += base_bytes
+    return _touch_cache_entry!(cache, entry)
+end
+
+function _get_turtle_cache_entry!(
+    cache::LightSimulationCache,
+    turtle::TurtleGrid,
+)
+    key = _turtle_cache_key(turtle, cache.options)
+    if haskey(cache.entries, key)
+        return _touch_cache_entry!(cache, cache.entries[key])
+    end
+    return _build_turtle_cache_entry!(cache, key, turtle)
+end
+
+function _ensure_sector_band_cache!(
+    cache::LightSimulationCache,
+    entry::TurtleLightCacheEntry,
+    sector_idx::Int,
+    band::String,
+)
+    options = cache.options
+    geometry = entry.responses_cache.prepared.geometry
+    n_nodes = length(geometry.node_ids)
+    band_u = uppercase(band)
+    if band_u == "PAR"
+        target = entry.par_added_per_sector
+        iterations = entry.par_iterations_per_sector
+        converged = entry.par_converged_per_sector
+    elseif band_u == "NIR"
+        target = entry.nir_added_per_sector
+        iterations = entry.nir_iterations_per_sector
+        converged = entry.nir_converged_per_sector
+    else
+        target = get!(entry.extra_added_per_sector, band_u) do
+            fill(nothing, length(entry.turtle.sectors))
+        end
+        iterations = get!(entry.extra_iterations_per_sector, band_u) do
+            zeros(Int, length(entry.turtle.sectors))
+        end
+        converged = get!(entry.extra_converged_per_sector, band_u) do
+            fill(true, length(entry.turtle.sectors))
+        end
+    end
+    existing = target[sector_idx]
+    existing !== nothing && return existing, iterations[sector_idx], converged[sector_idx]
+
+    cache.mode == :partial && _evict_cache_entries!(cache, n_nodes * sizeof(Float64); protect_key=entry.key)
+    unit_fluxes =
+        if band_u == "NIR"
+            _unit_directional_fluxes(entry.turtle, sector_idx; nir=1.0)
+        else
+            _unit_directional_fluxes(entry.turtle, sector_idx; par=1.0)
+        end
+    first = _combine_sector_responses(entry.responses_cache, unit_fluxes)
+    result =
+        compute_scattering_band(
+            entry.responses_cache.scattering_topology,
+            first,
+            options;
+            mode=cache.scattering_mode,
+            backend=cache.scattering_backend,
+            band=band_u,
+        )
+    dense = _dense_vector_from_node_values(result.added_power_per_node, geometry)
+    target[sector_idx] = dense
+    iterations[sector_idx] = result.iterations
+    converged[sector_idx] = result.converged
+    entry.resident_bytes += n_nodes * sizeof(Float64)
+    cache.resident_bytes += n_nodes * sizeof(Float64)
+    return dense, result.iterations, result.converged
+end
+
+function _assemble_cached_scattering(
+    cache::LightSimulationCache,
+    entry::TurtleLightCacheEntry,
+    fluxes::DirectionalFluxes,
+    nir_scattering::Bool,
+)
+    options = cache.options
+    options.scattering || return nothing
+    node_ids = entry.responses_cache.node_ids
+    added_par = zeros(Float64, length(node_ids))
+    added_nir = zeros(Float64, length(node_ids))
+    iterations = 0
+    converged = true
+    for i in eachindex(entry.turtle.sectors)
+        pf = fluxes.par[i]
+        if pf != 0.0
+            dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, "PAR")
+            _accumulate_scaled!(added_par, dense, pf)
+            iterations = max(iterations, it)
+            converged &= conv
+        end
+        if nir_scattering
+            nf = fluxes.nir[i]
+            if nf != 0.0
+                dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, "NIR")
+                _accumulate_scaled!(added_nir, dense, nf)
+                iterations = max(iterations, it)
+                converged &= conv
+            end
+        end
+    end
+    return ScatteringResult(
+        SpectralNodeValues(_float_dict_from_dense(node_ids, added_par), _float_dict_from_dense(node_ids, added_nir)),
+        iterations,
+        converged,
+    )
+end
+
+function _compute_extra_band_light_cached(
+    cache::LightSimulationCache,
+    entry::TurtleLightCacheEntry,
+    meteo_row,
+    sky::SkyState,
+    turtle::TurtleGrid,
+)
+    extras_irr = _extra_band_irradiance(meteo_row)
+    extra_0_q = Dict{String,Dict{Int,Float64}}()
+    extra_q = Dict{String,Dict{Int,Float64}}()
+    isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
+
+    node_ids = entry.responses_cache.node_ids
+    ids = [s.id for s in turtle.sectors]
+    n = length(ids)
+    for (band, total_irr) in extras_irr
+        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, cache.options)
+        first_band = _combine_sector_responses(entry.responses_cache, DirectionalFluxes(ids, flux_band, zeros(Float64, n)))
+        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_power.par)
+        added =
+            if cache.options.scattering
+                dense = zeros(Float64, length(node_ids))
+                iterations = 0
+                converged = true
+                for i in eachindex(flux_band)
+                    f = flux_band[i]
+                    f == 0.0 && continue
+                    unit_dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, band)
+                    _accumulate_scaled!(dense, unit_dense, f)
+                    iterations = max(iterations, it)
+                    converged &= conv
+                end
+                _float_dict_from_dense(node_ids, dense)
+            else
+                Dict{Int,Float64}()
+            end
+        total = Dict{Int,Float64}()
+        for nid in union(keys(order0), keys(added))
+            total[nid] = get(order0, nid, 0.0) + get(added, nid, 0.0)
+        end
+        extra_0_q[band] = order0
+        extra_q[band] = total
+    end
+    return extra_0_q, extra_q, extras_irr
+end
+
+function _run_light_step_cached(
+    cache::LightSimulationCache,
+    meteo_row;
+    use_full_response::Bool=(cache.mode != :topology_fallback),
+)
+    scene = cache.scene
+    models = cache.models
+    options = cache.options
+    ib = cache.resolved_interception_backend
+    nir_interception = _nir_interception_enabled_local(options)
+    nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
+    sky = compute_sky(meteo_row, options)
+    nir_interception || (sky = _disable_nir_sky_local(sky))
+    turtle = build_turtle(options, sky)
+    fluxes = compute_directional_fluxes(meteo_row, sky, turtle, options)
+
+    prepared = cache.prepared
+    responses_cache = nothing
+    scattering_topology = nothing
+    extra_irr = _extra_band_irradiance(meteo_row)
+    first = nothing
+    scat = nothing
+    if use_full_response && cache.mode != :topology_fallback
+        entry = _get_turtle_cache_entry!(cache, turtle)
+        responses_cache = entry.responses_cache
+        first = _combine_sector_responses(responses_cache, fluxes)
+        scat = _assemble_cached_scattering(cache, entry, fluxes, nir_scattering)
+        extra_0_q, extra_q, extra_irr = _compute_extra_band_light_cached(cache, entry, meteo_row, sky, turtle)
+    else
+        if ib isa RasterCPUBackend && options.scattering && isempty(extra_irr)
+            prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
+            first, scattering_topology =
+                _stream_first_order_with_scattering_topology(prepared, scene, models, turtle, fluxes, options)
+        elseif ib isa RasterCPUBackend && (options.scattering || !isempty(extra_irr))
+            prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
+            responses_cache = _build_sector_responses(prepared, scene, models, turtle, options)
+            first = _combine_sector_responses(responses_cache, fluxes)
+        else
+            first = compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
+        end
+        scat = _compute_scattering_with_flags(
+            scene,
+            models,
+            turtle,
+            first,
+            options;
+            mode=cache.scattering_mode,
+            backend=cache.scattering_backend,
+            nir_scattering=nir_scattering,
+            responses_cache=responses_cache,
+            scattering_topology=scattering_topology,
+        )
+        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
+            scene,
+            models,
+            meteo_row,
+            sky,
+            turtle,
+            options;
+            interception_backend=ib,
+            scattering_mode=cache.scattering_mode,
+            scattering_backend=cache.scattering_backend,
+            responses_cache=responses_cache,
+        )
+    end
+    budget = integrate_light(
+        scene,
+        models,
+        first,
+        scat,
+        options;
+        meteo_row=meteo_row,
+        extra_initial_energy_per_band=extra_0_q,
+        extra_energy_per_band=extra_q,
+        component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
+        absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
+        absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
+    )
+    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+end
+
 """
     run_light_step(scene, models, meteo_row, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::LightStepResult
 
@@ -982,72 +1508,23 @@ function run_light_step(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
-    ib = _resolve_interception_backend(interception_backend)
-    nir_interception = _nir_interception_enabled_local(options)
-    nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
-    sky = compute_sky(meteo_row, options)
-    nir_interception || (sky = _disable_nir_sky_local(sky))
-    turtle = build_turtle(options, sky)
-    fluxes = compute_directional_fluxes(meteo_row, sky, turtle, options)
-    prepared = nothing
-    responses_cache = nothing
-    scattering_topology = nothing
-    extra_irr = _extra_band_irradiance(meteo_row)
-    if ib isa RasterCPUBackend && options.scattering && isempty(extra_irr)
-        prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true)
-        first, scattering_topology =
-            _stream_first_order_with_scattering_topology(prepared, scene, models, turtle, fluxes, options)
-    elseif ib isa RasterCPUBackend && (options.scattering || !isempty(extra_irr))
-        prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true)
-        responses_cache = _build_sector_responses(prepared, scene, models, turtle, options)
-        first = _combine_sector_responses(responses_cache, fluxes)
-    else
-        first = compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
-    end
-    render_geometry =
-        if prepared === nothing
-            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
-        else
-            _light_render_geometry(prepared.geometry)
-        end
-    scat = _compute_scattering_with_flags(
+    cache = prepare_light_cache(
         scene,
         models,
-        turtle,
-        first,
         options;
-        mode=scattering_mode,
-        backend=scattering_backend,
-        nir_scattering=nir_scattering,
-        responses_cache=responses_cache,
-        scattering_topology=scattering_topology,
-    )
-    extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
-        scene,
-        models,
-        meteo_row,
-        sky,
-        turtle,
-        options;
-        interception_backend=ib,
+        interception_backend=interception_backend,
         scattering_mode=scattering_mode,
         scattering_backend=scattering_backend,
-        responses_cache=responses_cache,
+        memory_limit_bytes=0,
     )
-    budget = integrate_light(
-        scene,
-        models,
-        first,
-        scat,
-        options;
-        meteo_row=meteo_row,
-        extra_initial_energy_per_band=extra_0_q,
-        extra_energy_per_band=extra_q,
-        component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
-        absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
-        absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
-    )
-    LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, render_geometry)
+    return _run_light_step_cached(cache, meteo_row; use_full_response=false)
+end
+
+function run_light_step(
+    cache::LightSimulationCache,
+    meteo_row,
+)
+    return _run_light_step_cached(cache, meteo_row)
 end
 
 """
@@ -1065,78 +1542,65 @@ function run_light_series(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
-    ib = _resolve_interception_backend(interception_backend)
-    nir_interception = _nir_interception_enabled_local(options)
-    nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
-    use_cache = _can_use_series_radiation_cache(ib) && (options.cache_radiation || options.scattering)
-    cache = Dict{UInt64,SectorResponsesCache}()
-    prepared = ib isa RasterCPUBackend ? _prepare_interception_data(scene, models, options; include_budget_maps=true) : nothing
-    render_geometry =
-        if prepared === nothing
-            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
-        else
-            _light_render_geometry(prepared.geometry)
-        end
-    rows_eff = _prepare_meteo_rows_for_series(meteo, options)
-    out = Vector{LightStepResult}(undef, length(rows_eff))
-    for i in eachindex(rows_eff)
-        row = rows_eff[i]
-        sky = compute_sky(row, options)
-        nir_interception || (sky = _disable_nir_sky_local(sky))
-        turtle = build_turtle(options, sky)
-        fluxes = compute_directional_fluxes(row, sky, turtle, options)
-
-        responses = nothing
-        first =
-            if use_cache
-                key = _turtle_cache_key(turtle, options)
-                responses = get!(cache, key) do
-                    _build_sector_responses(prepared, scene, models, turtle, options)
-                end
-                _combine_sector_responses(responses, fluxes)
-            else
-                prepared === nothing ? compute_first_order(scene, models, turtle, fluxes, options; backend=ib) : _compute_first_order(prepared, turtle, fluxes, options)
-            end
-
-        scat = _compute_scattering_with_flags(
+    if _can_use_series_radiation_cache(_resolve_interception_backend(interception_backend)) && options.cache_radiation
+        cache = prepare_light_cache(
             scene,
             models,
-            turtle,
-            first,
             options;
-            mode=scattering_mode,
-            backend=scattering_backend,
-            nir_scattering=nir_scattering,
-            responses_cache=responses,
-        )
-        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
-            scene,
-            models,
-            row,
-            sky,
-            turtle,
-            options;
-            interception_backend=ib,
+            interception_backend=interception_backend,
             scattering_mode=scattering_mode,
             scattering_backend=scattering_backend,
-            responses_cache=responses,
         )
-        budget = integrate_light(
-            scene,
-            models,
-            first,
-            scat,
-            options;
-            meteo_row=row,
-            extra_initial_energy_per_band=extra_0_q,
-            extra_energy_per_band=extra_q,
-            component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
-            absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
-            absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
-        )
-        out[i] = LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, render_geometry)
+        return run_light_series(cache, meteo)
     end
-    out
+
+    cache = prepare_light_cache(
+        scene,
+        models,
+        options;
+        interception_backend=interception_backend,
+        scattering_mode=scattering_mode,
+        scattering_backend=scattering_backend,
+        memory_limit_bytes=0,
+    )
+    return run_light_series(cache, meteo)
+end
+
+function run_light_series(
+    cache::LightSimulationCache,
+    meteo::MeteoTable,
+)
+    rows_eff = _prepare_meteo_rows_for_series(meteo, cache.options)
+    out = Vector{LightStepResult}(undef, length(rows_eff))
+    io = stderr
+    started_ns = time_ns()
+    last_report_ns = Ref(started_ns)
+    if !isempty(rows_eff)
+        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
+    end
+    for i in eachindex(rows_eff)
+        out[i] = _run_light_step_cached(cache, rows_eff[i])
+        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
+    end
+    return out
+end
+
+function run_light_series(
+    cache::LightSimulationCache,
+    meteo::PlantMeteo.TimeStepTable,
+)
+    meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
+    return run_light_series(cache, meteo_local)
+end
+
+function run_light_series(
+    cache::LightSimulationCache,
+    meteo,
+)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
+    meteo isa MeteoTable && return run_light_series(cache, meteo)
+    meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo)
+    return run_light_series(cache, _as_plantmeteo_table(meteo))
 end
 
 function run_light_series(
