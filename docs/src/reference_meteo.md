@@ -25,6 +25,26 @@ steps that define:
 The rest of this page is organized around those semantics rather than around the
 CSV format.
 
+## Minimal Schema
+
+For most users, a meteo table should provide these fields:
+
+| Need | Accepted columns / metadata | Units | Required? |
+| --- | --- | --- | --- |
+| Date | `date` or a `DateTime`-like `date` | date or datetime | yes |
+| Time interval | `hour_start` + `hour_end`, or `duration` | time strings or Julia `Dates.Period` | yes |
+| Site latitude | `latitude` or `lat` as a column or metadata | degrees | yes, unless sun position is explicit |
+| PAR irradiance | `RI_PAR_f`, `Ri_PAR_f`, `PAR`, or `par` | `W m^-2` | one radiation description is required |
+| NIR irradiance | `RI_NIR_f`, `Ri_NIR_f`, `NIR`, or `nir` | `W m^-2` | optional if total shortwave is given |
+| Total shortwave | `RI_SW_f`, `Ri_SW_f`, `Rg`, `sw_global`, or `global` | `W m^-2` | alternative to PAR/NIR |
+| Atmospheric clearness | `clearness` or `Kt` | fraction | alternative forcing input |
+| Sun position | `sun_azimuth`/`sun_azimut` and `sun_elevation` | degrees | optional |
+| Direct fraction | `direct_fraction` | fraction | optional |
+
+`run_light` accepts `MeteoTable`, `PlantMeteo.TimeStepTable`, and generic
+Tables.jl-compatible inputs such as vectors of named tuples or DataFrames.
+Use `check_meteo(meteo)` to diagnose missing columns before a simulation.
+
 ## 1. Time Intervals
 
 The light model is driven by intervals, not isolated timestamps.
@@ -314,8 +334,8 @@ If your forcing already exists on disk, the usual pattern is:
 
 ```julia
 meteo = read_meteo("meteo.csv")
-rows = prepare_meteo(meteo, options).rows
-step = run_light_step(scene, models, first(rows), options)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, first(meteo))
 ```
 
 ## 8. Dynamic Workflow With `MeteoTable`
@@ -338,8 +358,8 @@ meteo = MeteoTable(
     (latitude=15.0, file="interactive",),
 )
 
-rows = prepare_meteo(meteo, options).rows
-step = run_light_step(scene, models, first(rows), options)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, first(meteo))
 ```
 
 This is the direct in-memory equivalent of the file-based meteo workflow.
@@ -359,9 +379,9 @@ sky = SkyState(
     0.05,
 )
 
-turtle = build_turtle(options, sky)
-fluxes = compute_directional_fluxes(sky, turtle, options)
-first = compute_first_order(scene, models, turtle, fluxes, options)
+turtle = ArchimedLight.build_turtle(options, sky)
+fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
 ```
 
 This is especially useful for:

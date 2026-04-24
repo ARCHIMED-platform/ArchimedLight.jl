@@ -1140,6 +1140,199 @@ function cache_summary(cache::LightSimulationCache)
     )
 end
 
+mutable struct LightSimulation
+    scene::SceneGeometry
+    models::LightModels
+    options::LightOptions
+    interception_backend::Any
+    scattering_mode::Symbol
+    scattering_backend::Union{Nothing,ScatteringBackend}
+    memory_limit_bytes::Any
+    cache::Union{Nothing,LightSimulationCache}
+    validation::Union{Nothing,ValidationReport}
+end
+
+"""
+    LightSimulation(scene, models; options=LightOptions(), kwargs...)
+
+Create a reusable light simulation. Expensive geometry preparation and radiation
+caches are built lazily by [`run_light`](@ref).
+"""
+function LightSimulation(
+    scene::SceneGeometry,
+    models;
+    options::LightOptions=LightOptions(),
+    interception_backend=:raster_cpu,
+    scattering_mode::Symbol=:raycast,
+    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    memory_limit_bytes=nothing,
+)
+    LightSimulation(
+        scene,
+        prepare_models(models),
+        options,
+        interception_backend,
+        scattering_mode,
+        scattering_backend,
+        memory_limit_bytes,
+        nothing,
+        nothing,
+    )
+end
+
+function _drop_light_cache!(sim::LightSimulation)
+    sim.cache = nothing
+    sim.validation = nothing
+    return sim
+end
+
+function _ensure_light_cache!(sim::LightSimulation)
+    sim.cache !== nothing && return sim.cache
+    report = check_simulation(sim)
+    if !isempty(report.errors)
+        error("Invalid light simulation:\n- " * join(report.errors, "\n- "))
+    end
+    sim.validation = report
+    sim.cache = prepare_light_cache(
+        sim.scene,
+        sim.models,
+        sim.options;
+        interception_backend=sim.interception_backend,
+        scattering_mode=sim.scattering_mode,
+        scattering_backend=sim.scattering_backend,
+        memory_limit_bytes=sim.memory_limit_bytes,
+    )
+    return sim.cache
+end
+
+"""
+    update_scene!(sim, new_scene)
+
+Replace the scene and immediately release all prepared data tied to the old
+scene. The next `run_light` call prepares the new scene lazily.
+"""
+function update_scene!(sim::LightSimulation, new_scene::SceneGeometry)
+    _drop_light_cache!(sim)
+    sim.scene = new_scene
+    return sim
+end
+
+function update_models!(sim::LightSimulation, new_models)
+    _drop_light_cache!(sim)
+    sim.models = prepare_models(new_models)
+    return sim
+end
+
+function update_options!(sim::LightSimulation, new_options::LightOptions)
+    _drop_light_cache!(sim)
+    sim.options = new_options
+    return sim
+end
+
+function cache_summary(sim::LightSimulation)
+    sim.cache === nothing && return (
+        mode=:unprepared,
+        estimated_entry_bytes=0,
+        resident_bytes=0,
+        cached_turtle_count=0,
+        cached_sector_count=0,
+        cached_full_response_sector_count=0,
+        memory_limit_bytes=sim.memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(sim.memory_limit_bytes),
+        full_response_enabled=false,
+    )
+    return cache_summary(sim.cache)
+end
+
+function check_scene(scene::SceneGeometry)
+    errors = String[]
+    warnings = String[]
+    infos = String[]
+    isempty(scene.face2node) && push!(errors, "Scene has no geometry faces.")
+    isempty(scene.nodes) && push!(errors, "Scene has no geometric nodes.")
+    scene.scene_xy_bounds === nothing && push!(errors, "Scene has no XY domain. Pass `domain=` to `light_scene` or `scene_xy_bounds=` to `prepare_scene`.")
+    if scene.scene_xy_bounds !== nothing
+        xmin, ymin, xmax, ymax = scene.scene_xy_bounds
+        (xmax > xmin && ymax > ymin) || push!(errors, "Scene XY domain must satisfy xmax > xmin and ymax > ymin.")
+    end
+    push!(infos, "$(length(scene.nodes)) geometric node(s) found.")
+    return ValidationReport(errors, warnings, infos)
+end
+
+function check_models(scene::SceneGeometry, models)
+    lm = prepare_models(models)
+    missing = Set{Tuple{String,String}}()
+    ignored = _ignored_group_types(lm)
+    for nid in unique(scene.face2node)
+        _is_ignored_node(nid, scene, ignored) && continue
+        group = strip(_scene_group(scene, nid, ""))
+        type_name = strip(_scene_type(scene, nid, ""))
+        _type_model(lm, group, type_name) === nothing && push!(missing, (group, type_name))
+    end
+    errors = String[]
+    if !isempty(missing)
+        details = join(["group=$(repr(g)), type=$(repr(t))" for (g, t) in sort!(collect(missing))], "; ")
+        push!(errors, "Missing model(s) for geometric node group/type pairs: $details.")
+    end
+    infos = ["Models are checked only for nodes with geometry."]
+    return ValidationReport(errors, String[], infos)
+end
+
+function _meteo_rows_for_check(meteo)
+    meteo isa MeteoTable && return meteo.rows
+    meteo isa PlantMeteo.TimeStepTable && return _meteo_rows(meteo)
+    Tables.istable(typeof(meteo)) && return _meteo_rows(_as_plantmeteo_table(meteo))
+    return [meteo]
+end
+
+function check_meteo(meteo; options::LightOptions=LightOptions())
+    rows = NamedTuple[]
+    errors = String[]
+    warnings = String[]
+    infos = String[]
+    try
+        rows = _meteo_rows_for_check(meteo)
+    catch err
+        push!(errors, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
+        return ValidationReport(errors, warnings, infos)
+    end
+    isempty(rows) && push!(errors, "Meteo input has no rows.")
+    isempty(rows) && return ValidationReport(errors, warnings, infos)
+
+    for (i, row) in enumerate(rows)
+        names = propertynames(row)
+        has_sun = (:sun_azimuth in names || :sun_azimut in names) && (:sun_elevation in names)
+        latitude = _row_value(row, [:latitude, :lat], NaN)
+        if !has_sun && !isfinite(latitude)
+            push!(errors, "Meteo row $i needs `latitude` metadata/column unless `sun_azimuth` and `sun_elevation` are provided.")
+        end
+        try
+            uses = _effective_radiation_use_tokens(row)
+            has_cl = _has_any_column(row, [:clearness, :Kt])
+            has_sw = _has_any_column(row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global])
+            has_par = _has_any_column(row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par])
+            has_nir = _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir])
+            _validate_meteo_radiation_inputs(uses, has_cl, has_sw, has_par, has_nir)
+        catch err
+            push!(errors, "Meteo row $i has invalid radiation inputs: $(sprint(showerror, err))")
+        end
+        try
+            _row_step_hours(row)
+        catch err
+            push!(errors, "Meteo row $i has invalid time interval: $(sprint(showerror, err))")
+        end
+    end
+    push!(infos, "$(length(rows)) meteo row(s) checked.")
+    return ValidationReport(errors, warnings, infos)
+end
+
+function check_simulation(sim::LightSimulation)
+    _merge_reports(check_scene(sim.scene), check_models(sim.scene, sim.models))
+end
+
+function check_simulation(scene::SceneGeometry, meteo; models, options::LightOptions=LightOptions())
+    _merge_reports(check_scene(scene), check_models(scene, models), check_meteo(meteo; options=options))
+end
+
 @inline _series_progress_enabled(io::IO=stderr) = io isa Base.TTY
 
 function _format_progress_seconds(seconds::Float64)
@@ -1491,6 +1684,68 @@ function _run_light_step_cached(
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
     return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+end
+
+function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
+    sim.options.cache_radiation && cache.mode != :topology_fallback
+end
+
+function _is_meteo_series_input(x)
+    x isa MeteoTable && return true
+    x isa PlantMeteo.TimeStepTable && return true
+    x isa AbstractVector && return !isempty(x) && all(row -> row isa NamedTuple, x)
+    Tables.istable(typeof(x)) && return !(x isa NamedTuple)
+    return false
+end
+
+function _run_light_series_sim(sim::LightSimulation, meteo)
+    cache = _ensure_light_cache!(sim)
+    meteo_local =
+        if meteo isa MeteoTable
+            meteo
+        elseif meteo isa PlantMeteo.TimeStepTable
+            MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
+        else
+            MeteoTable(_meteo_rows(_as_plantmeteo_table(meteo)), _meteo_metadata(_as_plantmeteo_table(meteo)))
+        end
+    rows_eff = _prepare_meteo_rows_for_series(meteo_local, sim.options)
+    out = Vector{LightStepResult}(undef, length(rows_eff))
+    io = stderr
+    started_ns = time_ns()
+    last_report_ns = Ref(started_ns)
+    use_full_response = _use_full_response_for_sim(sim, cache)
+    if !isempty(rows_eff)
+        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
+    end
+    for i in eachindex(rows_eff)
+        out[i] = _run_light_step_cached(cache, rows_eff[i]; use_full_response=use_full_response)
+        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
+    end
+    return out
+end
+
+"""
+    run_light(sim, meteo_or_row)
+
+Run one light step for a meteo row, or a full series for a meteo table.
+"""
+function run_light(sim::LightSimulation, meteo_or_row)
+    if _is_meteo_series_input(meteo_or_row)
+        return _run_light_series_sim(sim, meteo_or_row)
+    end
+    cache = _ensure_light_cache!(sim)
+    return _run_light_step_cached(cache, meteo_or_row; use_full_response=_use_full_response_for_sim(sim, cache))
+end
+
+function run_light(
+    scene::SceneGeometry,
+    models,
+    meteo_or_row;
+    options::LightOptions=LightOptions(),
+    kwargs...,
+)
+    sim = LightSimulation(scene, models; options=options, kwargs...)
+    return run_light(sim, meteo_or_row)
 end
 
 """

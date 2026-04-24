@@ -294,6 +294,116 @@ Base.haskey(models::LightModels, key) = haskey(models.groups, key)
 Base.getindex(models::LightModels, key) = models.groups[key]
 
 """
+    translucent(; par, nir, transparency=0.0)
+
+Build a [`TypeModel`](@ref) for an ordinary translucent component.
+
+`par` and `nir` are scattering fractions for the built-in ARCHIMED wavebands.
+The absorbed fraction is therefore `1 - scattering_fraction`.
+"""
+function translucent(; par::Real, nir::Real, transparency::Real=0.0)
+    TypeModel(
+        interception=InterceptionModel(
+            model="Translucent",
+            transparency=transparency,
+            optical_properties=OpticalProperties(par, nir),
+        ),
+    )
+end
+
+"""
+    virtual_sensor()
+
+Build a [`TypeModel`](@ref) for virtual sensors. Virtual sensors receive light
+diagnostics while remaining transparent in interception and scattering logic.
+"""
+virtual_sensor() = TypeModel(interception=InterceptionModel(model="VirtualSensor", sensor=true))
+
+"""
+    emitter(; radiance, par=0.48, nir=0.52)
+
+Build a [`TypeModel`](@ref) for an emitting component.
+"""
+function emitter(; radiance::Real, par::Real=0.48, nir::Real=0.52)
+    TypeModel(light_emitter=EmitterModel(radiance=radiance, gamma=OpticalProperties(par, nir)))
+end
+
+function _model_type_dict(spec)
+    types = OrderedDict{String,TypeModel}()
+    for pair in spec
+        pair isa Pair || error("Model type specifications must be pairs like \"Leaf\" => translucent(...).")
+        type_name = String(pair.first)
+        model = pair.second
+        model isa TypeModel || error("Model for type `$type_name` must be a TypeModel; use helpers such as translucent(...).")
+        types[type_name] = model
+    end
+    return types
+end
+
+"""
+    models_for(group_specs...)::LightModels
+
+Create [`LightModels`](@ref) from compact `(group => (type => model, ...))`
+pairs. Group and type names are matched against geometric scene nodes.
+
+Example:
+
+```julia
+models = models_for(
+    "coffee" => (
+        "Leaf" => translucent(par=0.15, nir=0.90),
+        "Stem" => translucent(par=0.20, nir=0.50),
+    ),
+    "soil" => (
+        "ground" => translucent(par=0.10, nir=0.40),
+    ),
+)
+```
+"""
+function models_for(group_specs::Pair...)
+    groups = OrderedDict{String,GroupModel}()
+    for pair in group_specs
+        group = String(pair.first)
+        haskey(groups, group) && error("Duplicate model group `$group`.")
+        groups[group] = GroupModel(group; types=_model_type_dict(pair.second))
+    end
+    return LightModels(groups)
+end
+
+"""
+    ValidationReport(errors, warnings, infos)
+
+Structured validation result returned by `check_scene`, `check_models`,
+`check_meteo`, and `check_simulation`.
+"""
+struct ValidationReport
+    errors::Vector{String}
+    warnings::Vector{String}
+    infos::Vector{String}
+end
+
+ValidationReport(; errors=String[], warnings=String[], infos=String[]) =
+    ValidationReport(collect(String, errors), collect(String, warnings), collect(String, infos))
+
+Base.isempty(report::ValidationReport) =
+    isempty(report.errors) && isempty(report.warnings) && isempty(report.infos)
+
+function Base.show(io::IO, report::ValidationReport)
+    print(io, "ValidationReport(")
+    print(io, length(report.errors), " errors, ")
+    print(io, length(report.warnings), " warnings, ")
+    print(io, length(report.infos), " infos)")
+end
+
+function _merge_reports(reports::ValidationReport...)
+    ValidationReport(
+        vcat((r.errors for r in reports)...),
+        vcat((r.warnings for r in reports)...),
+        vcat((r.infos for r in reports)...),
+    )
+end
+
+"""
     LightOptions
 
 Runtime controls for interception, scattering, and caching.
@@ -406,6 +516,12 @@ struct MeteoTable
     rows::Vector{NamedTuple}
     metadata::NamedTuple
 end
+
+Base.iterate(meteo::MeteoTable, state::Int=1) =
+    state > length(meteo.rows) ? nothing : (meteo.rows[state], state + 1)
+Base.length(meteo::MeteoTable) = length(meteo.rows)
+Base.getindex(meteo::MeteoTable, i::Integer) = meteo.rows[i]
+Base.first(meteo::MeteoTable) = first(meteo.rows)
 
 """
     SceneNodeData

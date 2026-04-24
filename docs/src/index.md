@@ -6,7 +6,9 @@ CurrentModule = ArchimedLight
 
 `ArchimedLight.jl` is the Julia reimplementation of the ARCHIMED light model. This model computes the interception and scattering of light by complex 3D scenes, with a focus on performance. It uses a rasterization-based approach for first-order interception and an iterative method for scattering, with flexible options for optical properties and directional response.
 
-It is designed to be flexible and composable, allowing users to run the full pipeline with one call or to execute individual stages for custom workflows.
+It is designed around a simple workflow: build or read a scene, define optical
+models, create a `LightSimulation`, then call `run_light` for one meteo row or
+a complete meteo table.
 
 ![Coffee scene light interception](assets/coffee_scene_light_interception.png)
 
@@ -29,10 +31,9 @@ Energy balance, transpiration, and photosynthesis are intentionally out of scope
 ```julia
 using ArchimedLight
 
-options, scene, meteo, models = read_config("config.yml")
+sim, meteo = read_simulation("config.yml")
 
-row = first(prepare_meteo(meteo, options).rows)
-step = run_light_step(scene, models, row, options)
+step = run_light(sim, first(meteo))
 
 step.budget.incident_flux.total.par
 step.budget.absorbed_energy.total.par
@@ -43,12 +44,13 @@ The simulation results are grouped by quantity and waveband in `LightBudget`. Wh
 ## Read This Site In Three Passes
 
 - Start with [Getting Started](getting_started.md) if you want one runnable coffee example with the minimum number of moving parts.
-- Continue with [File-Based Workflow](tutorial_files.md) or [Interactive Workflow](tutorial_interactive.md) depending on whether your scene already exists on disk or is being built in Julia.
+- Continue with [Beginner Workflows](tutorial_beginner_workflows.md), [File-Based Workflow](tutorial_files.md), or [Interactive Workflow](tutorial_interactive.md) depending on whether your scene already exists on disk or is being built in Julia.
 - Use the reference pages for exact file keys, scene semantics, model structure, meteo columns, and outputs.
 
 ## Documentation Map
 
 - [Getting Started](getting_started.md)
+- [Beginner Workflows](tutorial_beginner_workflows.md)
 - [Tutorial: File-Based Workflow](tutorial_files.md)
 - [Tutorial: Interactive Workflow](tutorial_interactive.md)
 - [Configuration And Options Reference](reference_config.md)

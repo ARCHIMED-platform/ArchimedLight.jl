@@ -36,7 +36,8 @@ using ArchimedLight
 
 repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
 config = joinpath(repo_root, "example_1", "config.yml")
-options, scene, meteo, models = read_config(config; plot_paving_override=0)
+sim, meteo = read_simulation(config; plot_paving_override=0)
+scene = sim.scene
 add_ground!(
     scene;
     nx=4,
@@ -45,7 +46,7 @@ add_ground!(
     group="pavement",
     type="Cobblestone",
 )
-rows = prepare_meteo(meteo, options).rows
+rows = collect(meteo)
 ```
 
 At this point:
@@ -63,16 +64,16 @@ For a single time step:
 
 ```@example file_workflow
 row = first(rows)
-step = run_light_step(scene, models, row, options)
+step = run_light(sim, row)
 ```
 
 For every meteo row:
 
 ```julia
-series = run_light_series(scene, models, meteo, options)
+series = run_light(sim, meteo)
 ```
 
-Enabling `LightOptions(cache_radiation=true)` allows `run_light_series` to reuse directional responses across meteo rows on the same scene, substantially improving performance.
+Enabling `LightOptions(cache_radiation=true)` allows `run_light` to reuse directional responses across meteo rows on the same scene, substantially improving performance.
 
 ## Step 3: Inspect The Budget
 

@@ -10,10 +10,10 @@ This page documents those three layers and then explains the ARCHIMED-style CSV 
 
 ## 1. In-Memory Outputs: `LightBudget`
 
-The core output of `run_light_step` is:
+The core output of `run_light` for one meteo row is:
 
 ```julia
-step = run_light_step(scene, models, row, options)
+step = run_light(sim, row)
 budget = step.budget
 ```
 

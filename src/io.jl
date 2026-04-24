@@ -11,6 +11,18 @@ import YAML
 
 const _NEXT_SCENE_NODE_ID = Ref(1)
 
+"""
+    LightSceneBuilder
+
+Mutable helper used by `light_scene` to assemble an MTG-backed scene before it
+is converted to [`SceneGeometry`](@ref).
+"""
+mutable struct LightSceneBuilder
+    mtg
+    domain::Union{Nothing,NTuple{4,Float64}}
+    source_path::String
+end
+
 function _as_bool(x, default::Bool)
     x === nothing && return default
     x isa Bool && return x
@@ -397,6 +409,19 @@ function read_config(path::AbstractString; plot_paving_override=nothing)
     return options, scene, meteo, models
 end
 
+"""
+    read_simulation(path; plot_paving_override=nothing, kwargs...)
+
+Read a complete file-based light simulation and return `(sim, meteo)`, where
+`sim` is a [`LightSimulation`](@ref).
+"""
+function read_simulation(path::AbstractString; plot_paving_override=nothing, kwargs...)
+    options, scene, meteo, models = read_config(path; plot_paving_override=plot_paving_override)
+    meteo_eff = prepare_meteo(meteo, options)
+    sim_options = options.meteo_range === nothing ? options : LightOptions(options; meteo_range=nothing)
+    return LightSimulation(scene, models; options=sim_options, kwargs...), meteo_eff
+end
+
 function _triangle_area3d(p1, p2, p3)
     v1 = StaticArrays.SVector{3,Float64}(p2[1] - p1[1], p2[2] - p1[2], p2[3] - p1[3])
     v2 = StaticArrays.SVector{3,Float64}(p3[1] - p1[1], p3[2] - p1[2], p3[3] - p1[3])
@@ -553,6 +578,124 @@ function _relabel_scene_node_ids!(root)
         _NEXT_SCENE_NODE_ID[] += 1
     end
     return root
+end
+
+function _coerce_domain(domain)
+    domain === nothing && return nothing
+    length(domain) == 4 || error("Scene domain must be a 4-tuple `(xmin, ymin, xmax, ymax)`.")
+    vals = ntuple(i -> Float64(domain[i]), 4)
+    vals[3] > vals[1] || error("Scene domain must satisfy xmax > xmin.")
+    vals[4] > vals[2] || error("Scene domain must satisfy ymax > ymin.")
+    return vals
+end
+
+function _set_scene_dimensions!(mtg, bounds::NTuple{4,Float64})
+    xmin, ymin, xmax, ymax = bounds
+    mtg[:scene_dimensions] = (
+        GeometryBasics.Point3f(Float32(xmin), Float32(ymin), 0.0f0),
+        GeometryBasics.Point3f(Float32(xmax), Float32(ymax), 0.0f0),
+    )
+    return mtg
+end
+
+function _scene_builder_root(domain::Union{Nothing,NTuple{4,Float64}})
+    root = MultiScaleTreeGraph.Node(
+        MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 1, 0),
+        Dict{Symbol,Any}(),
+    )
+    domain === nothing || _set_scene_dimensions!(root, domain)
+    return root
+end
+
+function _builder_refresh!(builder::LightSceneBuilder)
+    _refresh_ref_mesh_registry!(builder.mtg)
+    builder.domain === nothing || _set_scene_dimensions!(builder.mtg, builder.domain)
+    return prepare_scene(
+        builder.mtg;
+        source_path=builder.source_path,
+        scene_xy_bounds=builder.domain,
+        relabel_ids=true,
+    )
+end
+
+function _as_tuple3(x, name::AbstractString)
+    length(x) == 3 || error("`$name` must be a 3-tuple.")
+    ntuple(i -> Float64(x[i]), 3)
+end
+
+function _read_scene_object(path::AbstractString)
+    ext = lowercase(splitext(path)[2])
+    ext == ".opf" && return _read_opf_relaxed(path)
+    ext == ".gwa" && return PlantGeom.read_gwa(path)
+    error("add_plant! accepts `.opf` and `.gwa` object paths; use read_scene for `.ops` scenes.")
+end
+
+function _annotate_scene_object!(mtg; group::AbstractString, id::Integer, file_path::AbstractString="")
+    mtg[:functional_group] = String(group)
+    mtg[:object_id] = Int(id)
+    mtg[:plantID] = Int(id)
+    isempty(file_path) || (mtg[:filePath] = String(file_path))
+    MultiScaleTreeGraph.traverse!(mtg) do node
+        haskey(node, :functional_group) || (node[:functional_group] = String(group))
+        haskey(node, :object_id) || (node[:object_id] = Int(id))
+        return true
+    end
+    return mtg
+end
+
+function _translate_scene_object!(mtg, at)
+    x, y, z = _as_tuple3(at, "at")
+    (x == 0.0 && y == 0.0 && z == 0.0) && return mtg
+    translation = PlantGeom.Translation(x, y, z)
+    MultiScaleTreeGraph.traverse!(mtg, filter_fun=PlantGeom.has_geometry) do node
+        PlantGeom.transform_mesh!(node, translation)
+        return true
+    end
+    return mtg
+end
+
+function _add_scene_object!(builder::LightSceneBuilder, obj; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0), file_path::AbstractString="")
+    plant = deepcopy(obj)
+    _annotate_scene_object!(plant; group=group, id=id, file_path=file_path)
+    _translate_scene_object!(plant, at)
+    try
+        MultiScaleTreeGraph.addchild!(builder.mtg, plant)
+    catch err
+        msg = "Could not add plant object to the scene builder. Use MTGs read with PlantGeom defaults (`MutableNodeMTG`, Dict attributes) or pass an `.opf`/`.gwa` path. Original error: $(sprint(showerror, err))"
+        throw(ArgumentError(msg))
+    end
+    return builder
+end
+
+"""
+    add_plant!(builder, plant; group, id, at=(0, 0, 0))
+    add_plant!(builder, path; group, id, at=(0, 0, 0))
+
+Add an in-memory MTG or an `.opf`/`.gwa` object file to a scene builder.
+"""
+function add_plant!(builder::LightSceneBuilder, plant; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0))
+    _add_scene_object!(builder, plant; group=group, id=id, at=at)
+end
+
+function add_plant!(builder::LightSceneBuilder, path::AbstractString; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0))
+    _add_scene_object!(builder, _read_scene_object(path); group=group, id=id, at=at, file_path=path)
+end
+
+"""
+    light_scene(f; domain, source_path="interactive.scene")
+
+Build a scene interactively and return a prepared [`SceneGeometry`](@ref).
+"""
+function light_scene(f::Function; domain, source_path::AbstractString="interactive.scene")
+    bounds = _coerce_domain(domain)
+    builder = LightSceneBuilder(_scene_builder_root(bounds), bounds, String(source_path))
+    f(builder)
+    return _builder_refresh!(builder)
+end
+
+function light_scene(; domain, source_path::AbstractString="interactive.scene")
+    bounds = _coerce_domain(domain)
+    return _builder_refresh!(LightSceneBuilder(_scene_builder_root(bounds), bounds, String(source_path)))
 end
 
 function _scene_xy_bounds_from_mtg(mtg)
@@ -722,6 +865,29 @@ function add_ground!(
     _drop_scene_surface_geometry!(scene.mtg)
     _refresh_ref_mesh_registry!(scene.mtg)
     _refresh_scene!(scene)
+end
+
+"""
+    add_ground!(builder; z=0.0, nx=9, ny=9, group="pavement", type="Cobblestone")
+
+Add explicit ground geometry to a [`LightSceneBuilder`](@ref).
+"""
+function add_ground!(
+    builder::LightSceneBuilder;
+    z::Real=0.0,
+    nx::Int=9,
+    ny::Int=9,
+    xy_bounds=nothing,
+    group::AbstractString="pavement",
+    type::AbstractString="Cobblestone",
+)
+    bounds = xy_bounds === nothing ? builder.domain : _coerce_domain(xy_bounds)
+    bounds === nothing && error("Ground bounds are undefined. Pass `domain=` to light_scene or `xy_bounds=` to add_ground!.")
+    scene = _builder_refresh!(builder)
+    add_ground!(scene; z=z, nx=nx, ny=ny, xy_bounds=bounds, group=group, type=type)
+    builder.mtg = scene.mtg
+    builder.domain = scene.scene_xy_bounds
+    return builder
 end
 
 """

@@ -36,6 +36,34 @@ The runtime resolves a node with this precedence:
 
 This is true whether models come from files or from Julia objects.
 
+Only nodes with geometry need a model. Non-geometric topology nodes such as
+plant, axis, phytomer, or grouping nodes are ignored by model validation.
+
+For interactive workflows, the compact constructor is usually easiest:
+
+```julia
+models = models_for(
+    "coffee" => (
+        "Leaf" => translucent(par=0.15, nir=0.90),
+        "Stem" => translucent(par=0.20, nir=0.50),
+    ),
+    "soil" => (
+        "ground" => translucent(par=0.10, nir=0.40),
+    ),
+)
+```
+
+Use `"*"` as a type fallback:
+
+```julia
+models = models_for(
+    "coffee" => (
+        "*" => translucent(par=0.15, nir=0.90),
+        "Stem" => translucent(par=0.20, nir=0.50),
+    ),
+)
+```
+
 ## 2. File-Based Representation
 
 Historically, one YAML file usually describes one functional group:
@@ -389,7 +417,7 @@ GroupModel(
 ```
 
 The `plot_paving` hint belongs to the file-based convenience layer used by
-`read_config`; the radiative behavior itself is still just an ordinary
+`read_simulation`; the radiative behavior itself is still just an ordinary
 interception model.
 
 ## 10. Missing Bands And Fallbacks

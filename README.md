@@ -26,24 +26,27 @@ Energy balance, transpiration and photosynthesis are intentionally out of scope 
 ```julia
 using ArchimedLight
 
-options, scene, meteo, models = read_config("config.yml")
+sim, meteo = read_simulation("config.yml")
 
-row = first(prepare_meteo(meteo, options).rows)
-sky = compute_sky(row, options)
-turtle = build_turtle(options, sky)
-fluxes = compute_directional_fluxes(row, sky, turtle, options)
-first_order = compute_first_order(scene, models, turtle, fluxes, options)
-scat = compute_scattering(scene, models, turtle, first_order, options)
-budget = integrate_light(scene, models, first_order, scat, options; meteo_row=row)
+step = run_light(sim, first(meteo))
+series = run_light(sim, meteo)
 ```
 
-In Julia code, `LightBudget` is grouped by quantity and waveband:
+`LightSimulation` owns the prepared scene and optional radiation cache. If a host model changes
+the scene, update it explicitly:
 
 ```julia
-budget.incident_flux.total.par
-budget.incident_energy.total.par
-budget.absorbed_flux.total.nir
-budget.absorbed_energy.initial.par
+update_scene!(sim, new_scene)
+step = run_light(sim, next_meteo_row)
+```
+
+In Julia code, the result budget is grouped by quantity and waveband:
+
+```julia
+step.budget.incident_flux.total.par
+step.budget.incident_energy.total.par
+step.budget.absorbed_flux.total.nir
+step.budget.absorbed_energy.initial.par
 ```
 
 File exports and attached MTG attributes keep the ARCHIMED names:
@@ -62,27 +65,44 @@ With the default options, that means:
 - missing model `NIR` coefficient falls back to `0.30`
 - the corresponding default absorptances used in the final budget are `1 - coeff`
 
-## Short pipeline
+## Interactive inputs
+
+You can also build everything in Julia:
+
 ```julia
-options, scene, meteo, models = read_config("config.yml")
-row = first(prepare_meteo(meteo, options).rows)
+scene = light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+    add_plant!(s, "plant.opf"; group="coffee", id=1)
+    add_ground!(s; group="soil", type="ground", nx=20, ny=20)
+end
 
-step = run_light_step(scene, models, row, options)
-series = run_light_series(scene, models, meteo, options)
-
-attach_light_step!(scene, step; fields=[:incident_par_flux, :absorbed_par_total_energy])
-write_scene("output/scene.opf", scene)
-
-# Optional backend kwargs:
-step = run_light_step(
-    scene,
-    models,
-    row,
-    options;
-    interception_backend=RasterCPUBackend(),
-    scattering_backend=RaycastScatteringBackend(),
+models = models_for(
+    "coffee" => (
+        "Leaf" => translucent(par=0.15, nir=0.90),
+        "Stem" => translucent(par=0.20, nir=0.50),
+    ),
+    "soil" => (
+        "ground" => translucent(par=0.10, nir=0.40),
+    ),
 )
+
+sim = LightSimulation(scene, models; options=LightOptions())
+step = run_light(sim, meteo_row)
 ```
+
+## Advanced pipeline
+
+The explicit stages remain available for debugging, parity work, and custom research workflows:
+
+```julia
+sky = ArchimedLight.compute_sky(row, options)
+turtle = ArchimedLight.build_turtle(options, sky)
+fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+first_order = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+scat = ArchimedLight.compute_scattering(scene, models, turtle, first_order, options)
+budget = ArchimedLight.integrate_light(scene, models, first_order, scat, options; meteo_row=row)
+```
+
+For ordinary simulations prefer `LightSimulation` and `run_light`.
 
 ## Full Example
 - Self-contained files and script are under `example_1/`.
@@ -93,9 +113,9 @@ julia --project=. example_1/full_featured_example.jl
 ```
 
 ## Stage flexibility
-- `read_config("config.yml")` is the convenience entrypoint for file-driven workflows and returns `options, scene, meteo, models`.
-- You can call each stage independently (`compute_sky`, `build_turtle`, `compute_first_order`, `compute_scattering`, `integrate_light`, ...).
-- File-based and in-memory workflows share the same runtime path: `read_scene(...)` and `prepare_scene(...)` both produce `SceneGeometry`, while `read_models(...)` and `prepare_models(...)` both produce `LightModels`.
+- `read_simulation("config.yml")` is the convenience entrypoint for file-driven workflows and returns `sim, meteo`.
+- You can call each stage independently through the module (`ArchimedLight.compute_sky`, `ArchimedLight.build_turtle`, `ArchimedLight.compute_first_order`, `ArchimedLight.compute_scattering`, `ArchimedLight.integrate_light`, ...).
+- File-based and in-memory workflows share the same runtime path: `read_scene(...)`, `prepare_scene(...)`, and `light_scene(...)` all produce `SceneGeometry`, while `read_models(...)`, `prepare_models(...)`, and `models_for(...)` produce `LightModels`.
 - `compute_sky` follows the ARCHIMED clearness/global conversion and DeJong hourly direct/diffuse partitioning.
 - `compute_sky` uses substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.

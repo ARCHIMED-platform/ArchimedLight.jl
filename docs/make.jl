@@ -27,6 +27,7 @@ makedocs(;
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
         "Tutorials" => [
+            "Beginner Workflows" => "tutorial_beginner_workflows.md",
             "File-Based Workflow" => "tutorial_files.md",
             "Interactive Workflow" => "tutorial_interactive.md",
         ],
