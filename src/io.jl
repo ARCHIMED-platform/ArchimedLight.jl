@@ -39,6 +39,18 @@ function _as_string(x, default::String)
     return String(x)
 end
 
+function _config_get(raw::AbstractDict, keys::Tuple{Vararg{String}})
+    for key in keys
+        haskey(raw, key) && return raw[key]
+    end
+    lower_keys = map(lowercase, keys)
+    for (k, v) in raw
+        kk = lowercase(string(k))
+        kk in lower_keys && return v
+    end
+    return nothing
+end
+
 function _join_if_relative(base::AbstractString, p::AbstractString)
     isabspath(p) ? p : normpath(joinpath(base, p))
 end
@@ -261,6 +273,10 @@ function read_options(path::AbstractString)
         pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
+        allow_overlapping_meteo_steps=_as_bool(
+            _config_get(raw, ("allow_overlapping_meteo_steps", "allowOverlappingMeteoSteps", "allowOverlappingMeteo")),
+            false,
+        ),
         nir_interception=_as_bool(get(raw, "nir_interception", true), true),
         nir_scattering=_as_bool(get(raw, "nir_scattering", true), true),
         java_logged_turtle_dirs=_as_bool(get(raw, "java_logged_turtle_dirs", false), false),

@@ -323,6 +323,8 @@ Important fields:
   [`OpticalProperties`](@ref).
 - `radiation_timestep_minutes`: internal radiative substep used when a meteo
   row covers a coarser time interval.
+- `allow_overlapping_meteo_steps`: keep overlapping meteo intervals instead of
+  rejecting the series during meteo preparation.
 
 Typical starting point for simple runs:
 
@@ -343,6 +345,7 @@ Base.@kwdef struct LightOptions
     pixel_hit_stack_mode::String = "auto"
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
+    allow_overlapping_meteo_steps::Bool = false
     nir_interception::Bool = true
     nir_scattering::Bool = true
     java_logged_turtle_dirs::Bool = false
@@ -368,6 +371,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :pixel_hit_stack_mode => old.pixel_hit_stack_mode,
         :toricity => old.toricity,
         :radiation_timestep_minutes => old.radiation_timestep_minutes,
+        :allow_overlapping_meteo_steps => old.allow_overlapping_meteo_steps,
         :nir_interception => old.nir_interception,
         :nir_scattering => old.nir_scattering,
         :java_logged_turtle_dirs => old.java_logged_turtle_dirs,
