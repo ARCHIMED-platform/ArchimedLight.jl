@@ -4,6 +4,7 @@ using Documenter
 # For interactive rendering:
 # using LiveServer
 # servedocs()
+# or julia --project=docs -e 'using LiveServer; LiveServer.serve(dir = "docs/build/1")'
 
 DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
@@ -13,11 +14,11 @@ generate_reference_figures()
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
-    repo=Documenter.Remotes.GitHub("VEZY", "ArchimedLight.jl"),
+    repo=Documenter.Remotes.GitHub("ARCHIMED-platform", "ArchimedLight.jl"),
     sitename="ArchimedLight.jl",
     format=Documenter.HTML(
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://VEZY.github.io/ArchimedLight.jl",
+        canonical="https://archimed-platform.github.io/ArchimedLight.jl",
         edit_link="main",
         assets=String[],
         size_threshold=700000,
@@ -50,5 +51,5 @@ makedocs(;
     ],
 )
 
-deploydocs(; repo="github.com/VEZY/ArchimedLight.jl.git", devbranch="main", push_preview=true)
-# Visit https://VEZY.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
+deploydocs(; repo="github.com/ARCHIMED-platform/ArchimedLight.jl.git", devbranch="main", push_preview=true)
+# Visit https://archimed-platform.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
