@@ -113,13 +113,11 @@ function _synthetic_meteo_row(;
         hour_end=Dates.format(Dates.Time(end_dt), Dates.DateFormat("HH:MM:SS")),
         step_duration=duration_seconds,
         latitude=0.0,
-        relativeHumidity=60.0,
         RI_PAR_f=ri_par_f,
         RI_NIR_f=ri_nir_f,
         direct_fraction=direct_fraction,
         sun_azimut=sun_azimut,
         sun_elevation=sun_elevation,
-        use="relativeHumidity RI_PAR_f",
     )
 end
 
@@ -228,6 +226,28 @@ SUITE["Run light"]["series"]["simpleplant cached"] =
         models = SIMPLEPLANT.models;
         meteo = SIMPLEPLANT.meteo;
         options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false)
+    ) evals = 1
+
+SUITE["Run light"]["series"]["simpleplant prepared cache"] =
+    @benchmarkable ArchimedLight.run_light_series(cache, meteo) setup = (
+        scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
+        meteo = SIMPLEPLANT.meteo;
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false);
+        cache = ArchimedLight.prepare_light_cache(scene, models, options)
+    ) evals = 1
+
+SUITE["Run light"]["series"]["simpleplant prepared cache manual loop"] =
+    @benchmarkable begin
+        for row in meteo.rows
+            ArchimedLight.run_light_step(cache, row)
+        end
+    end setup = (
+        scene = SIMPLEPLANT.scene;
+        models = SIMPLEPLANT.models;
+        meteo = SIMPLEPLANT.meteo;
+        options = _override_options(SIMPLEPLANT.options; cache_radiation=true, scattering=false);
+        cache = ArchimedLight.prepare_light_cache(scene, models, options)
     ) evals = 1
 
 SUITE["Synthetic"] = BenchmarkGroup()

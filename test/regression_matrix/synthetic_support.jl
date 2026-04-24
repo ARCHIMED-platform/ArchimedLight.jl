@@ -126,13 +126,11 @@ function _synthetic_meteo_row(;
     start_time::Dates.Time=Dates.Time(12),
     duration_seconds::Float64=1.0,
     latitude::Float64=0.0,
-    relative_humidity::Float64=60.0,
     ri_par_f::Float64=100.0,
     ri_nir_f::Float64=0.0,
     direct_fraction::Float64=1.0,
     sun_azimut::Float64=180.0,
     sun_elevation::Float64=90.0,
-    use::String="relativeHumidity RI_PAR_f",
 )
     start_dt = Dates.DateTime(date, start_time)
     end_dt = start_dt + Dates.Millisecond(round(Int, duration_seconds * 1000))
@@ -142,13 +140,11 @@ function _synthetic_meteo_row(;
         hour_end=Dates.format(Dates.Time(end_dt), Dates.DateFormat("HH:MM:SS")),
         step_duration=duration_seconds,
         latitude=latitude,
-        relativeHumidity=relative_humidity,
         RI_PAR_f=ri_par_f,
         RI_NIR_f=ri_nir_f,
         direct_fraction=direct_fraction,
         sun_azimut=sun_azimut,
         sun_elevation=sun_elevation,
-        use=use,
     )
 end
 

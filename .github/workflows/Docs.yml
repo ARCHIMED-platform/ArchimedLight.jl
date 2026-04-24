@@ -1,10 +1,12 @@
 name: Docs
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
     paths:
+      - ".github/workflows/Docs.yml"
       - "docs/**"
       - "src/**"
       - "*.toml"
@@ -13,6 +15,7 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/Docs.yml"
       - "docs/**"
       - "src/**"
       - "*.toml"
@@ -28,6 +31,10 @@ jobs:
   docs:
     name: Documentation
     runs-on: ubuntu-latest
+    permissions:
+      actions: write # needed to allow julia-actions/cache to proactively delete old caches that it has created
+      contents: write
+      statuses: write
     steps:
       - uses: actions/checkout@v6
       - uses: julia-actions/setup-julia@v2
@@ -41,6 +48,11 @@ jobs:
             using Pkg
             Pkg.develop(PackageSpec(path=pwd()))
             Pkg.instantiate()'
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-docdeploy@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
       - name: Run doctest
         run: |
           julia --project=docs -e '
@@ -48,10 +60,3 @@ jobs:
             using ArchimedLight
             DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
             doctest(ArchimedLight)'
-      - name: Generate and deploy documentation
-        run: julia --project=docs docs/make.jl
-        env:
-          JULIA_PKG_SERVER: ""
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
-          GKSwstype: "100" # https://discourse.julialang.org/t/generation-of-documentation-fails-qt-qpa-xcb-could-not-connect-to-display/60988

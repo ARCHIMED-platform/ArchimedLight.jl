@@ -5,6 +5,24 @@ const _CENTER_OF_SOLAR_DISK_RAD = deg2rad(-0.83)
 const _SOLAR_TO_PAR = 0.48
 const _SOLAR_TO_NIR = 0.52
 
+function _duration_seconds_strict(v; field_name::AbstractString="duration")
+    if v isa Dates.Period || v isa Dates.CompoundPeriod
+        seconds = Dates.toms(v) * 1.0e-3
+        isfinite(seconds) && seconds > 0.0 || error("Invalid $(field_name) value: expected a positive duration, got $(repr(v))")
+        return seconds
+    end
+    PlantMeteo.positive_duration_seconds(v; field_name=field_name)
+end
+
+function _row_metadata_value(row, candidates::Vector{Symbol})
+    row isa PlantMeteo.TimeStepRow || return nothing
+    meta = getfield(parent(row), :metadata)
+    for c in candidates
+        hasproperty(meta, c) && return getproperty(meta, c)
+    end
+    return nothing
+end
+
 function _row_value(row, candidates::Vector{Symbol}, default::Float64)
     names = propertynames(row)
     for c in candidates
@@ -14,6 +32,16 @@ function _row_value(row, candidates::Vector{Symbol}, default::Float64)
             v === missing && continue
             try
                 return parse(Float64, string(v))
+            catch
+            end
+        end
+    end
+    meta_v = _row_metadata_value(row, candidates)
+    if meta_v !== nothing
+        meta_v isa Number && return Float64(meta_v)
+        meta_v === missing || begin
+            try
+                return parse(Float64, string(meta_v))
             catch
             end
         end
@@ -85,7 +113,7 @@ function _row_date(meteo_row)
 end
 
 function _row_step_hours(meteo_row)
-    t0 = _row_time_value(meteo_row, [:hour_start, :hour], Dates.Time(12))
+    t0 = _row_time_value(meteo_row, [:hour_start, :hour, :date], Dates.Time(12))
     t1 = _row_time_value(meteo_row, [:hour_end], t0)
 
     start_h = _to_decimal_hour(t0)
@@ -95,16 +123,21 @@ function _row_step_hours(meteo_row)
     if end_h == start_h
         names = propertynames(meteo_row)
         if :step_duration in names
-            duration_seconds = _positive_duration_seconds(getproperty(meteo_row, :step_duration); field_name="step_duration")
+            duration_seconds = _duration_seconds_strict(getproperty(meteo_row, :step_duration); field_name="step_duration")
             end_h += duration_seconds / 3600.0
             return start_h, end_h
         end
-        duration = _row_value(meteo_row, [:duration], NaN)
-        if isfinite(duration) && duration > 0.0
-            # Duration column is usually in hours; allow second-based values as a fallback.
-            end_h += duration > 24 ? duration / 3600.0 : duration
+        if :duration in names
+            duration_seconds = _duration_seconds_strict(getproperty(meteo_row, :duration); field_name="duration")
+            end_h += duration_seconds / 3600.0
         else
-            end_h += 1e-6
+            duration = _row_value(meteo_row, [:duration], NaN)
+            if isfinite(duration) && duration > 0.0
+                # Duration column is usually in hours; allow second-based values as a fallback.
+                end_h += duration > 24 ? duration / 3600.0 : duration
+            else
+                end_h += 1e-6
+            end
         end
     end
 
@@ -251,6 +284,16 @@ function _use_tokens(row)
             return isempty(t) ? String[] : split(t)
         end
     end
+    meta_v = _row_metadata_value(row, [:use])
+    if meta_v isa AbstractString
+        t = strip(String(meta_v))
+        return isempty(t) ? String[] : split(t)
+    elseif meta_v isa AbstractVector
+        return [strip(string(x)) for x in meta_v if !isempty(strip(string(x)))]
+    elseif meta_v !== nothing && meta_v !== missing
+        t = strip(string(meta_v))
+        return isempty(t) ? String[] : split(t)
+    end
     return String[]
 end
 
@@ -262,43 +305,43 @@ function _has_any_column(row, candidates::Vector{Symbol})
     return false
 end
 
-function _normalize_humidity_use_token(token::AbstractString)
-    s = lowercase(strip(String(token)))
-    if s in ("relativehumidity", "relative_humidity", "rh")
-        return "relativeHumidity"
-    elseif s == "vpd"
-        return "VPD"
-    end
+function _normalize_radiation_use_token(token::AbstractString)
+    s = strip(String(token))
+    ls = lowercase(s)
+    ls == "clearness" && return "clearness"
+
+    su = uppercase(s)
+    su == "RI_SW_F" && return "RI_SW_f"
+    su == "RI_PAR_F" && return "RI_PAR_f"
+    su == "RI_NIR_F" && return "RI_NIR_f"
     return ""
 end
 
-function _validate_meteo_humidity_inputs(use_tokens::AbstractVector{<:AbstractString}, row)
-    has_rh = _has_any_column(row, [:relativeHumidity, :relative_humidity, :RH, :rh])
-    has_vpd = _has_any_column(row, [:VPD, :vpd])
-
+function _effective_radiation_use_tokens(row)
     uses = String[]
-    for u in use_tokens
-        uu = _normalize_humidity_use_token(u)
-        isempty(uu) || push!(uses, uu)
+    for token in _use_tokens(row)
+        normalized = _normalize_radiation_use_token(token)
+        isempty(normalized) || push!(uses, normalized)
     end
     uses = unique(uses)
+    !isempty(uses) && return uses
 
-    if any(==("relativeHumidity"), uses) && !has_rh
-        error("meteo consistency error: missing relativeHumidity column specified in 'use' line")
-    end
-    if any(==("VPD"), uses) && !has_vpd
-        error("meteo consistency error: missing VPD column specified in 'use' line")
+    has_cl = _has_any_column(row, [:clearness, :Kt])
+    has_sw = _has_any_column(row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global])
+    has_par = _has_any_column(row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par])
+    has_nir = _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir])
+
+    if (has_cl && (has_sw || has_par || has_nir)) || (has_sw && has_par && has_nir)
+        if has_sw
+            return ["RI_SW_f"]
+        elseif has_par
+            return ["RI_PAR_f"]
+        elseif has_nir
+            return ["RI_NIR_f"]
+        end
     end
 
-    if has_rh && has_vpd
-        isempty(uses) && error("meteo consistency error: missing 'use' for columns relativeHumidity/VPD")
-        length(uses) == 1 || error("meteo consistency error: multiple uses: relativeHumidity/VPD")
-    elseif !has_rh && !has_vpd
-        error("meteo consistency error: missing column relativeHumidity/VPD")
-    else
-        # Exactly one humidity source is available.
-        length(uses) <= 1 || error("meteo consistency error: multiple uses: relativeHumidity/VPD")
-    end
+    return uses
 end
 
 function _validate_meteo_radiation_inputs(use_tokens::AbstractVector{<:AbstractString}, has_cl::Bool, has_sw::Bool, has_par::Bool, has_nir::Bool)
@@ -562,9 +605,9 @@ Compute sun position, PAR/NIR/SW irradiance, and direct/diffuse partition for on
 following Java-compatible precedence rules for available meteorological inputs.
 """
 function compute_sky(meteo_row, options::LightOptions)
-    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Rg, :rg, :sw_global, :global], NaN)
-    ri_par = _row_value(meteo_row, [:RI_PAR_f, :PAR, :par], NaN)
-    ri_nir = _row_value(meteo_row, [:RI_NIR_f, :NIR, :nir], NaN)
+    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global], NaN)
+    ri_par = _row_value(meteo_row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par], NaN)
+    ri_nir = _row_value(meteo_row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir], NaN)
     ri_sw = ri_sw_raw
     global_from_input = !isnan(ri_sw_raw) || !isnan(ri_par) || !isnan(ri_nir)
 
@@ -572,8 +615,7 @@ function compute_sky(meteo_row, options::LightOptions)
     clearness_provided = !isnan(clearness_raw)
     clearness = clearness_raw
 
-    use_tokens = _use_tokens(meteo_row)
-    _validate_meteo_humidity_inputs(use_tokens, meteo_row)
+    use_tokens = _effective_radiation_use_tokens(meteo_row)
     _validate_meteo_radiation_inputs(
         use_tokens,
         !isnan(clearness_raw),
@@ -653,6 +695,14 @@ function compute_sky(meteo_row, options::LightOptions)
     end
 
     explicit_direct = _row_value(meteo_row, [:direct_fraction, :fDIR_SW, :Fd], NaN)
+    if isnan(explicit_direct)
+        ri_sw_direct = _row_value(meteo_row, [:Ri_SW_f_direct, :RI_SW_f_direct], NaN)
+        ri_sw_diffuse = _row_value(meteo_row, [:Ri_SW_f_diffuse, :RI_SW_f_diffuse], NaN)
+        if !isnan(ri_sw_direct) && !isnan(ri_sw_diffuse)
+            total = ri_sw_direct + ri_sw_diffuse
+            total > 0.0 && (explicit_direct = ri_sw_direct / total)
+        end
+    end
     direct_fraction =
         if !isnan(explicit_direct)
             clamp(explicit_direct, 0.0, 1.0)

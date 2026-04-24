@@ -1,4 +1,4 @@
 #' latitude: 15.0
 #' altitude: 100.0
-date;hour_start;hour_end;temperature;relativeHumidity;clearness;wind
-2019/04/04;09:00:00;09:30:00;24;70;0.35;2
+date;hour_start;hour_end;clearness
+2019/04/04;09:00:00;09:30:00;0.35

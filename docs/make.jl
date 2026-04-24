@@ -1,18 +1,29 @@
 using ArchimedLight
 using Documenter
 
-DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive = true)
+# For interactive rendering:
+# using LiveServer
+# servedocs()
+# or julia --project=docs -e 'using LiveServer; LiveServer.serve(dir = "docs/build/1")'
+
+DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
 include("generate_reference_figures.jl")
 generate_reference_figures()
 
 makedocs(;
-    modules = [ArchimedLight],
-    authors = "Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
-    repo = "https://github.com/VEZY/ArchimedLight.jl/blob/{commit}{path}#{line}",
-    sitename = "ArchimedLight.jl",
-    format = Documenter.HTML(; canonical = "https://VEZY.github.io/ArchimedLight.jl"),
-    pages = [
+    modules=[ArchimedLight],
+    authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
+    repo=Documenter.Remotes.GitHub("ARCHIMED-platform", "ArchimedLight.jl"),
+    sitename="ArchimedLight.jl",
+    format=Documenter.HTML(
+        prettyurls=get(ENV, "CI", "false") == "true",
+        canonical="https://archimed-platform.github.io/ArchimedLight.jl",
+        edit_link="main",
+        assets=String[],
+        size_threshold=700000,
+    ),
+    pages=[
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
         "Tutorials" => [
@@ -40,4 +51,5 @@ makedocs(;
     ],
 )
 
-deploydocs(; repo = "github.com/VEZY/ArchimedLight.jl")
+deploydocs(; repo="github.com/ARCHIMED-platform/ArchimedLight.jl.git", devbranch="main", push_preview=true)
+# Visit https://archimed-platform.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26

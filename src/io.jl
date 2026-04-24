@@ -777,10 +777,14 @@ function _positive_duration_seconds(v; field_name::AbstractString="step_duration
     PlantMeteo.positive_duration_seconds(v; field_name=field_name)
 end
 
+function _table_column(data, name::Symbol)
+    Tables.getcolumn(Tables.columns(data), name)
+end
+
 function _normalize_raw_meteo_dates(data)
-    hasproperty(data, :date) || return data
+    :date in Tables.columnnames(data) || return data
     hour_fmt = Dates.DateFormat("HH:MM:SS")
-    date_only = (; date=getproperty(data, :date))
+    date_only = (; date=data.date)
     for date_fmt in (
         Dates.DateFormat("yyyy-mm-ddTHH:MM:SS.s"),
         Dates.DateFormat("yyyy/mm/dd"),
@@ -793,6 +797,30 @@ function _normalize_raw_meteo_dates(data)
         end
     end
     return data
+end
+
+function _table_metadata_namedtuple(data)
+    meta =
+        try
+            PlantMeteo.table_metadata(data)
+        catch
+            NamedTuple()
+        end
+    _meta_to_namedtuple(meta)
+end
+
+function _as_plantmeteo_table(data)
+    transformed = Tables.columntable(data)
+    column_names = Tables.columnnames(data)
+    if !(:date in column_names) && :DateTime in column_names
+        transformed = PlantMeteo.set_column(transformed, :date, transformed.DateTime)
+    end
+    transformed = _normalize_raw_meteo_dates(transformed)
+    if !(:duration in column_names)
+        duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
+        transformed = PlantMeteo.set_column(transformed, :duration, duration)
+    end
+    PlantMeteo.TimeStepTable(transformed, _table_metadata_namedtuple(data))
 end
 
 """
@@ -827,4 +855,13 @@ function read_meteo(path::AbstractString)
     raw_rows = _rows_to_namedtuples(weather)
     rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
     MeteoTable(rows, meta_nt)
+end
+
+function read_meteo(data)
+    Tables.istable(typeof(data)) || error("Unsupported meteo input: expected a path or a Tables.jl-compatible table.")
+    data isa MeteoTable && return data
+    data isa PlantMeteo.TimeStepTable && return MeteoTable(_meteo_rows(data), _meteo_metadata(data))
+
+    meteo = _as_plantmeteo_table(data)
+    MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
 end

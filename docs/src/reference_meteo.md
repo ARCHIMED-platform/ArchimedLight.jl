@@ -1,56 +1,178 @@
-# Meteo Inputs Reference
+# Meteo And Forcing Reference
 
-The meteo file provides the time-dependent forcing for the simulation. It is a semicolon-separated CSV enriched by metadata comments at the top. In the light workflow, its role is not to describe the scene or the optical properties of components, but to describe what light arrives, when it arrives, and under which sky conditions it should be interpreted.
+The light solver does not fundamentally need a meteo *file*. It needs a
+time-dependent forcing description that tells it:
 
-This matters because ARCHIMED-style meteo files often contain much more than the current light package strictly needs. Historical workflows bundled radiative, atmospheric, and physiological variables together. For `ArchimedLight.jl`, the important task is to extract from that table a coherent sequence of time intervals and enough radiative information to reconstruct PAR, NIR, and the direct/diffuse partition used by the light pipeline.
+- which time interval is being simulated
+- how much shortwave radiation arrives
+- how that radiation is split into PAR, NIR, and any extra bands
+- how much is direct beam and how much is diffuse sky
+- where the sun is, or enough information to reconstruct it
 
-## Example
+Historically that information often comes from a semicolon-separated meteo CSV.
+In dynamic workflows, the same semantics can be provided directly through a
+[`MeteoTable`](@ref) or even a single [`SkyState`](@ref).
+
+## What Matters In Meteo For The Light Solver
+
+Whatever the source format, the runtime ultimately wants one or more forcing
+steps that define:
+
+- a start and end time
+- a usable radiative description
+- enough site information to reconstruct solar geometry when needed
+
+The rest of this page is organized around those semantics rather than around the
+CSV format.
+
+## 1. Time Intervals
+
+The light model is driven by intervals, not isolated timestamps.
+
+### From Files
+
+A meteo row usually defines an interval through `date`, `hour_start`, and
+`hour_end`:
+
+```text
+date;hour_start;hour_end;RI_PAR_f;RI_NIR_f
+2016/06/12;12:00:00;12:30:00;350;250
+```
+
+### Dynamically In Julia
+
+The direct in-memory equivalent inside a [`MeteoTable`](@ref) row is:
+
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    RI_PAR_f=350.0,
+    RI_NIR_f=250.0,
+)
+```
+
+If you bypass the meteo layer entirely and build a [`SkyState`](@ref)
+directly, then the interval is no longer carried by the forcing object itself.
+You instead provide the step duration explicitly later on, for example in
+`integrate_light(...; step_duration_seconds=1800.0)`.
+
+## 2. Site Metadata
+
+Some radiative reconstructions need site metadata, especially latitude.
+
+### From Files
+
+ARCHIMED-style meteo files often begin with metadata comments such as:
 
 ```text
 #' name: Aquiares
 #' latitude: 15.0
 #' altitude: 100.0
-#' use: relativeHumidity clearness
-date;hour_start;hour_end;temperature;relativeHumidity;VPD;clearness;Re_SW_f;wind;atmosphereCO2_ppm
-2016/06/12;12:00:00;12:30:00;25;60;150;0.75;500;1;380
-2016/06/12;12:30:00;13:00:00;26;62;150;0.75;500;1.5;380
+#' use: clearness
 ```
 
-## Header Metadata
+### Dynamically In Julia
 
-The commented metadata lines are parsed and merged into the table metadata. The most important keys are `latitude`, which is needed for solar position, `altitude`, which is useful site metadata and historically enters some radiation calculations, and `use`, which declares which concurrent variables should be treated as authoritative.
+The in-memory equivalent is the `metadata` part of [`MeteoTable`](@ref):
 
-For example:
+```julia
+meteo = MeteoTable(
+    rows,
+    (latitude=15.0, altitude=100.0, file="interactive",),
+)
+```
+
+If you build a [`SkyState`](@ref) directly, you do not need latitude because the
+sun direction is already prescribed.
+
+## 3. Radiative Inputs
+
+The current light runtime accepts several ways of defining the incoming
+shortwave forcing. At least one usable description must be present.
+
+## `clearness`
+
+`clearness` is a compact atmospheric forcing description from which the runtime
+can reconstruct shortwave forcing and part of the sky partition logic.
+
+### From Files
 
 ```text
-#' use: relativeHumidity clearness
+date;hour_start;hour_end;latitude;clearness
+2016/06/12;12:00:00;12:30:00;15.0;0.75
 ```
 
-This means the file may contain other related variables, but these are the ones intended to drive the simulation. That is useful in historical meteo files where several partially redundant atmospheric variables coexist and the author wanted to make clear which ones should be trusted first.
+### Dynamically In Julia
 
-## Required Time Information
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    latitude=15.0,
+    clearness=0.75,
+)
+```
 
-Every meteo row must define a time interval, typically through `date`, `hour_start`, and `hour_end`. The light model is not driven by isolated timestamps but by intervals over which forcing is assumed to apply. `prepare_meteo` normalizes those rows into the form expected by the runtime and checks that the sequence is usable.
+This is useful when measured PAR and NIR are unavailable but the atmospheric
+state is known well enough to reconstruct a plausible sky.
 
-## Light Inputs
+## `RI_PAR_f` And `RI_NIR_f`
 
-The current light runtime accepts several ways of defining the incoming shortwave forcing. At least one usable description must be present, typically through `clearness`, `RI_SW_f`, `RI_PAR_f`, or `RI_NIR_f`. Historical files may also contain `Re_SW_f` or other naming variants inherited from older workflows. What matters for the current package is not the exact historical spelling, but whether the row can eventually be converted into PAR, NIR, and direct/diffuse information for the light pipeline.
+These are the most direct way to prescribe the main ARCHIMED wavebands.
 
-### `clearness`
+### From Files
 
-`clearness` is the most compact input style. It does not prescribe the radiative bands directly. Instead, it encodes an atmospheric state from which the model derives how much extraterrestrial radiation reaches the surface and how that should be partitioned in the ARCHIMED framework. This is convenient when measured PAR and NIR are unavailable but the meteorological context is known well enough to reconstruct a plausible sky state.
+```text
+date;hour_start;hour_end;RI_PAR_f;RI_NIR_f
+2016/06/12;12:00:00;12:30:00;350;250
+```
 
-### `RI_PAR_f`, `RI_NIR_f`
+### Dynamically In Julia
 
-`RI_PAR_f` and `RI_NIR_f` are measured or prescribed PAR and NIR irradiance values on a horizontal surface. This is the most direct way to tell the light model what the two main shortwave bands should be for one timestep, and it is usually the clearest input style when those measurements are available.
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    RI_PAR_f=350.0,
+    RI_NIR_f=250.0,
+)
+```
 
-### `RI_SW_f`
+This is usually the clearest input style when PAR and NIR measurements are
+available.
 
-`RI_SW_f` is total shortwave irradiance. When it is provided on its own, the model can partition it into PAR and NIR using the ARCHIMED logic. This is useful when broadband shortwave measurements are available but separate PAR and NIR observations are not.
+## `RI_SW_f`
 
-### Custom Wavebands
+`RI_SW_f` is total shortwave irradiance.
 
-Additional shortwave bands are supported with the naming pattern:
+### From Files
+
+```text
+date;hour_start;hour_end;RI_SW_f
+2016/06/12;12:00:00;12:30:00;600
+```
+
+### Dynamically In Julia
+
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    RI_SW_f=600.0,
+)
+```
+
+When only total shortwave is available, the runtime partitions it into PAR and
+NIR using the ARCHIMED assumptions.
+
+## Custom Wavebands
+
+Additional shortwave bands follow the pattern:
 
 ```text
 RI_<band>_f
@@ -63,33 +185,143 @@ RI_red_f
 RI_custom_f
 ```
 
-These extra bands participate in interception and scattering only if the model files provide matching optical properties for them. So adding an extra radiative column to the meteo file is not enough by itself; the component models must know how to respond to that band as well.
+The same naming works in dynamic named tuples:
 
-## Direct And Diffuse Partitioning
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    RI_PAR_f=350.0,
+    RI_red_f=80.0,
+)
+```
 
-The light model does not stop at total irradiance. It also needs to know how much of the incoming radiation belongs to the direct beam and how much belongs to the diffuse sky. If that partition is not explicitly available in the input, `compute_sky` derives it from the available sky information and the historical ARCHIMED assumptions. This is one of the reasons the meteo file should be thought of as a forcing description rather than just a table of energy totals: the directional structure of light matters, not only the integrated amount.
+Extra bands only become physically meaningful if the scene models also define
+matching optical properties for them.
 
-## Other Meteo Variables
+## 4. Direct And Diffuse Partition
 
-You may still see columns such as `temperature`, `relativeHumidity`, `VPD`, `wind`, or `atmosphereCO2_ppm` in historical files. Those variables were essential for the original photosynthesis and energy-balance workflows, and `relativeHumidity` still appears in many light fixtures because the meteo format historically bundled these quantities together. For the current light-only package, however, the radiative columns are the decisive part. The other variables are usually contextual rather than operational.
+The light model needs more than total irradiance. It needs a directional
+interpretation of that forcing.
 
-## Time-Step Duration And `radiation_timestep`
+### From Files
 
-A meteo row can span a long interval, for example 30 minutes, and ARCHIMED still evaluates radiation on smaller internal radiative substeps when `radiation_timestep_minutes` is smaller than the meteo interval. This separation is central to the way the light model treats forcing. The meteo rows define the user-facing simulation timeline, but `radiation_timestep` defines the internal granularity used to integrate sun motion and directional fluxes inside each row.
+This partition can be provided explicitly with columns such as
+`direct_fraction`, or inferred from the available radiation inputs and the
+historical ARCHIMED assumptions.
 
-That is why coarse meteo series can still produce reasonable light calculations. The model does not have to collapse an entire half-hour of solar motion into one average angle if the radiative substep is smaller.
+### Dynamically In Julia With `MeteoTable`
 
-## A Good Light-Only Meteo File
+The same applies to in-memory rows:
 
-For a robust light-only workflow, the best meteo files are usually the simplest and the clearest. They have correct `date`, `hour_start`, and `hour_end` fields, a reliable `latitude`, and either measured `RI_PAR_f` / `RI_NIR_f` values or a trusted `clearness`. Additional shortwave bands are worth carrying only when the model files also provide matching optical coefficients. Otherwise they add columns without adding a physically meaningful response.
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    RI_PAR_f=350.0,
+    RI_NIR_f=250.0,
+    direct_fraction=0.8,
+)
+```
 
-## Interactive Equivalent
+If you do not provide it, `compute_sky` reconstructs it from the available
+forcing.
 
-In an interactive workflow, you do not need a meteo CSV if you already know the forcing you want to simulate. There are two common equivalents, and they correspond to two slightly different intentions.
+### Dynamically In Julia With `SkyState`
 
-### 1. Build A `MeteoTable` In Memory
+If you already know the direct/diffuse split, you can bypass the reconstruction
+entirely:
 
-Use a `MeteoTable` when you still want the normal meteo-driven pipeline with `prepare_meteo`, `run_light_step`, or `run_light_series`:
+```julia
+sky = SkyState(
+    135.0,
+    35.0,
+    350.0,
+    250.0,
+    0.8,
+    0.2,
+)
+```
+
+This is the most direct route when the forcing is already known in physically
+resolved form.
+
+## 5. Solar Geometry
+
+The light pipeline needs sun direction.
+
+### From Files
+
+When not given explicitly, it can be reconstructed from:
+
+- `date`
+- `hour_start` / `hour_end`
+- `latitude`
+
+Some files may also carry explicit `sun_azimuth` and `sun_elevation` columns.
+
+### Dynamically In Julia With `MeteoTable`
+
+The same logic applies to in-memory rows. You can either:
+
+- let `compute_sky` reconstruct the sun position from time and latitude
+- provide `sun_azimuth` and `sun_elevation` explicitly in the row
+
+Example:
+
+```julia
+(
+    date=Date(2020, 6, 21),
+    hour_start="12:00:00",
+    hour_end="12:30:00",
+    latitude=15.0,
+    sun_azimuth=180.0,
+    sun_elevation=70.0,
+    RI_PAR_f=350.0,
+    RI_NIR_f=250.0,
+)
+```
+
+### Dynamically In Julia With `SkyState`
+
+With [`SkyState`](@ref), the sun direction is already explicit:
+
+```julia
+SkyState(180.0, 89.0, 350.0, 250.0, 0.95, 0.05)
+```
+
+That means "nearly zenith, mostly direct, prescribed PAR and NIR".
+
+## 6. Internal Radiation Timestep
+
+A meteo row can span a long interval, for example 30 minutes, and the model can
+still evaluate radiation on smaller internal radiative substeps.
+
+This is controlled by [`LightOptions`](@ref):
+
+```julia
+options = LightOptions(radiation_timestep_minutes=15.0)
+```
+
+So the user-facing meteo timeline and the internal radiative integration
+granularity are related but not identical.
+
+## 7. File-Based Workflow
+
+If your forcing already exists on disk, the usual pattern is:
+
+```julia
+meteo = read_meteo("meteo.csv")
+rows = prepare_meteo(meteo, options).rows
+step = run_light_step(scene, models, first(rows), options)
+```
+
+## 8. Dynamic Workflow With `MeteoTable`
+
+Use [`MeteoTable`](@ref) when you still want the normal meteo-driven pipeline,
+but without writing a CSV:
 
 ```julia
 meteo = MeteoTable(
@@ -101,8 +333,6 @@ meteo = MeteoTable(
             latitude=15.0,
             RI_PAR_f=350.0,
             RI_NIR_f=250.0,
-            relativeHumidity=60.0,
-            use="relativeHumidity",
         ),
     ],
     (latitude=15.0, file="interactive",),
@@ -112,16 +342,17 @@ rows = prepare_meteo(meteo, options).rows
 step = run_light_step(scene, models, first(rows), options)
 ```
 
-The correspondences are direct. CSV rows become the vector of named tuples in `MeteoTable.rows`, metadata comments such as `#' latitude: ...` become `MeteoTable.metadata`, and `prepare_meteo(read_meteo(path), options)` simply becomes `prepare_meteo(meteo, options)`. This is the right choice when you still want the table abstraction and its validation logic, but you do not want to go through a file on disk.
+This is the direct in-memory equivalent of the file-based meteo workflow.
 
-### 2. Build A `SkyState` Directly
+## 9. Dynamic Workflow With `SkyState`
 
-Build a `SkyState` directly when you already know the sun direction and the direct/diffuse forcing and want to bypass the meteo parsing layer entirely:
+Use [`SkyState`](@ref) when you already know the forcing for one step and do not
+need the meteo parsing layer at all:
 
 ```julia
 sky = SkyState(
     135.0,
-    90.0,
+    35.0,
     350.0,
     250.0,
     0.95,
@@ -133,4 +364,36 @@ fluxes = compute_directional_fluxes(sky, turtle, options)
 first = compute_first_order(scene, models, turtle, fluxes, options)
 ```
 
-This is the interactive equivalent of saying: for this step, I already know the sun direction, PAR, NIR, and direct/diffuse partition, so I do not need a CSV row at all. It is the most direct route into the light pipeline when the forcing is already available in physically resolved form.
+This is especially useful for:
+
+- synthetic scenes
+- controlled light tests
+- interactive simulations where the forcing is already computed elsewhere
+
+## 10. Other Meteo Variables
+
+Historical files may also contain:
+
+- `temperature`
+- `relativeHumidity`
+- `VPD`
+- `wind`
+- `atmosphereCO2_ppm`
+- `Re_SW_f`
+
+Those variables were important in the original ARCHIMED energy-balance and
+photosynthesis workflows. In the current light-only package, they are ignored
+by the light solver. They may remain in legacy files without changing the
+result, but they are not required.
+
+## Practical Advice
+
+For a robust light-only workflow:
+
+- always define a valid time interval
+- provide a reliable `latitude` whenever sun position must be reconstructed
+- prefer direct `RI_PAR_f` / `RI_NIR_f` when those measurements exist
+- use [`SkyState`](@ref) when you already know the sun direction and
+  direct/diffuse partition
+- add extra wavebands only if the component models define matching optical
+  properties

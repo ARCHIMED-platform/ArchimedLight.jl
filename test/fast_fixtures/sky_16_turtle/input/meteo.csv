@@ -1,4 +1,4 @@
 #' latitude: 43.6
 #' altitude: 250.0
-date;hour_start;hour_end;temperature;relativeHumidity;RI_SW_f;wind
-2019/06/21;12:00:00;12:30:00;28;55;820.0;3
+date;hour_start;hour_end;RI_SW_f
+2019/06/21;12:00:00;12:30:00;820.0
