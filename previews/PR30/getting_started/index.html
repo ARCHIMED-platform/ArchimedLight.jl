@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Getting Started · ArchimedLight.jl</title><meta name="title" content="Getting Started · ArchimedLight.jl"/><meta property="og:title" content="Getting Started · ArchimedLight.jl"/><meta property="twitter:title" content="Getting Started · ArchimedLight.jl"/><meta name="description" content="Documentation for ArchimedLight.jl."/><meta property="og:description" content="Documentation for ArchimedLight.jl."/><meta property="twitter:description" content="Documentation for ArchimedLight.jl."/><meta property="og:url" content="https://archimed-platform.github.io/ArchimedLight.jl/getting_started/"/><meta property="twitter:url" content="https://archimed-platform.github.io/ArchimedLight.jl/getting_started/"/><link rel="canonical" href="https://archimed-platform.github.io/ArchimedLight.jl/getting_started/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">ArchimedLight.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Getting Started</a><ul class="internal"><li><a class="tocitem" href="#What-This-Example-Covers"><span>What This Example Covers</span></a></li><li><a class="tocitem" href="#Minimal-Run"><span>Minimal Run</span></a></li><li><a class="tocitem" href="#Attach-Results-Back-Onto-The-Scene"><span>Attach Results Back Onto The Scene</span></a></li><li class="toplevel"><a class="tocitem" href="#Plotting-the-results"><span>Plotting the results</span></a></li><li><a class="tocitem" href="#What-To-Read-Next"><span>What To Read Next</span></a></li><li><a class="tocitem" href="#One-Important-Difference-From-The-Historical-Java-App"><span>One Important Difference From The Historical Java App</span></a></li></ul></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../tutorial_files/">File-Based Workflow</a></li><li><a class="tocitem" href="../tutorial_interactive/">Interactive Workflow</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../reference_config/">Configuration And Options</a></li><li><a class="tocitem" href="../reference_scene/">Scene Files And Semantics</a></li><li><a class="tocitem" href="../reference_models/">Model Files</a></li><li><a class="tocitem" href="../reference_meteo/">Meteo Inputs</a></li></ul></li><li><a class="tocitem" href="../outputs/">Outputs</a></li><li><span class="tocitem">Under The Hood</span><ul><li><a class="tocitem" href="../theory_pipeline/">Pipeline Overview</a></li><li><a class="tocitem" href="../theory_interception/">First-Order Interception</a></li><li><a class="tocitem" href="../theory_scattering/">Scattering And Assumptions</a></li></ul></li><li><span class="tocitem">Advanced Usage</span><ul><li><a class="tocitem" href="../full_example/">Full Example</a></li><li><a class="tocitem" href="../stages/">Composable Stages</a></li><li><a class="tocitem" href="../archimed_reference/">Historical ARCHIMED Reference</a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Getting Started</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Getting Started</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/ARCHIMED-platform/ArchimedLight.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/ARCHIMED-platform/ArchimedLight.jl/blob/main/docs/src/getting_started.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Getting-Started"><a class="docs-heading-anchor" href="#Getting-Started">Getting Started</a><a id="Getting-Started-1"></a><a class="docs-heading-anchor-permalink" href="#Getting-Started" title="Permalink"></a></h1><p>This page is the shortest path to your first light simulation. It uses the bundled coffee example from <code>example_2/</code>, which is also the source of the image on the home page. Here is how to plot it:</p><pre><code class="language-julia hljs">using CairoMakie, PlantGeom
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), &quot;..&quot;))
+ops_path = joinpath(repo_root, &quot;example_2&quot;, &quot;scene&quot;, &quot;coffee.ops&quot;)
+scene_preview = read_scene(ops_path)
+plantviz(scene_preview.mtg, color = Dict(&quot;Mesh0&quot; =&gt; :gray87, &quot;Mesh1&quot; =&gt; &quot;#42A25ABD&quot;))</code></pre><img src="ceae9b53.png" alt="Example block output"/><h2 id="What-This-Example-Covers"><a class="docs-heading-anchor" href="#What-This-Example-Covers">What This Example Covers</a><a id="What-This-Example-Covers-1"></a><a class="docs-heading-anchor-permalink" href="#What-This-Example-Covers" title="Permalink"></a></h2><ul><li>reading parameters from files, using a <code>config.yml</code> as the single source of truth for file paths and model options</li><li>loading a scene from <code>.ops</code> and <code>.opf</code></li><li>loading functional-group models from YAML</li><li>reading one meteo step</li><li>running one light step</li><li>attaching <code>Ri_PAR_f</code> to the scene for visualization or export</li></ul><h2 id="Minimal-Run"><a class="docs-heading-anchor" href="#Minimal-Run">Minimal Run</a><a id="Minimal-Run-1"></a><a class="docs-heading-anchor-permalink" href="#Minimal-Run" title="Permalink"></a></h2><pre><code class="language-julia hljs">using ArchimedLight
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), &quot;..&quot;))
+config = joinpath(repo_root, &quot;example_2&quot;, &quot;config.yml&quot;)
+options, scene, meteo, models = read_config(config)
+row = first(prepare_meteo(meteo, options).rows)
+step = run_light_step(scene, models, row, options)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi"><span class="sgr36"><span class="sgr1">LightStepResult</span></span>
+<span class="sgr90">  ------------------------------------------------------------</span>
+  <span class="sgr94"><span class="sgr1">sky        </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 463.139 W m^-2  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 501.734 W m^-2
+  <span class="sgr94"><span class="sgr1">sun        </span></span>azimuth 309.4°  |  elevation 76.5°
+  <span class="sgr94"><span class="sgr1">mix        </span></span>direct 73.5%  |  diffuse 26.5%  |  SW 964.872 W m^-2
+  <span class="sgr94"><span class="sgr1">turtle     </span></span>16 sectors (sky=16, sun=0)
+<span class="sgr90">  ------------------------------------------------------------</span>
+  <span class="sgr94"><span class="sgr1">incident   </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 3.623 MJ  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 9.259 MJ
+  <span class="sgr94"><span class="sgr1">absorbed   </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 3.08 MJ  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 925.918 kJ
+  <span class="sgr94"><span class="sgr1">scattering </span></span><span class="sgr1"><span class="sgr35">on</span></span>  |  iterations 13  |  converged <span class="sgr32"><span class="sgr1">true</span></span>
+  <span class="sgr94"><span class="sgr1">added      </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 286.509 kJ  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 5.644 MJ
+<span class="sgr90">  ------------------------------------------------------------</span>
+</code></pre><p>The result is a <code>LightStepResult</code>. The most useful field at first is <code>step.budget</code>, which groups values by:</p><ul><li>quantity: <code>incident</code> or <code>absorbed</code></li><li>form: <code>flux</code> (<code>W m^-2</code>) or <code>energy</code> (<code>J</code> per component per step)</li><li>stage: <code>initial</code> for first-order only, <code>total</code> for first-order plus scattering</li><li>waveband: <code>par</code>, <code>nir</code>, and any extra shortwave bands present in the meteo file</li></ul><h2 id="Attach-Results-Back-Onto-The-Scene"><a class="docs-heading-anchor" href="#Attach-Results-Back-Onto-The-Scene">Attach Results Back Onto The Scene</a><a id="Attach-Results-Back-Onto-The-Scene-1"></a><a class="docs-heading-anchor-permalink" href="#Attach-Results-Back-Onto-The-Scene" title="Permalink"></a></h2><p><code>ArchimedLight.jl</code> keeps the simulation results in the <code>LightStepResult</code> by default. If you want an inspectable scene, attach selected outputs back onto the MTG:</p><pre><code class="language-julia hljs">attach_light_step!(
+    scene,
+    step;
+    fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">/ 4193: Scene
+├─ / 4194: Individual
+│  └─ / 4195: Axis
+│     ├─ / 4196: Metamer
+│     ├─ &lt; 4197: Metamer
+│     ├─ &lt; 4198: Metamer
+│     ├─ &lt; 4199: Metamer
+│     ├─ &lt; 4200: Metamer
+│     ├─ &lt; 4201: Metamer
+│     ├─ &lt; 4202: Metamer
+│     ├─ &lt; 4203: Metamer
+│     │  ├─ + 4204: Axis
+│     │  │  ├─ / 4205: Metamer
+│     │  │  ├─ &lt; 4206: Metamer
+│     │  │  ├─ &lt; 4207: Metamer
+│     │  │  ├─ &lt; 4208: Metamer
+│     │  │  ├─ &lt; 4209: Metamer
+│     │  │  ├─ &lt; 4210: Metamer
+│     │  │  ├─ &lt; 4211: Metamer
+│     │  │  │  └─ + 4212: Axis
+│     │  │  │     ├─ / 4213: Metamer
+│     │  │  │     ├─ &lt; 4214: Metamer
+│     │  │  │     ├─ &lt; 4215: Metamer
+│     │  │  │     ├─ &lt; 4216: Metamer
+…</code></pre><p>This way you can inspect the results using the powerful MTG query system, or save the results to disk with the topology and geometry of the original scene:</p><pre><code class="language-julia hljs">out_path = joinpath(mktempdir(), &quot;coffee_step.opf&quot;)
+write_scene(out_path, scene)
+
+out_path</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">&quot;/tmp/jl_Waiwf0/coffee_step.opf&quot;</code></pre><p>The attached node attributes use the standard ARCHIMED names:</p><ul><li><code>:incident_par_flux</code> -&gt; <code>Ri_PAR_f</code></li><li><code>:incident_par_energy</code> -&gt; <code>Ri_PAR_q</code></li><li><code>:absorbed_par_energy</code> -&gt; <code>Ra_PAR_q</code></li></ul><h1 id="Plotting-the-results"><a class="docs-heading-anchor" href="#Plotting-the-results">Plotting the results</a><a id="Plotting-the-results-1"></a><a class="docs-heading-anchor-permalink" href="#Plotting-the-results" title="Permalink"></a></h1><p>You can plot the results using <code>PlantGeom.jl</code> + <code>Makie.jl</code>:</p><pre><code class="language-julia hljs">using PlantGeom, CairoMakie
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    colorrange=(0.0, maximum(values(step.budget.incident_flux.total.par))), # This is automatic by default, but we set it explicitly here to show how to control it.
+    figure=(size=(980, 700),),
+)
+
+PlantGeom.colorbar(fig[1, 2], p, label=&quot;Ri_PAR_f (W m^-2)&quot;)
+fig</code></pre><img src="f83e8255.png" alt="Example block output"/><p>If you do not want to reattach values onto the MTG just for visualization, ArchimedLight.jl also provides a helper that plots directly from the <code>LightStepResult</code> (this is more performant):</p><pre><code class="language-julia hljs">fig2, ax2, p2 = lightplot(
+    step;
+    color=:incident_par_flux,
+    colormap=:thermal,
+)
+
+Colorbar(fig2[1, 2], p2.plots[1], label=&quot;Ri_PAR_f (W m^-2)&quot;)
+fig2</code></pre><img src="3f7ffefe.png" alt="Example block output"/><p>If you want to visualize the same toric result as a repeated tile, build a tiled render geometry from the scene plot bounds and reuse the same light result:</p><pre><code class="language-julia hljs">tiled = tile_light_geometry(scene, step; nx=3, ny=3)
+fig_inf, ax_inf, p_inf = lightplot(tiled, step; color=:incident_par_flux)
+Colorbar(fig_inf[1, 2], p_inf.plots[1], label=&quot;Ri_PAR_f (W m^-2)&quot;)
+fig_inf</code></pre><img src="baed16bf.png" alt="Example block output"/><p>For a time series, we can generate the plot once and only update <code>timestep</code> during <code>record</code>, which is faster than regenerating the whole plot at every step:</p><pre><code class="language-julia hljs"># Generating a series of meteo row to simulate a day:
+meteo = MeteoTable(
+    [
+        (
+            date=Date(2020, 6, 21),
+            hour_start=Time(&quot;06:00:00&quot;) + Hour(i-1),
+            duration=Hour(1),
+            clearness=0.6,
+        )
+    for i in 1:10],
+    (latitude=15.0, file=&quot;interactive&quot;,),
+)
+
+options = LightOptions(turtle_sectors=16, all_in_turtle=true, radiation_timestep_minutes=5, pixel_size=0.003, toricity=true)
+series = run_light_series(scene, models, meteo, options)
+
+fig = Figure(resolution=(980, 700))
+ax = Axis3(fig[1, 1], title=&quot;Intercepted PAR flux over time (06:00)&quot;, azimuth=π/4, elevation = π/6, aspect=:data, perspectiveness= 0.4)
+p = lightplot!(ax, series; color=:Ri_PAR_f, colormap=:thermal)
+Colorbar(fig[1, 2], p.plots[1], label=&quot;Ri_PAR_f (W m^-2)&quot;)
+fig
+
+record(fig, &quot;light_series.mp4&quot;, 1:length(series), framerate = 1) do t
+    ax.title[] = &quot;&quot;&quot;Intercepted PAR flux over time ($(Time(&quot;06:00&quot;) + Hour(t-1)))&quot;&quot;&quot;
+    p[:timestep][] = t
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">&quot;light_series.mp4&quot;</code></pre><video autoplay loop muted playsinline controls src="./light_series.mp4" /><p>When <code>colorrange</code> is left automatic on a series plot, <code>lightplot(series)</code> uses one color scale for the whole series so the same value maps to the same color at every timestep.</p><p>The <code>toricity</code> parameter is activated here, this is why we see the shade of the coffee plant coming from all corners, because light that goes out of the scene on one side comes back in on the other side. This is done for simulating an infinite canopy, but it can be turned off with <code>toricity=false</code> in the config.</p><h2 id="What-To-Read-Next"><a class="docs-heading-anchor" href="#What-To-Read-Next">What To Read Next</a><a id="What-To-Read-Next-1"></a><a class="docs-heading-anchor-permalink" href="#What-To-Read-Next" title="Permalink"></a></h2><ul><li><a href="../tutorial_files/">File-Based Workflow</a> explains how the example directory is organised and how each file contributes to the simulation.</li><li><a href="../tutorial_interactive/">Interactive Workflow</a> shows how to build a scene directly in Julia and run light on it without <code>.ops</code> / <code>.opf</code> input files.</li><li><a href="../reference_config/">Configuration And Options Reference</a> lists the configuration keys that the current Julia package actually uses.</li></ul><h2 id="One-Important-Difference-From-The-Historical-Java-App"><a class="docs-heading-anchor" href="#One-Important-Difference-From-The-Historical-Java-App">One Important Difference From The Historical Java App</a><a id="One-Important-Difference-From-The-Historical-Java-App-1"></a><a class="docs-heading-anchor-permalink" href="#One-Important-Difference-From-The-Historical-Java-App" title="Permalink"></a></h2><p>The coffee example still contains several Java-era keys related to outputs, photosynthesis, and energy balance. <code>ArchimedLight.jl</code> keeps reading the light configuration and the input file paths, but the package documented here is currently the light-only core. For current behavior, prefer the reference pages on this site over older Java screenshots or YAML examples.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../tutorial_files/">File-Based Workflow »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 24 April 2026 10:47">Friday 24 April 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
