@@ -742,7 +742,7 @@ _meteo_metadata(meteo::PlantMeteo.TimeStepTable) = _meta_to_namedtuple(getfield(
 function _prepare_meteo_rows_for_series(meteo::MeteoTable, options::LightOptions)
     rows = _meteo_rows(meteo)
     isempty(rows) && return rows
-    _validate_meteo_sequence_local(rows)
+    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
     rows = _apply_meteo_range_local(rows, options)
     rows = _apply_meteo_active_filter_local(rows)
     rows
@@ -751,7 +751,7 @@ end
 function _prepare_meteo_rows_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
     rows = _meteo_rows(meteo)
     isempty(rows) && return rows
-    _validate_meteo_sequence_local(rows)
+    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
     rows = _apply_meteo_range_local(rows, options)
     rows = _apply_meteo_active_filter_local(rows)
     rows

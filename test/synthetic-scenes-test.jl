@@ -193,6 +193,41 @@ end
     @test isapprox(sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
 end
 
+@testitem "Synthetic case overlapping meteo steps option" tags = [:synthetic, :fast, :overlapping_meteo_steps] setup = [HelperModule] begin
+    using Dates
+
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+
+    rows = [
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12, 0), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12, 15), duration_seconds=1800.0, ri_par_f=100.0, ri_nir_f=60.0),
+    ]
+    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_overlap"))
+
+    strict_options = HelperModule._synthetic_options(cache_radiation=false)
+    @test_throws "invalid overlapping meteo steps at row 2" ArchimedLight.prepare_meteo(meteo, strict_options)
+    @test_throws "invalid overlapping meteo steps at row 2" ArchimedLight.run_light_series(scene, models, meteo, strict_options)
+
+    permissive_options = ArchimedLight.LightOptions(strict_options; allow_overlapping_meteo_steps=true)
+    selected = ArchimedLight.prepare_meteo(meteo, permissive_options)
+    series = ArchimedLight.run_light_series(scene, models, meteo, permissive_options)
+
+    @test length(selected.rows) == 2
+    @test length(series) == 2
+
+    config_path = tempname() * ".yml"
+    try
+        open(config_path, "w") do io
+            write(io, "scene: dummy.ops\nmodels:\n  - dummy.yml\nmeteo: dummy.csv\nallowOverlappingMeteoSteps: true\n")
+        end
+        parsed = ArchimedLight.read_options(config_path)
+        @test parsed.allow_overlapping_meteo_steps
+    finally
+        rm(config_path; force=true)
+    end
+end
+
 @testitem "Synthetic case cached_scattering_series_parity" tags = [:synthetic, :fast, :cached_scattering_series_parity] setup = [HelperModule] begin
     using Dates
     scene = HelperModule._synthetic_horizontal_scene([
