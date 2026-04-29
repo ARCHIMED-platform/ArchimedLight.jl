@@ -39,6 +39,11 @@ function _geometry_node_ids(scene::SceneGeometry)
     Set{Int}(keys(scene.nodes))
 end
 
+function _node_field(scene::SceneGeometry, step::LightStepResult, field::Symbol)
+    field == :area && return node_areas(scene)
+    return _budget_node_field(step, field)
+end
+
 function _budget_node_field(step::LightStepResult, field::Symbol)
     budget = step.budget
     field == :incident_par_initial_flux && return budget.incident_flux.initial.par
@@ -62,11 +67,12 @@ function _budget_node_field(step::LightStepResult, field::Symbol)
             error("`sky_fraction` was not stored in this LightStepResult. Re-run with `LightOptions(include_sky_fraction=true)` or request `sky_fraction: true` in `component_variables`/`opf_variables` in the config.")
         return step.sky_fraction
     end
-    error("Unknown LightBudget field selector: $field")
+    error("Unknown light field selector: $field")
 end
 
 function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
     haskey(names, field) && return names[field]
+    field == :area && return :area
     haskey(_DEFAULT_BUDGET_ATTRS, field) && return _DEFAULT_BUDGET_ATTRS[field]
     error("No default MTG attribute name for `$field`.")
 end
@@ -115,6 +121,7 @@ attached as one scalar MTG attribute per geometry node. Supported selectors are:
 - `:absorbed_par_energy` => `Ra_PAR_q`
 - `:absorbed_nir_energy` => `Ra_NIR_q`
 - `:sky_fraction` => `sky_fraction`
+- `:area` => `area`
 
 Selector naming follows the budget hierarchy:
 
@@ -124,6 +131,7 @@ Selector naming follows the budget hierarchy:
 - no `initial` means first-order plus scattering
 - `flux` means `W m^-2`, corresponding to historical `_f`
 - `energy` means `J` per component and per step, corresponding to historical `_q`
+- `area` means the prepared object surface area in `m^2`
 
 `names` is an optional dictionary that remaps those exported fields to custom MTG
 attribute names. For example:
@@ -150,7 +158,7 @@ selectors and overrides:
 attach_light_step!(
     scene,
     step;
-    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
     names=Dict(:absorbed_nir_flux => :Ra_SW_f),
 )
 ```
@@ -170,7 +178,7 @@ function attach_light_step!(
         attach_node_values!(
             scene,
             _budget_attr_name(field, names),
-            _budget_node_field(step, field);
+            _node_field(scene, step, field);
             fill_value=fill_value,
         )
     end
@@ -189,6 +197,7 @@ For example, with the default field, each geometry node gets
 
 `fields` accepts the same selectors as [`attach_light_step!`](@ref):
 
+- `:area` => `area`
 - `:incident_par_initial_flux` => `Ri_PAR_0_f`
 - `:incident_nir_initial_flux` => `Ri_NIR_0_f`
 - `:incident_par_flux` => `Ri_PAR_f`
@@ -207,6 +216,9 @@ For example, with the default field, each geometry node gets
 - `:absorbed_nir_energy` => `Ra_NIR_q`
 - `:sky_fraction` => `sky_fraction`
 
+For `:area`, series attachment stores the same area value repeated once per
+step so the result has the same vector shape as the light fields.
+
 Use `names` to override attached attribute names. This is useful for downstream
 packages that expect different names:
 
@@ -214,7 +226,7 @@ packages that expect different names:
 attach_light_series!(
     scene,
     steps;
-    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
     names=Dict(:absorbed_nir_flux => :Ra_SW_f),
 )
 ```
@@ -238,7 +250,7 @@ function attach_light_series!(
     for field in fields
         by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
         for step in steps
-            vals = _budget_node_field(step, field)
+            vals = _node_field(scene, step, field)
             for nid in node_ids
                 push!(by_node[nid], Float64(get(vals, nid, fill_value)))
             end

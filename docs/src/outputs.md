@@ -66,6 +66,7 @@ The default mappings are:
 
 | Field selector | Attached attribute |
 | --- | --- |
+| `:area` | `area` |
 | `:incident_par_initial_flux` | `Ri_PAR_0_f` |
 | `:incident_nir_initial_flux` | `Ri_NIR_0_f` |
 | `:incident_par_flux` | `Ri_PAR_f` |
@@ -86,6 +87,7 @@ The default mappings are:
 
 The meaning follows the historical ARCHIMED naming:
 
+- `area`: prepared object surface area in `m^2`
 - `Ri`: intercepted radiation
 - `Ra`: absorbed radiation
 - `_0_`: first-order only
@@ -100,7 +102,7 @@ PlantBiophysics can use `Ra_SW_f` as an alias for absorbed NIR:
 attach_light_step!(
     scene,
     step;
-    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
     names=Dict(:absorbed_nir_flux => :Ra_SW_f),
 )
 ```

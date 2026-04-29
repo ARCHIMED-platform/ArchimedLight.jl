@@ -118,6 +118,7 @@ field. The supported `fields` selectors are:
 
 | Selector | Default MTG attribute |
 | --- | --- |
+| `:area` | `area` |
 | `:incident_par_initial_flux` | `Ri_PAR_0_f` |
 | `:incident_nir_initial_flux` | `Ri_NIR_0_f` |
 | `:incident_par_flux` | `Ri_PAR_f` |
@@ -135,6 +136,10 @@ field. The supported `fields` selectors are:
 | `:absorbed_par_energy` | `Ra_PAR_q` |
 | `:absorbed_nir_energy` | `Ra_NIR_q` |
 | `:sky_fraction` | `sky_fraction` |
+
+For `:area`, `attach_light_step!` attaches one scalar surface area per node,
+while `attach_light_series!` repeats that area once per step so the attached
+attribute has the same vector shape as the light fields.
 
 Use `names=Dict(selector => attr)` to override default attribute names, for
 example `Dict(:absorbed_nir_flux => :Ra_SW_f)`.
