@@ -769,7 +769,8 @@ end
 
 Complete result of one light simulation step, including the sky state, turtle,
 directional fluxes, first-order interception, optional scattering, and the
-integrated [`LightBudget`](@ref). Results returned by `run_light_step` and
+integrated [`LightBudget`](@ref). When requested, the result can also store a
+per-node `sky_fraction` map. Results returned by `run_light_step` and
 `run_light_series` also carry the render geometry needed by `lightplot`.
 """
 struct LightStepResult
@@ -780,6 +781,7 @@ struct LightStepResult
     scattering::Union{Nothing,ScatteringResult}
     budget::LightBudget
     extra_band_irradiance::Dict{String,Float64}
+    sky_fraction::Union{Nothing,Dict{Int,Float64}}
     render_geometry::Union{Nothing,LightRenderGeometry}
 end
 
@@ -791,7 +793,18 @@ LightStepResult(
     scattering::Union{Nothing,ScatteringResult},
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing)
+
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+    sky_fraction::Union{Nothing,Dict{Int,Float64}},
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing)
 
 function _format_decimal(value::Real; digits::Int=3)
     x = round(Float64(value); digits=digits)

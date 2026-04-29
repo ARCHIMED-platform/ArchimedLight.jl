@@ -15,6 +15,7 @@ const _DEFAULT_BUDGET_ATTRS = Dict{Symbol,Symbol}(
     :absorbed_nir_initial_energy => :Ra_NIR_0_q,
     :absorbed_par_energy => :Ra_PAR_q,
     :absorbed_nir_energy => :Ra_NIR_q,
+    :sky_fraction => :sky_fraction,
 )
 
 function _attach_node_values!(
@@ -56,6 +57,11 @@ function _budget_node_field(step::LightStepResult, field::Symbol)
     field == :absorbed_nir_initial_energy && return budget.absorbed_energy.initial.nir
     field == :absorbed_par_energy && return budget.absorbed_energy.total.par
     field == :absorbed_nir_energy && return budget.absorbed_energy.total.nir
+    if field == :sky_fraction
+        step.sky_fraction === nothing &&
+            error("`sky_fraction` was not stored in this LightStepResult. Re-run `run_light_step` or `run_light_series` with `include_sky_fraction=true`.")
+        return step.sky_fraction
+    end
     error("Unknown LightBudget field selector: $field")
 end
 
@@ -107,6 +113,7 @@ attribute names such as `Ri_PAR_f` and `Ra_PAR_q`.
 - `:absorbed_nir_initial_energy` => `Ra_NIR_0_q`
 - `:absorbed_par_energy` => `Ra_PAR_q`
 - `:absorbed_nir_energy` => `Ra_NIR_q`
+- `:sky_fraction` => `sky_fraction`
 
 `names` is an optional dictionary that remaps those exported fields to custom MTG
 attribute names. For example:
@@ -125,6 +132,21 @@ attach_light_step!(
 
 With that override, the values are attached on `:my_par_flux` and
 `:my_par_energy` instead of the default ARCHIMED names.
+
+To expose the sky-view fraction or PlantBiophysics-specific names, you can mix
+selectors and overrides:
+
+```julia
+attach_light_step!(
+    scene,
+    step;
+    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+)
+```
+
+`sky_fraction` is only available when the step was produced with
+`include_sky_fraction=true`.
 """
 function attach_light_step!(
     scene::SceneGeometry,

@@ -52,10 +52,11 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 `ArchimedLight.jl` keeps the simulation results in the `LightStepResult` by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
 ```@example getting_started
+step_with_sky = run_light_step(scene, models, row, options; include_sky_fraction=true)
 attach_light_step!(
     scene,
-    step;
-    fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
+    step_with_sky;
+    fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy, :sky_fraction],
 )
 ```
 
@@ -73,6 +74,7 @@ The attached node attributes use the standard ARCHIMED names:
 - `:incident_par_flux` -> `Ri_PAR_f`
 - `:incident_par_energy` -> `Ri_PAR_q`
 - `:absorbed_par_energy` -> `Ra_PAR_q`
+- `:sky_fraction` -> `sky_fraction`
 
 
 # Plotting the results

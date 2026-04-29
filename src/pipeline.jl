@@ -328,6 +328,50 @@ function _build_sector_responses(scene::SceneGeometry, models::LightModels, turt
     return _build_sector_responses(prepared, scene, models, turtle, options)
 end
 
+function _sky_fraction_from_sector_responses(
+    scene::SceneGeometry,
+    responses::SectorResponsesCache,
+    turtle::TurtleGrid,
+)
+    sky_count = 0
+    visible_sum = zeros(Float64, length(responses.node_ids))
+    for (i, sector) in enumerate(turtle.sectors)
+        sector.source == :sun && continue
+        sky_count += 1
+        sector_area = responses.projected_area_per_sector[i].values
+        @inbounds for j in _active_indices(responses.projected_area_per_sector[i])
+            visible_sum[j] += sector_area[j]
+        end
+    end
+
+    out = Dict{Int,Float64}()
+    @inbounds for i in eachindex(responses.node_ids)
+        nid = responses.node_ids[i]
+        area = _scene_area(scene, nid, 0.0)
+        out[nid] = area <= 0.0 || sky_count == 0 ? 0.0 : visible_sum[i] / sky_count / area
+    end
+    return out
+end
+
+function _compute_sky_fraction(
+    scene::SceneGeometry,
+    models::LightModels,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    prepared::Union{Nothing,PreparedInterceptionData}=nothing,
+    responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
+)
+    responses =
+        if responses_cache !== nothing
+            responses_cache
+        elseif prepared !== nothing
+            _build_sector_responses(prepared, scene, models, turtle, options)
+        else
+            _build_sector_responses(scene, models, turtle, options)
+        end
+    return _sky_fraction_from_sector_responses(scene, responses, turtle)
+end
+
 function _combine_sector_responses(
     responses::SectorResponsesCache,
     fluxes::DirectionalFluxes,
@@ -1416,6 +1460,7 @@ function _run_light_step_cached(
     cache::LightSimulationCache,
     meteo_row;
     use_full_response::Bool=(cache.mode != :topology_fallback),
+    include_sky_fraction::Bool=false,
 )
     scene = cache.scene
     models = cache.models
@@ -1490,14 +1535,26 @@ function _run_light_step_cached(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+    sky_fraction =
+        include_sky_fraction ?
+        _compute_sky_fraction(
+            scene,
+            models,
+            turtle,
+            options;
+            prepared=prepared,
+            responses_cache=responses_cache,
+        ) : nothing
+    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, sky_fraction, cache.render_geometry)
 end
 
 """
-    run_light_step(scene, models, meteo_row, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::LightStepResult
+    run_light_step(scene, models, meteo_row, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing, include_sky_fraction=false)::LightStepResult
 
 Run a complete light computation for one meteo row:
 `compute_sky -> build_turtle -> compute_directional_fluxes -> compute_first_order -> compute_scattering -> integrate_light`.
+Set `include_sky_fraction=true` to store the per-node sky-view fraction needed
+by downstream MTG attachment or coupled energy-balance models.
 """
 function run_light_step(
     scene::SceneGeometry,
@@ -1507,6 +1564,7 @@ function run_light_step(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    include_sky_fraction::Bool=false,
 )
     cache = prepare_light_cache(
         scene,
@@ -1517,18 +1575,20 @@ function run_light_step(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return _run_light_step_cached(cache, meteo_row; use_full_response=false)
+    return _run_light_step_cached(cache, meteo_row; use_full_response=false, include_sky_fraction=include_sky_fraction)
 end
 
 function run_light_step(
     cache::LightSimulationCache,
     meteo_row,
+    ;
+    include_sky_fraction::Bool=false,
 )
-    return _run_light_step_cached(cache, meteo_row)
+    return _run_light_step_cached(cache, meteo_row; include_sky_fraction=include_sky_fraction)
 end
 
 """
-    run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
+    run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing, include_sky_fraction=false)::Vector{LightStepResult}
 
 Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
 response reuse when `LightOptions(cache_radiation=true)` is enabled.
@@ -1541,6 +1601,7 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    include_sky_fraction::Bool=false,
 )
     if _can_use_series_radiation_cache(_resolve_interception_backend(interception_backend)) && options.cache_radiation
         cache = prepare_light_cache(
@@ -1551,7 +1612,7 @@ function run_light_series(
             scattering_mode=scattering_mode,
             scattering_backend=scattering_backend,
         )
-        return run_light_series(cache, meteo)
+        return run_light_series(cache, meteo; include_sky_fraction=include_sky_fraction)
     end
 
     cache = prepare_light_cache(
@@ -1563,12 +1624,14 @@ function run_light_series(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return run_light_series(cache, meteo)
+    return run_light_series(cache, meteo; include_sky_fraction=include_sky_fraction)
 end
 
 function run_light_series(
     cache::LightSimulationCache,
     meteo::MeteoTable,
+    ;
+    include_sky_fraction::Bool=false,
 )
     rows_eff = _prepare_meteo_rows_for_series(meteo, cache.options)
     out = Vector{LightStepResult}(undef, length(rows_eff))
@@ -1579,7 +1642,7 @@ function run_light_series(
         _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
     end
     for i in eachindex(rows_eff)
-        out[i] = _run_light_step_cached(cache, rows_eff[i])
+        out[i] = _run_light_step_cached(cache, rows_eff[i]; include_sky_fraction=include_sky_fraction)
         _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
     end
     return out
@@ -1588,19 +1651,22 @@ end
 function run_light_series(
     cache::LightSimulationCache,
     meteo::PlantMeteo.TimeStepTable,
+    ;
+    include_sky_fraction::Bool=false,
 )
     meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-    return run_light_series(cache, meteo_local)
+    return run_light_series(cache, meteo_local; include_sky_fraction=include_sky_fraction)
 end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo,
+    meteo;
+    include_sky_fraction::Bool=false,
 )
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(cache, meteo)
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo)
-    return run_light_series(cache, _as_plantmeteo_table(meteo))
+    meteo isa MeteoTable && return run_light_series(cache, meteo; include_sky_fraction=include_sky_fraction)
+    meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo; include_sky_fraction=include_sky_fraction)
+    return run_light_series(cache, _as_plantmeteo_table(meteo); include_sky_fraction=include_sky_fraction)
 end
 
 function run_light_series(
@@ -1611,6 +1677,7 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    include_sky_fraction::Bool=false,
 )
     meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
     run_light_series(
@@ -1621,6 +1688,7 @@ function run_light_series(
         interception_backend=interception_backend,
         scattering_mode=scattering_mode,
         scattering_backend=scattering_backend,
+        include_sky_fraction=include_sky_fraction,
     )
 end
 
@@ -1632,9 +1700,10 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    include_sky_fraction::Bool=false,
 )
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
-    run_light_series(scene, models, _as_plantmeteo_table(meteo), options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
+    meteo isa MeteoTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend, include_sky_fraction=include_sky_fraction)
+    meteo isa PlantMeteo.TimeStepTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend, include_sky_fraction=include_sky_fraction)
+    run_light_series(scene, models, _as_plantmeteo_table(meteo), options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend, include_sky_fraction=include_sky_fraction)
 end

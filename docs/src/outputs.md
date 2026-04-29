@@ -13,7 +13,7 @@ This page documents those three layers and then explains the ARCHIMED-style CSV 
 The core output of `run_light_step` is:
 
 ```julia
-step = run_light_step(scene, models, row, options)
+step = run_light_step(scene, models, row, options; include_sky_fraction=true)
 budget = step.budget
 ```
 
@@ -43,6 +43,9 @@ budget.absorbed_energy.total.nir
 ```
 
 Each leaf of that structure is a dictionary keyed by node id.
+
+If you need canopy-view metadata for coupled models, `step.sky_fraction` stores
+the per-node visible-sky fraction when `include_sky_fraction=true`.
 
 ## 2. Attached Outputs: ARCHIMED Attribute Names
 
@@ -76,6 +79,7 @@ The default mappings are:
 | `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
 | `:absorbed_par_energy` | `Ra_PAR_q` |
 | `:absorbed_nir_energy` | `Ra_NIR_q` |
+| `:sky_fraction` | `sky_fraction` |
 
 The meaning follows the historical ARCHIMED naming:
 
@@ -85,6 +89,18 @@ The meaning follows the historical ARCHIMED naming:
 - no `_0_`: after scattering has been added
 - `_f`: irradiance-like quantity in `W m^-2`
 - `_q`: energy per component and per step in `J`
+
+You can also rename attached attributes for downstream packages. For example,
+PlantBiophysics can use `Ra_SW_f` as an alias for absorbed NIR:
+
+```julia
+attach_light_step!(
+    scene,
+    step;
+    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+)
+```
 
 ## 3. Disk Outputs: Exported Scenes
 
