@@ -464,13 +464,6 @@ function _node_type_name(node, default::String="")
     isempty(s) ? default : s
 end
 
-const _OPS_RELAXED_KWARGS = (
-    relaxed=true,
-    assume_scale_column=false,
-    opf_scale=1.0,
-    gwa_scale=0.01,
-)
-
 @inline function _is_scene_geometry_node(node)
     PlantGeom.has_geometry(node) || return false
     !haskey(node, :scene_dimensions)
@@ -564,14 +557,6 @@ function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds
     SceneGeometry(mtg, merged_mesh, face2node, nodes, String(source_path), scene_xy_bounds)
 end
 
-function _read_ops_relaxed(path::AbstractString)
-    PlantGeom.read_ops(path; _OPS_RELAXED_KWARGS...)
-end
-
-function _read_opf_relaxed(path::AbstractString)
-    PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
-end
-
 function _relabel_scene_node_ids!(root)
     MultiScaleTreeGraph.traverse!(root) do node
         setfield!(node, :id, _NEXT_SCENE_NODE_ID[])
@@ -625,7 +610,7 @@ end
 
 function _read_scene_object(path::AbstractString)
     ext = lowercase(splitext(path)[2])
-    ext == ".opf" && return _read_opf_relaxed(path)
+    ext == ".opf" && return PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
     ext == ".gwa" && return PlantGeom.read_gwa(path)
     error("add_plant! accepts `.opf` and `.gwa` object paths; use read_scene for `.ops` scenes.")
 end
@@ -671,7 +656,8 @@ end
     add_plant!(builder, plant; group, id, at=(0, 0, 0))
     add_plant!(builder, path; group, id, at=(0, 0, 0))
 
-Add an in-memory MTG or an `.opf`/`.gwa` object file to a scene builder.
+Add an in-memory MTG or an `.opf`/`.gwa` object file to a scene builder. Note that the object is deep-copied before being added to the builder's MTG, so subsequent modifications to the original object will not affect the scene. 
+The object is expected to be a plant, but this function does not enforce any semantics on the group or type.
 """
 function add_plant!(builder::LightSceneBuilder, plant; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0))
     _add_scene_object!(builder, plant; group=group, id=id, at=at)
@@ -761,9 +747,9 @@ the merged-mesh representation expected by the interception pipeline.
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
     mtg = if ext == ".ops"
-        _read_ops_relaxed(path)
+        PlantGeom.read_ops(path; relaxed=true, assume_scale_column=false, opf_scale=1.0, gwa_scale=0.01,)
     elseif ext == ".opf"
-        _read_opf_relaxed(path)
+        PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
     elseif ext == ".gwa"
         PlantGeom.read_gwa(path)
     else
