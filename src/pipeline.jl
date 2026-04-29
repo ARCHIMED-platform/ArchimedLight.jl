@@ -245,6 +245,7 @@ function _build_sector_responses(
                     options,
                     geometry.plotbox,
                     prepared.virtual_node_mask,
+                    prepared.node_transparency_by_index,
                     geometry,
                 ),
                 geometry,
@@ -448,6 +449,7 @@ function _stream_first_order_with_scattering_topology(
                 options,
                 geometry.plotbox,
                 prepared.virtual_node_mask,
+                prepared.node_transparency_by_index,
                 geometry,
             )
 
