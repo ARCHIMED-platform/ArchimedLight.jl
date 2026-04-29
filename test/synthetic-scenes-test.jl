@@ -68,6 +68,35 @@ end
     @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
 end
 
+@testitem "Synthetic case translucent stack follows Java visible area" tags = [:synthetic, :fast, :translucent_stack] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="leaf", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="leaf", type="plate", object_id=2),
+    ])
+    models = ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "leaf";
+            types=HelperModule.OrderedDict(
+                "plate" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.25,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+    options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01)
+    run = HelperModule._run_direct(scene, sky, options; models=models)
+
+    @test isapprox(get(run.first.projected_area_per_node, 1, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(run.first.projected_area_per_node, 2, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 1, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 2, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+end
+
 @testitem "Synthetic case run_light_step_matches_staged" tags = [:synthetic, :fast, :run_light_step_matches_staged] setup = [HelperModule] begin
     scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
     models = HelperModule._default_synthetic_models()
@@ -219,10 +248,11 @@ end
     config_path = tempname() * ".yml"
     try
         open(config_path, "w") do io
-            write(io, "scene: dummy.ops\nmodels:\n  - dummy.yml\nmeteo: dummy.csv\nallowOverlappingMeteoSteps: true\n")
+            write(io, "scene: dummy.ops\nmodels:\n  - dummy.yml\nmeteo: dummy.csv\nallowOverlappingMeteoSteps: true\ncomponent_variables:\n  sky_fraction: true\n")
         end
         parsed = ArchimedLight.read_options(config_path)
         @test parsed.allow_overlapping_meteo_steps
+        @test parsed.include_sky_fraction
     finally
         rm(config_path; force=true)
     end

@@ -298,33 +298,50 @@ Base.getindex(models::LightModels, key) = models.groups[key]
 
 Runtime controls for interception, scattering, and caching.
 
-`pixel_hit_stack_mode` selects how per-pixel hit stacks are stored during raster
-projection:
-- `"auto"`: current default optimized path
-- `"small"`: force inline small stacks with spillover allocation
-- `"vector"`: force the legacy `Vector` stack representation
+Fields:
 
-Important fields:
-
+- `all_in_turtle`: if `false`, keep the direct beam as a separate sun sector;
+  if `true`, redistribute it into the turtle sectors.
 - `turtle_sectors`: number of diffuse sky sectors. Common values are `16`, `46`,
   or denser grids for smoother angular resolution.
-- `all_in_turtle`: if `false`, the direct beam stays as a separate sun sector;
-  if `true`, it is redistributed into the turtle sectors.
 - `pixel_size`: raster pixel size in meters. Smaller values improve geometric
-  fidelity but increase runtime and memory use. Typical values are in the
-  millimeter-to-centimeter range depending on scene size.
-- `area_ratio`: enables the ARCHIMED projected-area correction. This is usually
-  the right setting for parity with the historical implementation.
-- `scattering`: turns multiple scattering on or off.
-- `scattering_max_iter` and `scattering_stop_ratio`: stopping controls for the
-  iterative scattering solver.
-- `scattering_coeff_par` and `scattering_coeff_nir`: fallback scattering
-  coefficients used when a model omits a waveband in its
-  [`OpticalProperties`](@ref).
+  fidelity but increase runtime and memory use.
+- `area_ratio`: enable the ARCHIMED projected-area correction used for parity
+  with the historical implementation.
+- `scattering`: enable multiple scattering after first-order interception.
+- `scattering_max_iter`: maximum number of scattering iterations.
+- `scattering_stop_ratio`: stop scattering when the current scattered energy is
+  below this fraction of the initial intercepted energy.
+- `scattering_coeff_par`: fallback PAR scattering coefficient when the model
+  has no PAR [`OpticalProperties`](@ref).
+- `scattering_coeff_nir`: fallback NIR scattering coefficient when the model
+  has no NIR [`OpticalProperties`](@ref).
+- `cache_radiation`: reuse directional responses across series steps when
+  possible.
+- `include_sky_fraction`: store the per-node `sky_fraction` map in each
+  [`LightStepResult`](@ref). Leave `false` unless downstream code needs it.
+  When options are read from a config file, this is enabled by requesting
+  `sky_fraction` in `component_variables` or `opf_variables`.
+- `cache_pixel_table`: cache raster pixel tables for repeated projections.
+- `pixel_hit_stack_mode`: storage mode for per-pixel hit stacks. Supported
+  values are `"auto"`, `"small"`, and `"vector"`.
+- `toricity`: enable horizontal periodic wrapping of the simulated plot.
 - `radiation_timestep_minutes`: internal radiative substep used when a meteo
-  row covers a coarser time interval.
+  row covers a coarser interval.
 - `allow_overlapping_meteo_steps`: keep overlapping meteo intervals instead of
   rejecting the series during meteo preparation.
+- `nir_interception`: include NIR in directional fluxes and first-order
+  interception.
+- `nir_scattering`: include NIR in the multiple-scattering stage. This has no
+  effect if `nir_interception=false`.
+- `java_logged_turtle_dirs`: use the Java-compatibility turtle direction path
+  used in parity/debug workflows.
+- `meteo_range`: optional historical range selector applied during meteo
+  preparation, for example `"2, 5"` or a datetime range.
+- `debug`: enable debug-only compatibility hooks.
+- `log_debug`: emit additional debug logging where implemented.
+- `debug_drop_leading_hit`: optional `(node_id, x, y)` hook used to remove a
+  leading raster hit at one pixel for parity debugging.
 
 Typical starting point for simple runs:
 
@@ -341,6 +358,7 @@ Base.@kwdef struct LightOptions
     scattering_coeff_par::Float64 = 0.15
     scattering_coeff_nir::Float64 = 0.30
     cache_radiation::Bool = false
+    include_sky_fraction::Bool = false
     cache_pixel_table::Bool = false
     pixel_hit_stack_mode::String = "auto"
     toricity::Bool = true
@@ -367,6 +385,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :scattering_coeff_par => old.scattering_coeff_par,
         :scattering_coeff_nir => old.scattering_coeff_nir,
         :cache_radiation => old.cache_radiation,
+        :include_sky_fraction => old.include_sky_fraction,
         :cache_pixel_table => old.cache_pixel_table,
         :pixel_hit_stack_mode => old.pixel_hit_stack_mode,
         :toricity => old.toricity,
@@ -769,7 +788,8 @@ end
 
 Complete result of one light simulation step, including the sky state, turtle,
 directional fluxes, first-order interception, optional scattering, and the
-integrated [`LightBudget`](@ref). Results returned by `run_light_step` and
+integrated [`LightBudget`](@ref). When requested, the result can also store a
+per-node `sky_fraction` map. Results returned by `run_light_step` and
 `run_light_series` also carry the render geometry needed by `lightplot`.
 """
 struct LightStepResult
@@ -780,6 +800,7 @@ struct LightStepResult
     scattering::Union{Nothing,ScatteringResult}
     budget::LightBudget
     extra_band_irradiance::Dict{String,Float64}
+    sky_fraction::Union{Nothing,Dict{Int,Float64}}
     render_geometry::Union{Nothing,LightRenderGeometry}
 end
 
@@ -791,7 +812,18 @@ LightStepResult(
     scattering::Union{Nothing,ScatteringResult},
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing)
+
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+    sky_fraction::Union{Nothing,Dict{Int,Float64}},
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing)
 
 function _format_decimal(value::Real; digits::Int=3)
     x = round(Float64(value); digits=digits)

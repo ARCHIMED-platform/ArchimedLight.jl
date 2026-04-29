@@ -33,6 +33,7 @@
         step.scattering,
         budget2,
         step.extra_band_irradiance,
+        step.sky_fraction,
         render_geometry,
     )
 

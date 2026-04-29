@@ -13,6 +13,7 @@ This page documents those three layers and then explains the ARCHIMED-style CSV 
 The core output of `run_light_step` is:
 
 ```julia
+options = LightOptions(options; include_sky_fraction=true)
 step = run_light_step(scene, models, row, options)
 budget = step.budget
 ```
@@ -44,6 +45,11 @@ budget.absorbed_energy.total.nir
 
 Each leaf of that structure is a dictionary keyed by node id.
 
+If you need canopy-view metadata for coupled models, `step.sky_fraction` stores
+the per-node visible-sky fraction when `options.include_sky_fraction=true`.
+When using a YAML config, `read_options` enables that option when
+`component_variables.sky_fraction` or `opf_variables.sky_fraction` is `true`.
+
 ## 2. Attached Outputs: ARCHIMED Attribute Names
 
 The convenience layer for visual inspection is `attach_light_step!`:
@@ -60,6 +66,7 @@ The default mappings are:
 
 | Field selector | Attached attribute |
 | --- | --- |
+| `:area` | `area` |
 | `:incident_par_initial_flux` | `Ri_PAR_0_f` |
 | `:incident_nir_initial_flux` | `Ri_NIR_0_f` |
 | `:incident_par_flux` | `Ri_PAR_f` |
@@ -76,15 +83,29 @@ The default mappings are:
 | `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
 | `:absorbed_par_energy` | `Ra_PAR_q` |
 | `:absorbed_nir_energy` | `Ra_NIR_q` |
+| `:sky_fraction` | `sky_fraction` |
 
 The meaning follows the historical ARCHIMED naming:
 
+- `area`: prepared object surface area in `m^2`
 - `Ri`: intercepted radiation
 - `Ra`: absorbed radiation
 - `_0_`: first-order only
 - no `_0_`: after scattering has been added
 - `_f`: irradiance-like quantity in `W m^-2`
 - `_q`: energy per component and per step in `J`
+
+You can also rename attached attributes for downstream packages. For example,
+PlantBiophysics can use `Ra_SW_f` as an alias for absorbed NIR:
+
+```julia
+attach_light_step!(
+    scene,
+    step;
+    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+)
+```
 
 ## 3. Disk Outputs: Exported Scenes
 

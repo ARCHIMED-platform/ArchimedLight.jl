@@ -228,7 +228,7 @@ first = compute_first_order(scene, models, turtle, fluxes, options)
 scat = compute_scattering(scene, models, turtle, first, options)
 budget = integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
 
-step = LightStepResult(sky, turtle, fluxes, first, scat, budget, Dict{String,Float64}())
+step = LightStepResult(sky, turtle, fluxes, first, scat, budget, Dict{String,Float64}(), nothing)
 ```
 
 This could be replaced with a simple call to `run_light_step` or `run_light_series` for a more compact syntax (with a meteo input), but the expanded version shows the main stages of the light pipeline.
