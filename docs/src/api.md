@@ -112,6 +112,33 @@ attach_light_step!(scene, step; fields=[:incident_par_flux], names=Dict(), fill_
 attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fill_value=NaN)
 ```
 
+`attach_light_step!` attaches scalar values for one step. `attach_light_series!`
+attaches `Vector{Float64}` values, ordered like `steps`, for each selected
+field. The supported `fields` selectors are:
+
+| Selector | Default MTG attribute |
+| --- | --- |
+| `:incident_par_initial_flux` | `Ri_PAR_0_f` |
+| `:incident_nir_initial_flux` | `Ri_NIR_0_f` |
+| `:incident_par_flux` | `Ri_PAR_f` |
+| `:incident_nir_flux` | `Ri_NIR_f` |
+| `:incident_par_initial_energy` | `Ri_PAR_0_q` |
+| `:incident_nir_initial_energy` | `Ri_NIR_0_q` |
+| `:incident_par_energy` | `Ri_PAR_q` |
+| `:incident_nir_energy` | `Ri_NIR_q` |
+| `:absorbed_par_initial_flux` | `Ra_PAR_0_f` |
+| `:absorbed_nir_initial_flux` | `Ra_NIR_0_f` |
+| `:absorbed_par_flux` | `Ra_PAR_f` |
+| `:absorbed_nir_flux` | `Ra_NIR_f` |
+| `:absorbed_par_initial_energy` | `Ra_PAR_0_q` |
+| `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
+| `:absorbed_par_energy` | `Ra_PAR_q` |
+| `:absorbed_nir_energy` | `Ra_NIR_q` |
+| `:sky_fraction` | `sky_fraction` |
+
+Use `names=Dict(selector => attr)` to override default attribute names, for
+example `Dict(:absorbed_nir_flux => :Ra_SW_f)`.
+
 ## Visualization Helpers
 
 These helpers expose direct mesh coloring and the Makie package extension:

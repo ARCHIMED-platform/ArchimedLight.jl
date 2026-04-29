@@ -95,7 +95,8 @@ end
 Attach one [`LightStepResult`](@ref) back onto the scene MTG using ARCHIMED-style
 attribute names such as `Ri_PAR_f` and `Ra_PAR_q`.
 
-`fields` selects which budget components to export. Supported selectors are:
+`fields` selects which budget components to export. Each selected field is
+attached as one scalar MTG attribute per geometry node. Supported selectors are:
 
 - `:incident_par_initial_flux` => `Ri_PAR_0_f`
 - `:incident_nir_initial_flux` => `Ri_NIR_0_f`
@@ -114,6 +115,15 @@ attribute names such as `Ri_PAR_f` and `Ra_PAR_q`.
 - `:absorbed_par_energy` => `Ra_PAR_q`
 - `:absorbed_nir_energy` => `Ra_NIR_q`
 - `:sky_fraction` => `sky_fraction`
+
+Selector naming follows the budget hierarchy:
+
+- `incident` means intercepted radiation, corresponding to historical `Ri`
+- `absorbed` means absorbed radiation, corresponding to historical `Ra`
+- `initial` means first-order only, corresponding to historical `_0_`
+- no `initial` means first-order plus scattering
+- `flux` means `W m^-2`, corresponding to historical `_f`
+- `energy` means `J` per component and per step, corresponding to historical `_q`
 
 `names` is an optional dictionary that remaps those exported fields to custom MTG
 attribute names. For example:
@@ -174,6 +184,48 @@ Attach a time series of [`LightStepResult`](@ref) values to the scene MTG.
 
 For each selected field, every geometry node receives a vector ordered like
 `steps`, which is convenient for downstream plotting or coupled simulations.
+For example, with the default field, each geometry node gets
+`node[:Ri_PAR_f]::Vector{Float64}` with one value per light step.
+
+`fields` accepts the same selectors as [`attach_light_step!`](@ref):
+
+- `:incident_par_initial_flux` => `Ri_PAR_0_f`
+- `:incident_nir_initial_flux` => `Ri_NIR_0_f`
+- `:incident_par_flux` => `Ri_PAR_f`
+- `:incident_nir_flux` => `Ri_NIR_f`
+- `:incident_par_initial_energy` => `Ri_PAR_0_q`
+- `:incident_nir_initial_energy` => `Ri_NIR_0_q`
+- `:incident_par_energy` => `Ri_PAR_q`
+- `:incident_nir_energy` => `Ri_NIR_q`
+- `:absorbed_par_initial_flux` => `Ra_PAR_0_f`
+- `:absorbed_nir_initial_flux` => `Ra_NIR_0_f`
+- `:absorbed_par_flux` => `Ra_PAR_f`
+- `:absorbed_nir_flux` => `Ra_NIR_f`
+- `:absorbed_par_initial_energy` => `Ra_PAR_0_q`
+- `:absorbed_nir_initial_energy` => `Ra_NIR_0_q`
+- `:absorbed_par_energy` => `Ra_PAR_q`
+- `:absorbed_nir_energy` => `Ra_NIR_q`
+- `:sky_fraction` => `sky_fraction`
+
+Use `names` to override attached attribute names. This is useful for downstream
+packages that expect different names:
+
+```julia
+attach_light_series!(
+    scene,
+    steps;
+    fields=[:absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+)
+```
+
+`fill_value` is used for geometry nodes that are missing from a given step
+dictionary. The default is `NaN`, so missing values remain visible in the
+attached vectors.
+
+`sky_fraction` is only available when each step was produced with
+`LightOptions(include_sky_fraction=true)`, or from a config that requests
+`sky_fraction: true` in `component_variables` or `opf_variables`.
 """
 function attach_light_series!(
     scene::SceneGeometry,
