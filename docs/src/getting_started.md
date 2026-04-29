@@ -52,7 +52,8 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 `ArchimedLight.jl` keeps the simulation results in the `LightStepResult` by default. If you want an inspectable scene, attach selected outputs back onto the MTG:
 
 ```@example getting_started
-step_with_sky = run_light_step(scene, models, row, options; include_sky_fraction=true)
+sky_options = LightOptions(options; include_sky_fraction=true)
+step_with_sky = run_light_step(scene, models, row, sky_options)
 attach_light_step!(
     scene,
     step_with_sky;

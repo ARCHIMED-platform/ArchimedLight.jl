@@ -248,10 +248,11 @@ end
     config_path = tempname() * ".yml"
     try
         open(config_path, "w") do io
-            write(io, "scene: dummy.ops\nmodels:\n  - dummy.yml\nmeteo: dummy.csv\nallowOverlappingMeteoSteps: true\n")
+            write(io, "scene: dummy.ops\nmodels:\n  - dummy.yml\nmeteo: dummy.csv\nallowOverlappingMeteoSteps: true\ncomponent_variables:\n  sky_fraction: true\n")
         end
         parsed = ArchimedLight.read_options(config_path)
         @test parsed.allow_overlapping_meteo_steps
+        @test parsed.include_sky_fraction
     finally
         rm(config_path; force=true)
     end

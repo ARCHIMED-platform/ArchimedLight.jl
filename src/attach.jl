@@ -59,7 +59,7 @@ function _budget_node_field(step::LightStepResult, field::Symbol)
     field == :absorbed_nir_energy && return budget.absorbed_energy.total.nir
     if field == :sky_fraction
         step.sky_fraction === nothing &&
-            error("`sky_fraction` was not stored in this LightStepResult. Re-run `run_light_step` or `run_light_series` with `include_sky_fraction=true`.")
+            error("`sky_fraction` was not stored in this LightStepResult. Re-run with `LightOptions(include_sky_fraction=true)` or request `sky_fraction: true` in `component_variables`/`opf_variables` in the config.")
         return step.sky_fraction
     end
     error("Unknown LightBudget field selector: $field")
@@ -146,7 +146,8 @@ attach_light_step!(
 ```
 
 `sky_fraction` is only available when the step was produced with
-`include_sky_fraction=true`.
+`LightOptions(include_sky_fraction=true)`, or from a config that requests
+`sky_fraction: true` in `component_variables` or `opf_variables`.
 """
 function attach_light_step!(
     scene::SceneGeometry,

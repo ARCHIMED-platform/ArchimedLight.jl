@@ -13,7 +13,8 @@ This page documents those three layers and then explains the ARCHIMED-style CSV 
 The core output of `run_light_step` is:
 
 ```julia
-step = run_light_step(scene, models, row, options; include_sky_fraction=true)
+options = LightOptions(options; include_sky_fraction=true)
+step = run_light_step(scene, models, row, options)
 budget = step.budget
 ```
 
@@ -45,7 +46,9 @@ budget.absorbed_energy.total.nir
 Each leaf of that structure is a dictionary keyed by node id.
 
 If you need canopy-view metadata for coupled models, `step.sky_fraction` stores
-the per-node visible-sky fraction when `include_sky_fraction=true`.
+the per-node visible-sky fraction when `options.include_sky_fraction=true`.
+When using a YAML config, `read_options` enables that option when
+`component_variables.sky_fraction` or `opf_variables.sky_fraction` is `true`.
 
 ## 2. Attached Outputs: ARCHIMED Attribute Names
 

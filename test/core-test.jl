@@ -51,13 +51,14 @@ end
     include(joinpath(@__DIR__, "support.jl"))
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
-    meteo = ArchimedLight.prepare_meteo(fixture.meteo, fixture.options)
+    options = ArchimedLight.LightOptions(fixture.options; include_sky_fraction=true)
+    @test options.include_sky_fraction
+    meteo = ArchimedLight.prepare_meteo(fixture.meteo, options)
     series = ArchimedLight.run_light_series(
         fixture.scene,
         fixture.models,
         meteo,
-        fixture.options;
-        include_sky_fraction=true,
+        options,
     )
 
     @test length(series) == length(meteo.rows)
