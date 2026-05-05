@@ -1686,6 +1686,71 @@ function _run_light_step_cached(
     return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
 end
 
+function _run_light_sky_cached(
+    cache::LightSimulationCache,
+    sky::SkyState;
+    step_duration_seconds::Real,
+    use_full_response::Bool=(cache.mode != :topology_fallback),
+)
+    scene = cache.scene
+    models = cache.models
+    options = cache.options
+    ib = cache.resolved_interception_backend
+    nir_interception = _nir_interception_enabled_local(options)
+    nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
+    nir_interception || (sky = _disable_nir_sky_local(sky))
+    turtle = build_turtle(options, sky)
+    fluxes = compute_directional_fluxes(sky, turtle, options)
+
+    prepared = cache.prepared
+    responses_cache = nothing
+    scattering_topology = nothing
+    first = nothing
+    scat = nothing
+    extra_irr = Dict{String,Float64}()
+    extra_0_q = Dict{String,Dict{Int,Float64}}()
+    extra_q = Dict{String,Dict{Int,Float64}}()
+    if use_full_response && cache.mode != :topology_fallback
+        entry = _get_turtle_cache_entry!(cache, turtle)
+        first = _combine_sector_responses(entry.responses_cache, fluxes)
+        scat = _assemble_cached_scattering(cache, entry, fluxes, nir_scattering)
+    else
+        if ib isa RasterCPUBackend && options.scattering
+            prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
+            first, scattering_topology =
+                _stream_first_order_with_scattering_topology(prepared, scene, models, turtle, fluxes, options)
+        else
+            first = compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
+        end
+        scat = _compute_scattering_with_flags(
+            scene,
+            models,
+            turtle,
+            first,
+            options;
+            mode=cache.scattering_mode,
+            backend=cache.scattering_backend,
+            nir_scattering=nir_scattering,
+            responses_cache=responses_cache,
+            scattering_topology=scattering_topology,
+        )
+    end
+    budget = integrate_light(
+        scene,
+        models,
+        first,
+        scat,
+        options;
+        step_duration_seconds=Float64(step_duration_seconds),
+        extra_initial_energy_per_band=extra_0_q,
+        extra_energy_per_band=extra_q,
+        component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
+        absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
+        absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
+    )
+    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+end
+
 function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
     sim.options.cache_radiation && cache.mode != :topology_fallback
 end
@@ -1737,6 +1802,25 @@ function run_light(sim::LightSimulation, meteo_or_row)
     return _run_light_step_cached(cache, meteo_or_row; use_full_response=_use_full_response_for_sim(sim, cache))
 end
 
+"""
+    run_light(sim, sky::SkyState; step_duration_seconds)
+
+Run one light step from an already computed sky state. The step duration is
+required because there is no meteo row from which to infer it.
+"""
+function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=nothing)
+    if step_duration_seconds === nothing
+        error("run_light(sim, sky::SkyState) requires `step_duration_seconds`, for example `run_light(sim, sky; step_duration_seconds=1800.0)`.")
+    end
+    cache = _ensure_light_cache!(sim)
+    return _run_light_sky_cached(
+        cache,
+        sky;
+        step_duration_seconds=step_duration_seconds,
+        use_full_response=_use_full_response_for_sim(sim, cache),
+    )
+end
+
 function run_light(
     scene::SceneGeometry,
     models,
@@ -1746,6 +1830,18 @@ function run_light(
 )
     sim = LightSimulation(scene, models; options=options, kwargs...)
     return run_light(sim, meteo_or_row)
+end
+
+function run_light(
+    scene::SceneGeometry,
+    models,
+    sky::SkyState;
+    options::LightOptions=LightOptions(),
+    step_duration_seconds=nothing,
+    kwargs...,
+)
+    sim = LightSimulation(scene, models; options=options, kwargs...)
+    return run_light(sim, sky; step_duration_seconds=step_duration_seconds)
 end
 
 """

@@ -76,7 +76,7 @@ The direct in-memory equivalent inside a [`MeteoTable`](@ref) row is:
 If you bypass the meteo layer entirely and build a [`SkyState`](@ref)
 directly, then the interval is no longer carried by the forcing object itself.
 You instead provide the step duration explicitly later on, for example in
-`integrate_light(...; step_duration_seconds=1800.0)`.
+`run_light(sim, sky; step_duration_seconds=1800.0)`.
 
 ## 2. Site Metadata
 
@@ -379,9 +379,8 @@ sky = SkyState(
     0.05,
 )
 
-turtle = ArchimedLight.build_turtle(options, sky)
-fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
-first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
 This is especially useful for:

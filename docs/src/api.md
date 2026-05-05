@@ -144,10 +144,11 @@ ArchimedLight.compute_scattering(scene, models, turtle, first, options)
 ArchimedLight.integrate_light(scene, models, first, scattering, options; meteo_row=row)
 ```
 
-For interactive synthetic scenes, `compute_directional_fluxes` also accepts a prebuilt sky state:
+For interactive synthetic scenes, `run_light` also accepts a prebuilt sky state:
 
 ```julia
-ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
 The old low-level cache functions are still available for advanced work:

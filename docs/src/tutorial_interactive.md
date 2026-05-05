@@ -219,21 +219,16 @@ options = LightOptions(
 )
 ```
 
-Finally, we run the light interception stages explicitly:
+Finally, we create a `LightSimulation` and run one light step:
 
 ```@example interactive_workflow
-turtle = ArchimedLight.build_turtle(options, sky)
-fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
-first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
-scat = ArchimedLight.compute_scattering(scene, models, turtle, first, options)
-budget = ArchimedLight.integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
-
-step = LightStepResult(sky, turtle, fluxes, first, scat, budget, Dict{String,Float64}())
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
-For ordinary meteo-driven simulations, prefer creating a `LightSimulation` and
-calling `run_light`. The expanded version above is useful when you want to show
-or customize the main stages of the light pipeline.
+The same `LightSimulation` can also be reused with meteo rows or meteo tables.
+Use the staged pipeline only when you need to inspect or customize internal
+solver stages.
 
 To visualize the spatial distribution of light, we need to attach the results back to the MTG with `attach_light_step!`:
 

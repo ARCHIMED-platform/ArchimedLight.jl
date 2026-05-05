@@ -96,6 +96,25 @@ end
     @test cached.cache === nothing
 end
 
+@testitem "Beginner API run_light accepts SkyState" tags = [:beginner_api, :fast] begin
+    using ArchimedLight
+
+    config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
+    options, scene, _, models = ArchimedLight.read_config(config)
+    sky = SkyState(135.0, 35.0, 200.0, 180.0, 0.5, 0.5)
+
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+    first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+    scat = ArchimedLight.compute_scattering(scene, models, turtle, first, options)
+    old_budget = ArchimedLight.integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
+
+    sim = LightSimulation(scene, models; options=options)
+    step = run_light(sim, sky; step_duration_seconds=1800.0)
+    @test step.budget.incident_energy.total.par == old_budget.incident_energy.total.par
+    @test_throws ErrorException run_light(sim, sky)
+end
+
 @testitem "Beginner API meteo validation" tags = [:beginner_api, :fast] begin
     using ArchimedLight
     using Dates
