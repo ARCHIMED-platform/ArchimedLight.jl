@@ -26,9 +26,14 @@ solver must be able to answer these questions:
 For new interactive workflows, start with `light_scene`:
 
 ```julia
+using FileIO, MeshIO
+
+sensor_mesh = load("sensor.obj")
+
 scene = light_scene(domain=(0.0, 0.0, 2.0, 2.0)) do s
-    add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0))
-    add_plant!(s, plant_mtg; group="banana", id=2, at=(1.0, 0.0, 0.0))
+    add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0), rotate=(z=15.0,), deg=true)
+    add_plant!(s, plant_mtg; group="banana", id=2, at=(1.0, 0.0, 0.0), scale=0.8)
+    add_object!(s, sensor_mesh; group="sensor", type="panel", id=10, at=(0.5, 0.0, 1.2), scale=0.05)
     add_ground!(s; group="soil", type="ground", nx=20, ny=20)
 end
 ```
@@ -36,10 +41,39 @@ end
 This creates a prepared `SceneGeometry`. The important user-facing concepts are:
 
 - `domain`: the XY plot footprint used by projection and toricity
-- `add_plant!`: imports or places one plant/object, and assigns its functional group and object id
+- `add_plant!`: imports or places one plant, and assigns its functional group and object id
+- `add_object!`: imports or places a non-plant MTG, `GeometryBasics` mesh, `.opf`, or `.gwa` object
 - `group`: the high-level model key, such as `"coffee"` or `"soil"`
 - `type`: the component type, usually read from the OPF/GWA/MTG node symbol or `:type` attribute
 - `id`: the plant or object id used for grouping outputs
+
+Both `add_plant!` and `add_object!` accept placement keywords:
+
+```julia
+add_plant!(s, plant_mtg; group="coffee", id=1, at=(1.0, 0.0, 0.0), scale=0.8)
+add_object!(s, mesh; group="sensor", type="panel", id=10, rotate=(z=90.0,), deg=true)
+```
+
+Use `at` for translation, `scale` for uniform or axis-wise scaling, and
+`rotate` for local rotations. Tuple rotations use fixed X, then Y, then Z order.
+Named-tuple rotations preserve the field order:
+
+```julia
+add_object!(s, mesh; group="sensor", type="panel", id=10, rotate=(x=10, y=20, z=30), deg=true)
+add_object!(s, mesh; group="sensor", type="panel", id=11, rotate=(y=20, z=30, x=10), deg=true)
+```
+
+For OPS-compatible placement, use scalar `scale` with `rotation`,
+`inclination_azimut`, and `inclination_angle`.
+
+For mesh files, let MeshIO/FileIO do the format-specific IO and pass the loaded
+mesh to `add_object!`:
+
+```julia
+using FileIO, MeshIO
+sensor_mesh = load("sensor.obj")
+add_object!(s, sensor_mesh; group="sensor", type="panel", id=10)
+```
 
 If you already have a complete MTG, you can still use `prepare_scene` directly.
 

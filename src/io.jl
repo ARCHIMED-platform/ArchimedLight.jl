@@ -608,11 +608,36 @@ function _as_tuple3(x, name::AbstractString)
     ntuple(i -> Float64(x[i]), 3)
 end
 
-function _read_scene_object(path::AbstractString)
+function _rotation_is_zero(rotate)
+    if rotate isa NamedTuple
+        return all(axis -> Float64(getproperty(rotate, axis)) == 0.0, propertynames(rotate))
+    end
+    x, y, z = _as_tuple3(rotate, "rotate")
+    return x == 0.0 && y == 0.0 && z == 0.0
+end
+
+function _mesh_object_mtg(mesh; type::AbstractString, name::AbstractString="object")
+    root = MultiScaleTreeGraph.Node(
+        MultiScaleTreeGraph.MutableNodeMTG(:/, :Object, 1, 1),
+        Dict{Symbol,Any}(),
+    )
+    MultiScaleTreeGraph.Node(
+        2,
+        root,
+        MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), 2, 2),
+        Dict{Symbol,Any}(
+            :geometry => PlantGeom.Geometry(ref_mesh=PlantGeom.RefMesh(String(name), mesh)),
+            :type => String(type),
+        ),
+    )
+    return root
+end
+
+function _read_scene_object(path::AbstractString; type::AbstractString="object")
     ext = lowercase(splitext(path)[2])
     ext == ".opf" && return PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
     ext == ".gwa" && return PlantGeom.read_gwa(path)
-    error("add_plant! accepts `.opf` and `.gwa` object paths; use read_scene for `.ops` scenes.")
+    error("add_object! accepts `.opf` and `.gwa` paths directly. For mesh files such as `.obj` or `.ply`, load them with MeshIO/FileIO first, then pass the mesh to add_object!. Use read_scene for `.ops` scenes.")
 end
 
 function _annotate_scene_object!(mtg; group::AbstractString, id::Integer, file_path::AbstractString="")
@@ -628,43 +653,179 @@ function _annotate_scene_object!(mtg; group::AbstractString, id::Integer, file_p
     return mtg
 end
 
-function _translate_scene_object!(mtg, at)
-    x, y, z = _as_tuple3(at, "at")
-    (x == 0.0 && y == 0.0 && z == 0.0) && return mtg
-    translation = PlantGeom.Translation(x, y, z)
+function _transform_scene_object!(mtg, transformation)
     MultiScaleTreeGraph.traverse!(mtg, filter_fun=PlantGeom.has_geometry) do node
-        PlantGeom.transform_mesh!(node, translation)
+        PlantGeom.transform_mesh!(node, transformation)
         return true
     end
     return mtg
 end
 
-function _add_scene_object!(builder::LightSceneBuilder, obj; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0), file_path::AbstractString="")
-    plant = deepcopy(obj)
-    _annotate_scene_object!(plant; group=group, id=id, file_path=file_path)
-    _translate_scene_object!(plant, at)
+function _placement_transform(;
+    at=(0.0, 0.0, 0.0),
+    scale=1.0,
+    rotate=(0.0, 0.0, 0.0),
+    deg::Bool=false,
+    rotation=nothing,
+    inclination_azimut=0.0,
+    inclination_angle=0.0,
+    transform=nothing,
+)
+    if rotation !== nothing || inclination_azimut != 0.0 || inclination_angle != 0.0
+        _rotation_is_zero(rotate) || error("Use either `rotate=` or OPS-style `rotation=`/`inclination_*=` placement, not both.")
+        scale isa Real || error("OPS-style placement with `rotation=`/`inclination_*=` requires scalar `scale`.")
+        ops = PlantGeom.scene_object_transformation(
+            ;
+            at=_as_tuple3(at, "at"),
+            scale=Float64(scale),
+            rotation=rotation === nothing ? 0.0 : (deg ? deg2rad(Float64(rotation)) : Float64(rotation)),
+            inclination_azimut=deg ? deg2rad(Float64(inclination_azimut)) : Float64(inclination_azimut),
+            inclination_angle=deg ? deg2rad(Float64(inclination_angle)) : Float64(inclination_angle),
+        )
+        return transform === nothing ? ops : ops ∘ transform
+    end
+    pose = PlantGeom.pose(; scale=scale, rotate=rotate, at=at, deg=deg)
+    return transform === nothing ? pose : pose ∘ transform
+end
+
+function _add_scene_object!(
+    builder::LightSceneBuilder,
+    obj;
+    group::AbstractString,
+    id::Integer,
+    type::AbstractString="object",
+    at=(0.0, 0.0, 0.0),
+    scale=1.0,
+    rotate=(0.0, 0.0, 0.0),
+    deg::Bool=false,
+    rotation=nothing,
+    inclination_azimut=0.0,
+    inclination_angle=0.0,
+    transform=nothing,
+    file_path::AbstractString="",
+)
+    object = obj isa GeometryBasics.AbstractMesh ? _mesh_object_mtg(obj; type=type) : deepcopy(obj)
+    _annotate_scene_object!(object; group=group, id=id, file_path=file_path)
+    _transform_scene_object!(
+        object,
+        _placement_transform(
+            ;
+            at=at,
+            scale=scale,
+            rotate=rotate,
+            deg=deg,
+            rotation=rotation,
+            inclination_azimut=inclination_azimut,
+            inclination_angle=inclination_angle,
+            transform=transform,
+        ),
+    )
     try
-        MultiScaleTreeGraph.addchild!(builder.mtg, plant)
+        MultiScaleTreeGraph.addchild!(builder.mtg, object)
     catch err
-        msg = "Could not add plant object to the scene builder. Use MTGs read with PlantGeom defaults (`MutableNodeMTG`, Dict attributes) or pass an `.opf`/`.gwa` path. Original error: $(sprint(showerror, err))"
+        msg = "Could not add object to the scene builder. Use MTGs read with PlantGeom defaults (`MutableNodeMTG`, Dict attributes), pass a GeometryBasics mesh, or pass an `.opf`/`.gwa` path. For mesh files such as `.obj` or `.ply`, load them with MeshIO/FileIO first. Original error: $(sprint(showerror, err))"
         throw(ArgumentError(msg))
     end
     return builder
 end
 
 """
-    add_plant!(builder, plant; group, id, at=(0, 0, 0))
-    add_plant!(builder, path; group, id, at=(0, 0, 0))
+    add_object!(builder, object; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0), deg=false)
+    add_object!(builder, path; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0), deg=false)
 
-Add an in-memory MTG or an `.opf`/`.gwa` object file to a scene builder. Note that the object is deep-copied before being added to the builder's MTG, so subsequent modifications to the original object will not affect the scene. 
-The object is expected to be a plant, but this function does not enforce any semantics on the group or type.
+Add an MTG, a `GeometryBasics` mesh, or an `.opf`/`.gwa` object file to a scene
+builder. For mesh file formats such as `.obj` or `.ply`, load the mesh with
+MeshIO/FileIO first and pass the resulting mesh to `add_object!`.
+
+Placement is applied to a deep copy of the object, so later modifications to the
+    original object do not affect the scene. Use `at` for translation,
+`scale` for uniform or axis-wise scaling, and `rotate` for local axis rotations.
+Tuple rotation uses fixed `x, y, z` order; named-tuple rotation preserves field
+order, so `rotate=(y=30, z=10, x=5)` rotates around Y, then Z, then X. Pass
+`deg=true` when rotation values are in degrees.
+
+OPS-style placement is also accepted with scalar `scale`, `rotation`,
+`inclination_azimut`, and `inclination_angle`.
 """
-function add_plant!(builder::LightSceneBuilder, plant; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0))
-    _add_scene_object!(builder, plant; group=group, id=id, at=at)
+function add_object!(
+    builder::LightSceneBuilder,
+    object;
+    group::AbstractString,
+    id::Integer,
+    type::AbstractString="object",
+    at=(0.0, 0.0, 0.0),
+    scale=1.0,
+    rotate=(0.0, 0.0, 0.0),
+    deg::Bool=false,
+    rotation=nothing,
+    inclination_azimut=0.0,
+    inclination_angle=0.0,
+    transform=nothing,
+)
+    _add_scene_object!(
+        builder,
+        object;
+        group=group,
+        id=id,
+        type=type,
+        at=at,
+        scale=scale,
+        rotate=rotate,
+        deg=deg,
+        rotation=rotation,
+        inclination_azimut=inclination_azimut,
+        inclination_angle=inclination_angle,
+        transform=transform,
+    )
 end
 
-function add_plant!(builder::LightSceneBuilder, path::AbstractString; group::AbstractString, id::Integer, at=(0.0, 0.0, 0.0))
-    _add_scene_object!(builder, _read_scene_object(path); group=group, id=id, at=at, file_path=path)
+function add_object!(
+    builder::LightSceneBuilder,
+    path::AbstractString;
+    group::AbstractString,
+    id::Integer,
+    type::AbstractString="object",
+    at=(0.0, 0.0, 0.0),
+    scale=1.0,
+    rotate=(0.0, 0.0, 0.0),
+    deg::Bool=false,
+    rotation=nothing,
+    inclination_azimut=0.0,
+    inclination_angle=0.0,
+    transform=nothing,
+)
+    _add_scene_object!(
+        builder,
+        _read_scene_object(path; type=type);
+        group=group,
+        id=id,
+        type=type,
+        at=at,
+        scale=scale,
+        rotate=rotate,
+        deg=deg,
+        rotation=rotation,
+        inclination_azimut=inclination_azimut,
+        inclination_angle=inclination_angle,
+        transform=transform,
+        file_path=path,
+    )
+end
+
+"""
+    add_plant!(builder, plant; group, id, kwargs...)
+    add_plant!(builder, path; group, id, kwargs...)
+
+Plant-named convenience wrapper around [`add_object!`](@ref). Use this when the
+object being placed is botanically a plant; use `add_object!` for sensors,
+lamps, supports, meshes, and other non-plant geometry.
+"""
+function add_plant!(builder::LightSceneBuilder, plant; group::AbstractString, id::Integer, kwargs...)
+    add_object!(builder, plant; group=group, id=id, kwargs...)
+end
+
+function add_plant!(builder::LightSceneBuilder, path::AbstractString; group::AbstractString, id::Integer, kwargs...)
+    add_object!(builder, path; group=group, id=id, kwargs...)
 end
 
 """

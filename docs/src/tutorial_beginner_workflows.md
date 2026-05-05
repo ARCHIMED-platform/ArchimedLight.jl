@@ -40,11 +40,22 @@ Use this when the plant is created in Julia or imported object by object.
 
 ```julia
 using ArchimedLight
+using FileIO, MeshIO
+
+sensor_mesh = load("sensor.obj")
 
 scene = light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
-    add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0))
+    add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0), scale=0.9)
+    add_object!(s, sensor_mesh; group="sensor", type="panel", id=10, at=(0.5, 0.0, 1.2), rotate=(z=90.0,), deg=true)
     add_ground!(s; group="soil", type="ground", nx=20, ny=20)
 end
+```
+
+When the object starts as a mesh file, read it with MeshIO/FileIO before adding
+it to the scene:
+
+```julia
+mesh = load("other-object.ply")
 ```
 
 The `domain` is the XY plot footprint used by the raster projection. It is not

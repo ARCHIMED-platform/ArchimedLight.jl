@@ -27,6 +27,50 @@
     @test emitter_models["lamp"].types["bulb"].light_emitter.radiance == 10.0
 end
 
+@testitem "Beginner API scene builder object placement" tags = [:beginner_api, :fast] begin
+    using ArchimedLight
+    using GeometryBasics
+
+    mesh = GeometryBasics.Mesh(
+        GeometryBasics.Point3f[
+            GeometryBasics.Point3f(0, 0, 0),
+            GeometryBasics.Point3f(1, 0, 0),
+            GeometryBasics.Point3f(0, 1, 0),
+        ],
+        GeometryBasics.TriangleFace{Int}[GeometryBasics.TriangleFace{Int}(1, 2, 3)],
+    )
+
+    scene = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+        add_object!(s, mesh; group="sensor", type="panel", id=4, at=(1.0, 2.0, 3.0), scale=2.0)
+    end
+    nid = only(scene_node_ids(scene))
+    @test scene.nodes[nid].group == "sensor"
+    @test scene.nodes[nid].type == "panel"
+    @test scene.nodes[nid].object_id == 4
+    @test node_areas(scene)[nid] ≈ 2.0
+    @test node_barycenters(scene)[nid] == (5 / 3, 8 / 3, 3.0)
+
+    rotated = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+        add_object!(s, mesh; group="sensor", type="panel", id=5, rotate=(z=90.0,), deg=true)
+    end
+    rid = only(scene_node_ids(rotated))
+    @test collect(node_barycenters(rotated)[rid]) ≈ [-1 / 3, 1 / 3, 0.0]
+
+    xy_order = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+        add_object!(s, mesh; group="sensor", type="panel", id=6, rotate=(x=90.0, y=90.0), deg=true)
+    end
+    yx_order = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+        add_object!(s, mesh; group="sensor", type="panel", id=7, rotate=(y=90.0, x=90.0), deg=true)
+    end
+    xy_id = only(scene_node_ids(xy_order))
+    yx_id = only(scene_node_ids(yx_order))
+    @test !(collect(node_barycenters(xy_order)[xy_id]) ≈ collect(node_barycenters(yx_order)[yx_id]))
+
+    @test_throws ErrorException light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+        add_object!(s, "panel.obj"; group="sensor", type="panel", id=6)
+    end
+end
+
 @testitem "Beginner API run_light parity and cache lifecycle" tags = [:beginner_api, :fast] begin
     using ArchimedLight
 

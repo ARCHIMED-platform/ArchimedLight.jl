@@ -44,6 +44,7 @@ export prepare_scene
 export write_scene
 export add_ground!
 export light_scene
+export add_object!
 export add_plant!
 export read_models
 export prepare_models
