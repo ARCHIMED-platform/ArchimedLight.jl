@@ -51,6 +51,30 @@ function _as_string(x, default::String)
     return String(x)
 end
 
+function _config_get(raw::AbstractDict, keys::Tuple{Vararg{String}})
+    for key in keys
+        haskey(raw, key) && return raw[key]
+    end
+    lower_keys = map(lowercase, keys)
+    for (k, v) in raw
+        kk = lowercase(string(k))
+        kk in lower_keys && return v
+    end
+    return nothing
+end
+
+function _config_output_variable_enabled(raw::AbstractDict, variable::AbstractString)
+    wanted = lowercase(variable)
+    for block_key in ("component_variables", "opf_variables")
+        block = _config_get(raw, (block_key,))
+        block isa AbstractDict || continue
+        for (k, v) in block
+            lowercase(string(k)) == wanted && _as_bool(v, false) && return true
+        end
+    end
+    return false
+end
+
 function _join_if_relative(base::AbstractString, p::AbstractString)
     isabspath(p) ? p : normpath(joinpath(base, p))
 end
@@ -269,10 +293,15 @@ function read_options(path::AbstractString)
         scattering_coeff_par=_as_float(get(raw, "scattering_coeff_par", 0.15), 0.15),
         scattering_coeff_nir=_as_float(get(raw, "scattering_coeff_nir", 0.30), 0.30),
         cache_radiation=_as_bool(get(raw, "cache_radiation", false), false),
+        include_sky_fraction=_config_output_variable_enabled(raw, "sky_fraction"),
         cache_pixel_table=_as_bool(get(raw, "cache_pixel_table", false), false),
         pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
+        allow_overlapping_meteo_steps=_as_bool(
+            _config_get(raw, ("allow_overlapping_meteo_steps", "allowOverlappingMeteoSteps", "allowOverlappingMeteo")),
+            false,
+        ),
         nir_interception=_as_bool(get(raw, "nir_interception", true), true),
         nir_scattering=_as_bool(get(raw, "nir_scattering", true), true),
         java_logged_turtle_dirs=_as_bool(get(raw, "java_logged_turtle_dirs", false), false),

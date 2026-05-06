@@ -127,6 +127,7 @@ end
 struct PreparedInterceptionData
     geometry::InterceptionSceneData
     node_interception_by_index::Vector{Union{Nothing,InterceptionModel}}
+    node_transparency_by_index::Vector{Float64}
     virtual_nodes::Set{Int}
     virtual_node_mask::Vector{Bool}
     upper_hit::Bool
@@ -435,25 +436,23 @@ end
     options::LightOptions,
     pixel_area::Float64,
     virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
 )
-    non_virtual_seen = false
-    first_non_virtual_idx = 0
     @inbounds for hit in stack
         node_idx = _hit_node(hit)
         if virtual_node_mask[node_idx]
-            if !non_virtual_seen
-                ratio = _projection_area_ratio(projection, options, node_idx)
-                visible_area[node_idx] += pixel_area * ratio
-            end
-        else
-            first_non_virtual_idx = node_idx
-            non_virtual_seen = true
-            break
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            visible_area[node_idx] += pixel_area * ratio
+            continue
         end
-    end
-    if first_non_virtual_idx != 0
-        ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
-        visible_area[first_non_virtual_idx] += pixel_area * ratio
+
+        transparency = node_transparency_by_index[node_idx]
+        intercepted_fraction = 1.0 - transparency
+        if intercepted_fraction > 0.0
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            visible_area[node_idx] += pixel_area * intercepted_fraction * ratio
+        end
+        transparency > 0.0 || break
     end
     return nothing
 end
@@ -465,24 +464,26 @@ end
     options::LightOptions,
     pixel_area::Float64,
     virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
 )
     start = _flat_stack_start(stack)
     nodes = stack.parent.nodes
     n_hits = length(stack)
-    first_non_virtual_idx = 0
     @inbounds for h in 0:(n_hits - 1)
         node_idx = Int(nodes[start + h])
         if virtual_node_mask[node_idx]
             ratio = _projection_area_ratio(projection, options, node_idx)
             visible_area[node_idx] += pixel_area * ratio
-        else
-            first_non_virtual_idx = node_idx
-            break
+            continue
         end
-    end
-    if first_non_virtual_idx != 0
-        ratio = _projection_area_ratio(projection, options, first_non_virtual_idx)
-        visible_area[first_non_virtual_idx] += pixel_area * ratio
+
+        transparency = node_transparency_by_index[node_idx]
+        intercepted_fraction = 1.0 - transparency
+        if intercepted_fraction > 0.0
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            visible_area[node_idx] += pixel_area * intercepted_fraction * ratio
+        end
+        transparency > 0.0 || break
     end
     return nothing
 end
@@ -877,6 +878,18 @@ function _has_sensor_models(models::LightModels)
     return false
 end
 
+function _has_transmissive_models(models::LightModels)
+    for group_model in values(models)
+        for type_model in values(group_model.types)
+            interception = type_model.interception
+            interception === nothing && continue
+            _is_sensor_interception(interception) && continue
+            clamp(interception.transparency, 0.0, 1.0) > 0.0 && return true
+        end
+    end
+    return false
+end
+
 function _ignored_group_types(models::LightModels)
     out = Dict{String,Set{String}}()
     for group_model in values(models)
@@ -1040,6 +1053,7 @@ function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
         return false
     end
     _has_sensor_models(models) && return false
+    _has_transmissive_models(models) && return false
     isempty(_group_light_emitters(models)) || return false
     return true
 end
@@ -1787,6 +1801,22 @@ end
 @inline _hit_height(hit) = hit[1]
 @inline _hit_node(hit) = hit[2]
 
+function _node_transparency_by_index(
+    node_interception_by_index::Vector{Union{Nothing,InterceptionModel}},
+    virtual_node_mask::Vector{Bool},
+)
+    out = zeros(Float64, length(node_interception_by_index))
+    @inbounds for i in eachindex(node_interception_by_index)
+        if virtual_node_mask[i]
+            out[i] = 1.0
+            continue
+        end
+        interception = node_interception_by_index[i]
+        out[i] = interception === nothing ? 0.0 : clamp(interception.transparency, 0.0, 1.0)
+    end
+    return out
+end
+
 @inline function _projection_area_ratio(
     projection::DirectionProjectionResult,
     options::LightOptions,
@@ -1916,6 +1946,7 @@ function _visible_area_from_projection_dense(
     options::LightOptions,
     plotbox,
     virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
     geometry::InterceptionSceneData,
     stacks_sorted::Bool=false,
 )
@@ -1925,25 +1956,22 @@ function _visible_area_from_projection_dense(
         isempty(stack) && continue
         stacks_sorted || _sort_hit_stack!(stack)
 
-        non_virtual_seen = false
-        first_non_virtual = 0
         for hit in stack
             nid = _hit_node(hit)
             node_idx = geometry.node_index[nid]
             if virtual_node_mask[node_idx]
-                if !non_virtual_seen
-                    ratio = _projection_area_ratio(projection, options, nid)
-                    visible_area[node_idx] += pixel_area * ratio
-                end
-            else
-                first_non_virtual = nid
-                non_virtual_seen = true
-                break
+                ratio = _projection_area_ratio(projection, options, nid)
+                visible_area[node_idx] += pixel_area * ratio
+                continue
             end
-        end
-        if first_non_virtual != 0
-            ratio = _projection_area_ratio(projection, options, first_non_virtual)
-            visible_area[geometry.node_index[first_non_virtual]] += pixel_area * ratio
+
+            transparency = node_transparency_by_index[node_idx]
+            intercepted_fraction = 1.0 - transparency
+            if intercepted_fraction > 0.0
+                ratio = _projection_area_ratio(projection, options, nid)
+                visible_area[node_idx] += pixel_area * intercepted_fraction * ratio
+            end
+            transparency > 0.0 || break
         end
     end
 
@@ -1993,6 +2021,7 @@ function _visible_area_from_projection_dense(
     options::LightOptions,
     plotbox,
     virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
     geometry::InterceptionSceneData,
     stacks_sorted::Bool=false,
 )
@@ -2001,7 +2030,15 @@ function _visible_area_from_projection_dense(
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
         stacks_sorted || _sort_hit_stack!(stack)
-        _accumulate_visible_area_dense!(visible_area, projection, stack, options, pixel_area, virtual_node_mask)
+        _accumulate_visible_area_dense!(
+            visible_area,
+            projection,
+            stack,
+            options,
+            pixel_area,
+            virtual_node_mask,
+            node_transparency_by_index,
+        )
     end
 
     return visible_area
@@ -2590,6 +2627,7 @@ function _prepare_interception_data(
     return PreparedInterceptionData(
         geometry,
         node_interception_by_index,
+        _node_transparency_by_index(node_interception_by_index, virtual_node_mask),
         virtual_nodes,
         virtual_node_mask,
         upper_hit,
@@ -2693,6 +2731,7 @@ function _compute_first_order(
                 options,
                 geometry.plotbox,
                 prepared.virtual_node_mask,
+                prepared.node_transparency_by_index,
                 geometry,
             )
         _accumulate_projection_hits!(hits_per_node, projection, geometry)

@@ -27,6 +27,7 @@ toricity: true
 cache_pixel_table: false
 pixel_hit_stack_mode: auto
 cache_radiation: false
+allow_overlapping_meteo_steps: false
 scattering_max_iter: 20
 scattering_stop_ratio: 0.01
 scattering_coeff_par: 0.15
@@ -41,6 +42,9 @@ debug_drop_leading_hit:
   node_id: 12
   x: 40
   y: 18
+
+component_variables:
+  sky_fraction: false
 ```
 
 ## Required Keys
@@ -66,7 +70,7 @@ read_simulation
   -> integrate_light
 ```
 
-What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy, and `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps.
+What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `allow_overlapping_meteo_steps` also acts at that preparation stage by deciding whether overlapping meteo intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
 
 This distinction is important for interpretation. Changing `pixel_size` or `sky_sectors` does not mean you have changed the plant or the atmosphere; it means you have changed the numerical approximation used to represent them. By contrast, changing `scattering`, `nir_interception`, or `nir_scattering` changes which physical processes are included in the simulation.
 
@@ -201,6 +205,23 @@ The main effect is therefore still on runtime, not on physics, but the optimizat
 
 Large scenes are handled with a tiered policy. If the full-response cache is small enough, it stays in memory. If not, the runtime falls back to a bounded partial cache, and if even that is not appropriate it falls back to the prepared topology path instead of allocating an unbounded cache.
 
+### `sky_fraction` output request
+
+Store a per-node `sky_fraction` dictionary in each `LightStepResult` by asking
+for the historical output variable:
+
+```yaml
+component_variables:
+  sky_fraction: true
+```
+
+The same applies if `sky_fraction: true` appears in `opf_variables`, including
+when `opf_variables` reuses the same YAML anchor as `component_variables`.
+
+This output is useful for coupled models such as PlantBiophysics that need a sky-view fraction on each MTG object. When requested, `read_options` sets `LightOptions.include_sky_fraction=true`, and `attach_light_step!` / `attach_light_series!` can export it back to the MTG with `fields=[:sky_fraction]`.
+
+The calculation reuses the same directional visible-area machinery as the light interception code. Because it is an additional output and not needed for the core light budget, it is not stored unless the output variable is requested or `LightOptions(include_sky_fraction=true)` is constructed directly in Julia.
+
 ### `cache_pixel_table`
 
 Store projection tables on disk instead of recomputing or keeping them only in memory.
@@ -266,6 +287,18 @@ meteo_range: 2016/07/01 08:00:00, 2016/07/01 12:00:00
 
 The range is applied during `prepare_meteo`, after the sequence has been validated, and it can be expressed either with row indices or with datetimes. After that, the optional `active` field in the meteo table can still remove rows one by one.
 
+### `allow_overlapping_meteo_steps`
+
+Allow overlapping meteo intervals to pass through `prepare_meteo` and `run_light_series`.
+
+```yaml
+allow_overlapping_meteo_steps: true
+```
+
+By default the Julia runtime rejects series where one meteo step starts before the previous one ends. That is usually the right default because it catches inconsistent forcing tables early. But some historical workflows intentionally reuse partially overlapping meteo intervals, for example when several forcing windows describe the same day with different aggregation choices.
+
+When this flag is `true`, that validation is skipped and the rows are kept in their original order. The light solver then treats each row independently. This option only changes the preparation-time consistency check; it does not merge rows, resolve overlaps, or change how one row is integrated internally.
+
 ### `pixel_hit_stack_mode`
 
 Internal raster-storage option controlling how per-pixel hit stacks are stored.
@@ -300,7 +333,7 @@ The bundled examples intentionally preserve several historical ARCHIMED keys suc
 - `component_variables`
 - `opf_variables`
 
-Those keys remain useful documentation for old workflows, but they are not the main user API of the current light-only Julia package. For actual output pathways in `ArchimedLight.jl`, see [Outputs](outputs.md).
+Those keys remain useful documentation for old workflows, but they are not the main user API of the current light-only Julia package. One exception is `sky_fraction`: requesting it in `component_variables` or `opf_variables` is honored so the value is available for later attachment. For actual output pathways in `ArchimedLight.jl`, see [Outputs](outputs.md).
 
 ## Recommended Reading Order
 

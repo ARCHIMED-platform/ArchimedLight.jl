@@ -245,6 +245,7 @@ function _build_sector_responses(
                     options,
                     geometry.plotbox,
                     prepared.virtual_node_mask,
+                    prepared.node_transparency_by_index,
                     geometry,
                 ),
                 geometry,
@@ -328,6 +329,50 @@ function _build_sector_responses(scene::SceneGeometry, models::LightModels, turt
     return _build_sector_responses(prepared, scene, models, turtle, options)
 end
 
+function _sky_fraction_from_sector_responses(
+    scene::SceneGeometry,
+    responses::SectorResponsesCache,
+    turtle::TurtleGrid,
+)
+    sky_count = 0
+    visible_sum = zeros(Float64, length(responses.node_ids))
+    for (i, sector) in enumerate(turtle.sectors)
+        sector.source == :sun && continue
+        sky_count += 1
+        sector_area = responses.projected_area_per_sector[i].values
+        @inbounds for j in _active_indices(responses.projected_area_per_sector[i])
+            visible_sum[j] += sector_area[j]
+        end
+    end
+
+    out = Dict{Int,Float64}()
+    @inbounds for i in eachindex(responses.node_ids)
+        nid = responses.node_ids[i]
+        area = _scene_area(scene, nid, 0.0)
+        out[nid] = area <= 0.0 || sky_count == 0 ? 0.0 : visible_sum[i] / sky_count / area
+    end
+    return out
+end
+
+function _compute_sky_fraction(
+    scene::SceneGeometry,
+    models::LightModels,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    prepared::Union{Nothing,PreparedInterceptionData}=nothing,
+    responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
+)
+    responses =
+        if responses_cache !== nothing
+            responses_cache
+        elseif prepared !== nothing
+            _build_sector_responses(prepared, scene, models, turtle, options)
+        else
+            _build_sector_responses(scene, models, turtle, options)
+        end
+    return _sky_fraction_from_sector_responses(scene, responses, turtle)
+end
+
 function _combine_sector_responses(
     responses::SectorResponsesCache,
     fluxes::DirectionalFluxes,
@@ -404,6 +449,7 @@ function _stream_first_order_with_scattering_topology(
                 options,
                 geometry.plotbox,
                 prepared.virtual_node_mask,
+                prepared.node_transparency_by_index,
                 geometry,
             )
 
@@ -742,7 +788,7 @@ _meteo_metadata(meteo::PlantMeteo.TimeStepTable) = _meta_to_namedtuple(getfield(
 function _prepare_meteo_rows_for_series(meteo::MeteoTable, options::LightOptions)
     rows = _meteo_rows(meteo)
     isempty(rows) && return rows
-    _validate_meteo_sequence_local(rows)
+    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
     rows = _apply_meteo_range_local(rows, options)
     rows = _apply_meteo_active_filter_local(rows)
     rows
@@ -751,7 +797,7 @@ end
 function _prepare_meteo_rows_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
     rows = _meteo_rows(meteo)
     isempty(rows) && return rows
-    _validate_meteo_sequence_local(rows)
+    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
     rows = _apply_meteo_range_local(rows, options)
     rows = _apply_meteo_active_filter_local(rows)
     rows
@@ -1813,7 +1859,17 @@ function _run_light_step_cached(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+    sky_fraction =
+        options.include_sky_fraction ?
+        _compute_sky_fraction(
+            scene,
+            models,
+            turtle,
+            options;
+            prepared=prepared,
+            responses_cache=responses_cache,
+        ) : nothing
+    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, sky_fraction, cache.render_geometry)
 end
 
 function _run_light_sky_cached(
@@ -1964,6 +2020,10 @@ end
 
 Run a complete light computation for one meteo row:
 `compute_sky -> build_turtle -> compute_directional_fluxes -> compute_first_order -> compute_scattering -> integrate_light`.
+Set `LightOptions(include_sky_fraction=true)` to store the per-node sky-view
+fraction needed by downstream MTG attachment or coupled energy-balance models.
+When using `read_config`, this option is enabled by requesting `sky_fraction`
+in `component_variables` or `opf_variables`.
 """
 function run_light_step(
     scene::SceneGeometry,
@@ -1998,6 +2058,9 @@ end
 
 Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
 response reuse when `LightOptions(cache_radiation=true)` is enabled.
+Set `LightOptions(include_sky_fraction=true)` to store `sky_fraction` in each step.
+When using `read_config`, this option is enabled by requesting `sky_fraction`
+in `component_variables` or `opf_variables`.
 """
 function run_light_series(
     scene::SceneGeometry,
@@ -2061,7 +2124,7 @@ end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo,
+    meteo;
 )
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
     meteo isa MeteoTable && return run_light_series(cache, meteo)

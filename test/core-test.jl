@@ -45,6 +45,66 @@
     @test raw_scene.mtg[:geometry] === nothing
 end
 
+@testitem "Sky fraction can be stored and attached" tags=[:core, :fast] begin
+    import MultiScaleTreeGraph
+
+    include(joinpath(@__DIR__, "support.jl"))
+
+    fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
+    options = ArchimedLight.LightOptions(fixture.options; include_sky_fraction=true)
+    @test options.include_sky_fraction
+    meteo = ArchimedLight.prepare_meteo(fixture.meteo, options)
+    series = ArchimedLight.run_light_series(
+        fixture.scene,
+        fixture.models,
+        meteo,
+        options,
+    )
+
+    @test length(series) == length(meteo.rows)
+    @test series[1].sky_fraction !== nothing
+    @test !isempty(series[1].sky_fraction)
+
+    ArchimedLight.attach_light_step!(fixture.scene, series[1]; fields=[:area])
+
+    scalar_area_found = Ref(false)
+    MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
+        nid = Int(MultiScaleTreeGraph.node_id(node))
+        if haskey(fixture.scene.nodes, nid) && haskey(node, :area)
+            scalar_area_found[] = true
+            @test node[:area] ≈ fixture.scene.nodes[nid].area
+            return false
+        end
+        return true
+    end
+    @test scalar_area_found[]
+
+    ArchimedLight.attach_light_series!(
+        fixture.scene,
+        series;
+        fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
+        names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+    )
+
+    found = Ref(false)
+    MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
+        if haskey(node, :sky_fraction)
+            found[] = true
+            @test node[:sky_fraction] isa Vector{Float64}
+            @test length(node[:sky_fraction]) == length(series)
+            @test node[:area] isa Vector{Float64}
+            @test length(node[:area]) == length(series)
+            expected_area = fixture.scene.nodes[Int(MultiScaleTreeGraph.node_id(node))].area
+            @test all(v -> isapprox(v, expected_area), node[:area])
+            @test haskey(node, :Ra_PAR_f)
+            @test haskey(node, :Ra_SW_f)
+            return false
+        end
+        return true
+    end
+    @test found[]
+end
+
 @testitem "SmallHitStack handles dense pixels" tags=[:core, :fast] begin
     stack = ArchimedLight.SmallHitStack()
     for i in 1:300
