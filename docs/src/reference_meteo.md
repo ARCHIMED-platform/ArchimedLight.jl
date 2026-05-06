@@ -43,7 +43,8 @@ For most users, a meteo table should provide these fields:
 
 `run_light` accepts `MeteoTable`, `PlantMeteo.TimeStepTable`, and generic
 Tables.jl-compatible inputs such as vectors of named tuples or DataFrames.
-Use `check_meteo(meteo)` to diagnose missing columns before a simulation.
+Use `summarize_meteo(meteo)` to see what ArchimedLight detected, and
+`check_meteo(meteo)` to diagnose missing columns before a simulation.
 
 ## 1. Time Intervals
 

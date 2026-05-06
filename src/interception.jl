@@ -1052,11 +1052,11 @@ function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
     nir = Dict{Int,Float64}()
     for ((group, type_name), pwr) in by_group_type
         nids = Int[
-            nid for (nid, node) in scene.nodes if node.group == group && node.type == type_name
+            nid for nid in keys(scene.nodes) if _scene_group(scene, nid, "") == group && _scene_type(scene, nid, "") == type_name
         ]
         if isempty(nids)
             # Fallback for scenes where type labels are unavailable.
-            nids = Int[nid for (nid, node) in scene.nodes if node.group == group]
+            nids = Int[nid for nid in keys(scene.nodes) if _scene_group(scene, nid, "") == group]
         end
         isempty(nids) && continue
 

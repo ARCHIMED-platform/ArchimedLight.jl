@@ -137,12 +137,17 @@ update_options!(sim, new_options)
 For first-time inputs, run the checks:
 
 ```julia
+summarize_scene(scene; models=models)
+summarize_meteo(meteo; options=sim.options)
 check_scene(scene)
 check_models(scene, models)
-check_meteo(meteo)
+check_meteo(meteo; options=sim.options)
 check_simulation(scene, meteo; models=models, options=sim.options)
 ```
 
 Fatal issues include missing scene domain, missing models for geometric nodes,
 missing radiation inputs, or missing latitude when the sun position must be
 reconstructed from date and time.
+
+The summaries answer "what did ArchimedLight see?" The checks answer "is that
+enough to run?"

@@ -13,12 +13,19 @@
     )
     report = check_models(scene, models)
     @test isempty(report.errors)
+    summary = summarize_scene(scene; models=models)
+    @test summary.node_count > 0
+    @test summary.face_count > 0
+    @test isempty(summary.missing_models)
 
     wildcard = models_for("simple_plant" => ("*" => translucent(par=0.15, nir=0.90),))
     @test isempty(check_models(scene, wildcard).errors)
 
     missing = models_for("simple_plant" => ("Leaf" => translucent(par=0.15, nir=0.90),))
-    @test !isempty(check_models(scene, missing).errors)
+    missing_report = check_models(scene, missing)
+    @test !isempty(missing_report.errors)
+    @test occursin("models_for", missing_report.errors[1])
+    @test !isempty(summarize_scene(scene; models=missing).missing_models)
 
     sensor_models = models_for("sensor" => ("plate" => virtual_sensor(),))
     @test sensor_models["sensor"].types["plate"].interception.sensor
@@ -130,6 +137,12 @@ end
         ),
     ]
     @test isempty(check_meteo(good).errors)
+    meteo_summary = summarize_meteo(good)
+    @test meteo_summary.row_count == 1
+    @test meteo_summary.duration_seconds == 3600.0
+    @test meteo_summary.solar_geometry == "reconstructed from date/time and latitude"
+    @test "RI_PAR_f" in meteo_summary.radiation_inputs
+    @test "RI_NIR_f" in meteo_summary.radiation_inputs
 
     missing_lat = [
         (
@@ -140,7 +153,10 @@ end
             RI_NIR_f=80.0,
         ),
     ]
-    @test any(contains("latitude"), check_meteo(missing_lat).errors)
+    lat_report = check_meteo(missing_lat)
+    @test any(contains("latitude"), lat_report.errors)
+    @test any(contains("Available columns"), lat_report.errors)
+    @test summarize_meteo(missing_lat).solar_geometry == "missing latitude or explicit sun position"
 
     explicit_sun = [
         (

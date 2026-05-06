@@ -1190,7 +1190,11 @@ function _ensure_light_cache!(sim::LightSimulation)
     sim.cache !== nothing && return sim.cache
     report = check_simulation(sim)
     if !isempty(report.errors)
-        error("Invalid light simulation:\n- " * join(report.errors, "\n- "))
+        error(_validation_error_message(
+            "Invalid light simulation",
+            report;
+            next="Run `check_simulation(sim)` and `summarize_scene(sim.scene; models=sim.models)` to inspect the scene/model inputs.",
+        ))
     end
     sim.validation = report
     sim.cache = prepare_light_cache(
@@ -1203,6 +1207,17 @@ function _ensure_light_cache!(sim::LightSimulation)
         memory_limit_bytes=sim.memory_limit_bytes,
     )
     return sim.cache
+end
+
+function _validation_error_message(title::AbstractString, report::ValidationReport; next::AbstractString="")
+    parts = String[string(title, ":")]
+    append!(parts, ["- " * e for e in report.errors])
+    if !isempty(report.warnings)
+        push!(parts, "Warnings:")
+        append!(parts, ["- " * w for w in report.warnings])
+    end
+    isempty(next) || push!(parts, next)
+    return join(parts, "\n")
 end
 
 """
@@ -1249,7 +1264,7 @@ function check_scene(scene::SceneGeometry)
     infos = String[]
     isempty(scene.face2node) && push!(errors, "Scene has no geometry faces.")
     isempty(scene.nodes) && push!(errors, "Scene has no geometric nodes.")
-    scene.scene_xy_bounds === nothing && push!(errors, "Scene has no XY domain. Pass `domain=` to `light_scene` or `scene_xy_bounds=` to `prepare_scene`.")
+    scene.scene_xy_bounds === nothing && push!(errors, "Scene has no XY domain. Pass `domain=` to `PlantGeom.make_scene` or `scene_xy_bounds=` to `PlantGeom.prepare_scene`.")
     if scene.scene_xy_bounds !== nothing
         xmin, ymin, xmax, ymax = scene.scene_xy_bounds
         (xmax > xmin && ymax > ymin) || push!(errors, "Scene XY domain must satisfy xmax > xmin and ymax > ymin.")
@@ -1258,23 +1273,94 @@ function check_scene(scene::SceneGeometry)
     return ValidationReport(errors, warnings, infos)
 end
 
-function check_models(scene::SceneGeometry, models)
-    lm = prepare_models(models)
+function _missing_model_pairs(scene::SceneGeometry, models::LightModels)
     missing = Set{Tuple{String,String}}()
-    ignored = _ignored_group_types(lm)
+    ignored = _ignored_group_types(models)
     for nid in unique(scene.face2node)
         _is_ignored_node(nid, scene, ignored) && continue
         group = strip(_scene_group(scene, nid, ""))
         type_name = strip(_scene_type(scene, nid, ""))
-        _type_model(lm, group, type_name) === nothing && push!(missing, (group, type_name))
+        _type_model(models, group, type_name) === nothing && push!(missing, (group, type_name))
     end
+    return sort!(collect(missing))
+end
+
+function _missing_models_snippet(missing::Vector{Tuple{String,String}})
+    isempty(missing) && return ""
+    grouped = OrderedDict{String,Vector{String}}()
+    for (group, type_name) in missing
+        push!(get!(grouped, group, String[]), type_name)
+    end
+    lines = ["Add model entries for these geometric nodes, for example:", "models = models_for("]
+    for (group, types) in grouped
+        push!(lines, "    $(repr(group)) => (")
+        for type_name in types
+            push!(lines, "        $(repr(type_name)) => translucent(par=0.15, nir=0.90),")
+        end
+        push!(lines, "    ),")
+    end
+    push!(lines, ")")
+    return join(lines, "\n")
+end
+
+function check_models(scene::SceneGeometry, models)
+    lm = prepare_models(models)
+    missing = _missing_model_pairs(scene, lm)
     errors = String[]
     if !isempty(missing)
-        details = join(["group=$(repr(g)), type=$(repr(t))" for (g, t) in sort!(collect(missing))], "; ")
-        push!(errors, "Missing model(s) for geometric node group/type pairs: $details.")
+        details = join(["group=$(repr(g)), type=$(repr(t))" for (g, t) in missing], "; ")
+        push!(errors, "Missing model(s) for geometric node group/type pairs: $details.\n" * _missing_models_snippet(missing))
     end
     infos = ["Models are checked only for nodes with geometry."]
     return ValidationReport(errors, String[], infos)
+end
+
+function summarize_scene(scene::SceneGeometry; models=nothing)
+    buckets = Dict{Tuple{String,String},NamedTuple}()
+    face_counts = Dict{Int,Int}()
+    for nid in scene.face2node
+        face_counts[nid] = get(face_counts, nid, 0) + 1
+    end
+    for (nid, node) in scene.nodes
+        group = _scene_group(scene, nid, "")
+        type_name = _scene_type(scene, nid, "")
+        object_id = _scene_object_id(scene, nid, -1)
+        key = (group, type_name)
+        current = get(buckets, key, (nodes=0, faces=0, area=0.0, object_ids=Set{Int}()))
+        object_ids = current.object_ids
+        object_id > 0 && push!(object_ids, object_id)
+        buckets[key] = (
+            nodes=current.nodes + 1,
+            faces=current.faces + get(face_counts, nid, 0),
+            area=current.area + Float64(_scene_area(scene, nid, 0.0)),
+            object_ids=object_ids,
+        )
+    end
+    group_types = NamedTuple[]
+    for ((group, type_name), data) in sort!(collect(buckets); by=x -> x[1])
+        push!(
+            group_types,
+            (
+                group=group,
+                type=type_name,
+                nodes=data.nodes,
+                faces=data.faces,
+                area=data.area,
+                object_ids=sort!(collect(data.object_ids)),
+            ),
+        )
+    end
+    missing = models === nothing ? Tuple{String,String}[] : _missing_model_pairs(scene, prepare_models(models))
+    warnings = String[]
+    scene.scene_xy_bounds === nothing && push!(warnings, "Scene has no XY domain. Pass `domain=` to `PlantGeom.make_scene` or `scene_xy_bounds=` to `PlantGeom.prepare_scene`.")
+    isempty(scene.nodes) && push!(warnings, "Scene has no geometric nodes.")
+    domain = scene.scene_xy_bounds === nothing ? nothing : Tuple(Float64(v) for v in scene.scene_xy_bounds)
+    object_ids = Set{Int}()
+    for nid in keys(scene.nodes)
+        object_id = _scene_object_id(scene, nid, -1)
+        object_id > 0 && push!(object_ids, object_id)
+    end
+    return SceneSummary(domain, length(scene.nodes), length(scene.face2node), length(object_ids), group_types, missing, warnings)
 end
 
 function _meteo_rows_for_check(meteo)
@@ -1303,7 +1389,8 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
         has_sun = (:sun_azimuth in names || :sun_azimut in names) && (:sun_elevation in names)
         latitude = _row_value(row, [:latitude, :lat], NaN)
         if !has_sun && !isfinite(latitude)
-            push!(errors, "Meteo row $i needs `latitude` metadata/column unless `sun_azimuth` and `sun_elevation` are provided.")
+            columns = join(string.(names), ", ")
+            push!(errors, "Meteo row $i needs `latitude` metadata/column unless `sun_azimuth` and `sun_elevation` are provided. Available columns: $columns.")
         end
         try
             uses = _effective_radiation_use_tokens(row)
@@ -1313,7 +1400,7 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
             has_nir = _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir])
             _validate_meteo_radiation_inputs(uses, has_cl, has_sw, has_par, has_nir)
         catch err
-            push!(errors, "Meteo row $i has invalid radiation inputs: $(sprint(showerror, err))")
+            push!(errors, "Meteo row $i has invalid radiation inputs: $(sprint(showerror, err)). Expected one clear radiation source such as `RI_PAR_f` + `RI_NIR_f`, or `RI_SW_f`, or `clearness`.")
         end
         try
             _row_step_hours(row)
@@ -1323,6 +1410,49 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
     end
     push!(infos, "$(length(rows)) meteo row(s) checked.")
     return ValidationReport(errors, warnings, infos)
+end
+
+function summarize_meteo(meteo; options::LightOptions=LightOptions())
+    warnings = String[]
+    rows = try
+        _meteo_rows_for_check(meteo)
+    catch err
+        push!(warnings, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
+        return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
+    end
+    if isempty(rows)
+        push!(warnings, "Meteo input has no rows.")
+        return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
+    end
+    first_row = first(rows)
+    columns = Symbol.(propertynames(first_row))
+    radiation_inputs = try
+        _effective_radiation_use_tokens(first_row)
+    catch err
+        push!(warnings, "Could not resolve radiation inputs: $(sprint(showerror, err))")
+        String[]
+    end
+    has_sun = (:sun_azimuth in columns || :sun_azimut in columns) && (:sun_elevation in columns)
+    latitude = _row_value(first_row, [:latitude, :lat], NaN)
+    solar_geometry =
+        has_sun ? "explicit sun_azimuth/sun_elevation" :
+        isfinite(latitude) ? "reconstructed from date/time and latitude" :
+        "missing latitude or explicit sun position"
+    duration_values = Float64[]
+    for (i, row) in enumerate(rows)
+        try
+            push!(duration_values, _step_duration_seconds_local(row))
+        catch err
+            push!(warnings, "Row $i has invalid duration: $(sprint(showerror, err))")
+        end
+    end
+    duration_seconds = isempty(duration_values) ? nothing : first(duration_values)
+    variable_duration =
+        !isempty(duration_values) && any(v -> !isapprox(v, first(duration_values); rtol=0.0, atol=1e-9), duration_values)
+    report = check_meteo(meteo; options=options)
+    append!(warnings, report.errors)
+    append!(warnings, report.warnings)
+    return MeteoSummary(length(rows), columns, duration_seconds, variable_duration, radiation_inputs, solar_geometry, unique(warnings))
 end
 
 function check_simulation(sim::LightSimulation)
@@ -1795,6 +1925,14 @@ end
 Run one light step for a meteo row, or a full series for a meteo table.
 """
 function run_light(sim::LightSimulation, meteo_or_row)
+    meteo_report = check_meteo(meteo_or_row; options=sim.options)
+    if !isempty(meteo_report.errors)
+        error(_validation_error_message(
+            "Invalid meteo input",
+            meteo_report;
+            next="Run `check_meteo(meteo; options=sim.options)` and `summarize_meteo(meteo; options=sim.options)` to inspect expected columns and units.",
+        ))
+    end
     if _is_meteo_series_input(meteo_or_row)
         return _run_light_series_sim(sim, meteo_or_row)
     end
@@ -1819,29 +1957,6 @@ function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=no
         step_duration_seconds=step_duration_seconds,
         use_full_response=_use_full_response_for_sim(sim, cache),
     )
-end
-
-function run_light(
-    scene::SceneGeometry,
-    models,
-    meteo_or_row;
-    options::LightOptions=LightOptions(),
-    kwargs...,
-)
-    sim = LightSimulation(scene, models; options=options, kwargs...)
-    return run_light(sim, meteo_or_row)
-end
-
-function run_light(
-    scene::SceneGeometry,
-    models,
-    sky::SkyState;
-    options::LightOptions=LightOptions(),
-    step_duration_seconds=nothing,
-    kwargs...,
-)
-    sim = LightSimulation(scene, models; options=options, kwargs...)
-    return run_light(sim, sky; step_duration_seconds=step_duration_seconds)
 end
 
 """

@@ -316,7 +316,7 @@ function _config_ground_spec(models::LightModels)
 end
 
 function _scene_has_group_type(scene::SceneGeometry, group::AbstractString, type::AbstractString)
-    any(node.group == group && node.type == type for node in values(scene.nodes))
+    any(nid -> _scene_group(scene, nid, "") == group && _scene_type(scene, nid, "") == type, keys(scene.nodes))
 end
 
 function _paving_tile_mesh(vertices, faces_for_tile)
@@ -366,6 +366,7 @@ function _materialize_paving!(
             MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), nid, root_scale + 1),
             Dict{Symbol,Any}(
                 :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
+                :group => String(group),
                 :functional_group => String(group),
                 :type => String(type),
                 :object_id => -1,
@@ -880,15 +881,13 @@ The returned [`SceneGeometry`](@ref) stores the merged mesh, face-to-node map,
 per-node metadata, and optional xy bounds used for paving and rasterization.
 """
 function prepare_scene(mtg; source_path::AbstractString="interactive.opf", scene_xy_bounds=nothing, relabel_ids::Bool=false)
-    relabel_ids && _relabel_scene_node_ids!(mtg)
-    bounds = scene_xy_bounds === nothing ? _scene_xy_bounds_from_mtg(mtg) : scene_xy_bounds
-    _build_scene_geometry(mtg, source_path, bounds)
+    PlantGeom.prepare_scene(mtg; source_path=source_path, scene_xy_bounds=scene_xy_bounds, relabel_ids=relabel_ids)
 end
 
 function _refresh_scene!(scene::SceneGeometry)
     scene.mtg === nothing && error("Scene refresh requires an MTG-backed scene.")
     PlantGeom.bump_scene_version!(scene.mtg)
-    refreshed = prepare_scene(scene.mtg; source_path=scene.source_path, scene_xy_bounds=scene.scene_xy_bounds, relabel_ids=false)
+    refreshed = PlantGeom.prepare_scene(scene.mtg; source_path=scene.source_path, scene_xy_bounds=scene.scene_xy_bounds, relabel_ids=false)
     scene.merged_mesh = refreshed.merged_mesh
     scene.face2node = refreshed.face2node
     scene.nodes = refreshed.nodes
@@ -916,7 +915,7 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     else
         error("Unsupported scene extension: $ext")
     end
-    prepare_scene(mtg; source_path=String(path), scene_xy_bounds=_scene_xy_bounds_from_mtg(mtg), relabel_ids=true)
+    PlantGeom.prepare_scene(mtg; source_path=String(path), scene_xy_bounds=PlantGeom._scene_xy_bounds_from_mtg(mtg), relabel_ids=true)
 end
 
 function _register_ref_mesh!(mtg, ref_mesh)
@@ -961,14 +960,14 @@ scene xy bounds when omitted), inserted into the scene MTG, and the prepared
 scene caches are refreshed.
 """
 function add_ground!(
-    scene::SceneGeometry{T};
+    scene::SceneGeometry;
     z::Real=0.0,
     nx::Int=9,
     ny::Int=9,
     xy_bounds=nothing,
     group::AbstractString="pavement",
     type::AbstractString="Cobblestone",
-) where {T<:MultiScaleTreeGraph.Node{N}} where N
+)
     scene.mtg === nothing && error("add_ground! requires an MTG-backed scene.")
     bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
     bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
@@ -976,6 +975,7 @@ function add_ground!(
     x_edges = collect(range(Float64(xmin), Float64(xmax), length=nx + 1))
     y_edges = collect(range(Float64(ymin), Float64(ymax), length=ny + 1))
     root_scale = MultiScaleTreeGraph.scale(scene.mtg)
+    mtg_type = typeof(MultiScaleTreeGraph.node_mtg(scene.mtg))
     next_id = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
 
     for ix in 1:nx, iy in 1:ny
@@ -997,9 +997,10 @@ function add_ground!(
         MultiScaleTreeGraph.Node(
             nid,
             scene.mtg,
-            N(:+, Symbol(type), nid, root_scale + 1),
+            mtg_type(:+, Symbol(type), nid, root_scale + 1),
             Dict{Symbol,Any}(
                 :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
+                :group => String(group),
                 :functional_group => String(group),
                 :type => String(type),
                 :object_id => -1,

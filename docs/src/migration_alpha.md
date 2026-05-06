@@ -88,3 +88,43 @@ update_scene!(sim, new_scene)
 
 This immediately releases the old scene-dependent prepared data and cache
 entries. The next `run_light` call prepares the new scene lazily.
+
+## Common Alpha Script Updates
+
+Daily or seasonal scripts that used `run_light_series` now create a simulation
+once and run the whole meteo table through it:
+
+```julia
+# Old
+series = run_light_series(scene, models, meteo, options)
+
+# New
+sim = LightSimulation(scene, models; options=options)
+series = run_light(sim, meteo)
+```
+
+Interactive scripts that already computed a [`SkyState`](@ref) no longer need
+to assemble the internal solver stages:
+
+```julia
+# Old
+turtle = ArchimedLight.build_turtle(options, sky)
+fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+scat = ArchimedLight.compute_scattering(scene, models, turtle, first, options)
+budget = ArchimedLight.integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
+
+# New
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)
+```
+
+Scene placement now uses `at=` consistently:
+
+```julia
+# Old
+place_in_scene!(plant; scene=scene_mtg, plant_id=1, functional_group="coffee", pos=(0, 0, 0))
+
+# New
+place_in_scene!(plant; scene=scene_mtg, plant_id=1, functional_group="coffee", at=(0, 0, 0))
+```

@@ -1,5 +1,8 @@
 module ArchimedLight
 
+import PlantGeom
+import MultiScaleTreeGraph
+
 include("types.jl")
 include("io.jl")
 include("sky.jl")
@@ -36,16 +39,12 @@ export ScatteringTransferGraph
 export LightBudget
 export LightStepResult
 export ValidationReport
-export LightSceneBuilder
+export SceneSummary
+export MeteoSummary
 export LightSimulation
 
 export read_scene
-export prepare_scene
 export write_scene
-export add_ground!
-export light_scene
-export add_object!
-export add_plant!
 export read_models
 export prepare_models
 export models_for
@@ -64,6 +63,8 @@ export check_scene
 export check_models
 export check_meteo
 export check_simulation
+export summarize_scene
+export summarize_meteo
 export run_light
 export attach_node_values!
 export attach_light_step!

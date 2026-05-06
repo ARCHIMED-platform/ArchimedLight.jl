@@ -111,10 +111,20 @@ check_models(scene, models)
 check_meteo(meteo; options=LightOptions())
 check_simulation(sim)
 check_simulation(scene, meteo; models, options=LightOptions())
+summarize_scene(scene; models=nothing)
+summarize_meteo(meteo; options=LightOptions())
 ```
 
 Each function returns a `ValidationReport` with `errors`, `warnings`, and
 `infos`.
+
+The `summarize_*` helpers return structured summaries and print compact
+diagnostics for humans. Use them when you are not sure what ArchimedLight sees:
+
+```julia
+summarize_scene(scene; models=models)
+summarize_meteo(meteo; options=options)
+```
 
 ## Simulation Cache
 

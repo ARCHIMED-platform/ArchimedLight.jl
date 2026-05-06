@@ -404,6 +404,79 @@ function _merge_reports(reports::ValidationReport...)
 end
 
 """
+    SceneSummary
+
+Structured scene overview returned by [`summarize_scene`](@ref).
+"""
+struct SceneSummary
+    domain::Union{Nothing,NTuple{4,Float64}}
+    node_count::Int
+    face_count::Int
+    object_count::Int
+    group_types::Vector{NamedTuple}
+    missing_models::Vector{Tuple{String,String}}
+    warnings::Vector{String}
+end
+
+function Base.show(io::IO, summary::SceneSummary)
+    println(io, "SceneSummary")
+    println(io, "  domain: ", summary.domain === nothing ? "missing" : summary.domain)
+    println(io, "  geometric nodes: ", summary.node_count)
+    println(io, "  faces: ", summary.face_count)
+    println(io, "  objects: ", summary.object_count)
+    if isempty(summary.group_types)
+        println(io, "  group/type pairs: none")
+    else
+        println(io, "  group/type pairs:")
+        for item in summary.group_types
+            objects = isempty(item.object_ids) ? "none" : join(item.object_ids, ", ")
+            area = round(item.area; sigdigits=5)
+            println(io, "    ", item.group, " / ", item.type, ": ", item.nodes, " node(s), ", item.faces, " face(s), area=", area, ", object_id(s)=", objects)
+        end
+    end
+    if !isempty(summary.missing_models)
+        println(io, "  missing models:")
+        for (group, type_name) in summary.missing_models
+            println(io, "    ", repr(group), " => ", repr(type_name))
+        end
+    end
+    for warning in summary.warnings
+        println(io, "  warning: ", warning)
+    end
+end
+
+"""
+    MeteoSummary
+
+Structured meteo overview returned by [`summarize_meteo`](@ref).
+"""
+struct MeteoSummary
+    row_count::Int
+    columns::Vector{Symbol}
+    duration_seconds::Union{Nothing,Float64}
+    variable_duration::Bool
+    radiation_inputs::Vector{String}
+    solar_geometry::String
+    warnings::Vector{String}
+end
+
+function Base.show(io::IO, summary::MeteoSummary)
+    println(io, "MeteoSummary")
+    println(io, "  rows: ", summary.row_count)
+    println(io, "  columns: ", isempty(summary.columns) ? "none" : join(string.(summary.columns), ", "))
+    duration =
+        summary.duration_seconds === nothing ? "unknown" :
+        summary.variable_duration ? string(round(summary.duration_seconds; sigdigits=5), " s first row, variable") :
+        string(round(summary.duration_seconds; sigdigits=5), " s")
+    println(io, "  duration: ", duration)
+    println(io, "  radiation: ", isempty(summary.radiation_inputs) ? "missing or ambiguous" : join(summary.radiation_inputs, ", "))
+    println(io, "  solar geometry: ", summary.solar_geometry)
+    for warning in summary.warnings
+        println(io, "  warning: ", warning)
+    end
+end
+
+"""
     LightOptions
 
 Runtime controls for interception, scattering, and caching.
@@ -523,62 +596,8 @@ Base.length(meteo::MeteoTable) = length(meteo.rows)
 Base.getindex(meteo::MeteoTable, i::Integer) = meteo.rows[i]
 Base.first(meteo::MeteoTable) = first(meteo.rows)
 
-"""
-    SceneNodeData
-
-Per-node geometric and semantic information extracted into a prepared
-[`SceneGeometry`](@ref).
-
-Fields:
-
-- `area`: component area in scene units after geometry preparation
-- `barycenter`: component barycenter in scene coordinates
-- `group`: functional group used for model matching
-- `type`: type name used for model matching
-- `source_topology_id`: original topology identifier from the source MTG or file
-- `object_id`: object identifier used to group components belonging to the same
-  plant or object when available
-"""
-struct SceneNodeData{T}
-    area::T
-    barycenter::NTuple{3,T}
-    group::String
-    type::String
-    source_topology_id::Int
-    object_id::Int
-end
-
-"""
-    SceneGeometry
-
-Prepared scene representation used by the light solver.
-
-It stores the merged mesh, face-to-node map, per-node metadata, source path,
-and optional xy bounds used during raster projection.
-
-This is the geometry object returned by `prepare_scene` or `read_scene`. It is
-the scene-side input consumed by the solver.
-
-Main fields:
-
-- `mtg`: prepared scene graph
-- `merged_mesh`: merged triangle mesh used by the projection engine
-- `face2node`: mapping from merged mesh faces back to scene node ids
-- `nodes`: per-node metadata and geometry summaries
-- `source_path`: origin of the scene when it came from disk
-- `scene_xy_bounds`: optional explicit xy limits for raster projection
-
-In most workflows you do not construct this type manually; instead you build or
-load a scene and then call `prepare_scene(...)`.
-"""
-mutable struct SceneGeometry{MTG,Mesh,T}
-    mtg::MTG
-    merged_mesh::Mesh
-    face2node::Vector{Int}
-    nodes::Dict{Int,SceneNodeData{T}}
-    source_path::String
-    scene_xy_bounds::Union{Nothing,NTuple{4,T}}
-end
+const SceneNodeData = PlantGeom.SceneNodeData
+const SceneGeometry = PlantGeom.SceneGeometry
 
 """
     LightRenderGeometry
@@ -627,18 +646,82 @@ node_barycenters(scene::SceneGeometry) = Dict(nid => node.barycenter for (nid, n
 
 function _scene_node_field(scene::SceneGeometry, node_id::Integer, field::Symbol, default)
     node = scene_node(scene, node_id)
-    node === nothing ? default : getfield(node, field)
+    if node === nothing || !hasfield(typeof(node), field)
+        return default
+    end
+    v = getfield(node, field)
+    return v === nothing ? default : v
 end
 
 _scene_area(scene::SceneGeometry, node_id::Integer, default=0.0) = _scene_node_field(scene, node_id, :area, default)
 _scene_barycenter(scene::SceneGeometry, node_id::Integer, default=(NaN, NaN, NaN)) =
     _scene_node_field(scene, node_id, :barycenter, default)
-_scene_group(scene::SceneGeometry, node_id::Integer, default="") = _scene_node_field(scene, node_id, :group, default)
-_scene_type(scene::SceneGeometry, node_id::Integer, default="") = _scene_node_field(scene, node_id, :type, default)
 _scene_source_topology_id(scene::SceneGeometry, node_id::Integer, default=Int(node_id)) =
     _scene_node_field(scene, node_id, :source_topology_id, default)
-_scene_object_id(scene::SceneGeometry, node_id::Integer, default=-1) =
-    _scene_node_field(scene, node_id, :object_id, default)
+
+@inline function _mtg_node_attr(node, key::Symbol)
+    node === nothing && return nothing
+    haskey(node, key) ? node[key] : nothing
+end
+
+function _as_int_or_default(x, default::Int)
+    x === nothing && return default
+    x isa Integer && return Int(x)
+    x isa Number && return round(Int, x)
+    if x isa AbstractString
+        try
+            return parse(Int, strip(x))
+        catch
+        end
+    end
+    return default
+end
+
+function _scene_mtg_node(scene::SceneGeometry, node_id::Integer)
+    scene.mtg === nothing && return nothing
+    try
+        return MultiScaleTreeGraph.get_node(scene.mtg, Int(node_id))
+    catch
+        return nothing
+    end
+end
+
+function _inherited_attr(scene::SceneGeometry, node_id::Integer, keys::Tuple, default)
+    node = _scene_mtg_node(scene, node_id)
+    while node !== nothing
+        for key in keys
+            v = _mtg_node_attr(node, key)
+            v === nothing || return v
+        end
+        MultiScaleTreeGraph.isroot(node) && break
+        node = MultiScaleTreeGraph.parent(node)
+    end
+    return default
+end
+
+function _scene_group(scene::SceneGeometry, node_id::Integer, default="")
+    v = _inherited_attr(scene, node_id, (:group, :functional_group), nothing)
+    v === nothing ? default : string(v)
+end
+
+function _scene_type(scene::SceneGeometry, node_id::Integer, default="")
+    node = _scene_mtg_node(scene, node_id)
+    for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
+        v = _mtg_node_attr(node, key)
+        if v !== nothing
+            s = strip(string(v))
+            isempty(s) || return s
+        end
+    end
+    node === nothing && return default
+    s = string(MultiScaleTreeGraph.symbol(node))
+    isempty(s) ? default : s
+end
+
+function _scene_object_id(scene::SceneGeometry, node_id::Integer, default=-1)
+    v = _inherited_attr(scene, node_id, (:object_id, :plantID, :plant_id, :item_id, :itemID, :id), nothing)
+    _as_int_or_default(v, default)
+end
 
 """
     SkyState(sun_azimuth_deg, sun_elevation_deg, ri_par_f, ri_nir_f, direct_fraction, diffuse_fraction)

@@ -28,6 +28,9 @@ using ArchimedLight
 
 sim, meteo = read_simulation("config.yml")
 
+summarize_scene(sim.scene; models=sim.models)
+summarize_meteo(meteo; options=sim.options)
+
 step = run_light(sim, first(meteo))
 series = run_light(sim, meteo)
 ```

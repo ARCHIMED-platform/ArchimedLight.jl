@@ -30,6 +30,7 @@ makedocs(;
             "Beginner Workflows" => "tutorial_beginner_workflows.md",
             "File-Based Workflow" => "tutorial_files.md",
             "Interactive Workflow" => "tutorial_interactive.md",
+            "Copy-Paste Templates" => "onboarding_templates.md",
         ],
         "Reference" => [
             "Configuration And Options" => "reference_config.md",
