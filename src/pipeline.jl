@@ -1934,7 +1934,7 @@ function _run_light_sky_cached(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, cache.render_geometry)
+    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, nothing, cache.render_geometry)
 end
 
 function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
