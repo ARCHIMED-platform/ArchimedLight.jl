@@ -9,8 +9,6 @@ import StaticArrays
 import Tables
 import YAML
 
-const _NEXT_SCENE_NODE_ID = Ref(1)
-
 """
     LightSceneBuilder
 
@@ -21,7 +19,11 @@ mutable struct LightSceneBuilder
     mtg
     domain::Union{Nothing,NTuple{4,Float64}}
     source_path::String
+    next_node_id::Int
 end
+
+LightSceneBuilder(mtg, domain::Union{Nothing,NTuple{4,Float64}}, source_path::String) =
+    LightSceneBuilder(mtg, domain, source_path, MultiScaleTreeGraph.max_id(mtg) + 1)
 
 function _as_bool(x, default::Bool)
     x === nothing && return default
@@ -587,10 +589,10 @@ function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds
     SceneGeometry(mtg, merged_mesh, face2node, nodes, String(source_path), scene_xy_bounds)
 end
 
-function _relabel_scene_node_ids!(root)
+function _relabel_scene_node_ids!(root, next_node_id::Base.RefValue{Int})
     MultiScaleTreeGraph.traverse!(root) do node
-        setfield!(node, :id, _NEXT_SCENE_NODE_ID[])
-        _NEXT_SCENE_NODE_ID[] += 1
+        setfield!(node, :id, next_node_id[])
+        next_node_id[] += 1
     end
     return root
 end
@@ -629,7 +631,7 @@ function _builder_refresh!(builder::LightSceneBuilder)
         builder.mtg;
         source_path=builder.source_path,
         scene_xy_bounds=builder.domain,
-        relabel_ids=true,
+        relabel_ids=false,
     )
 end
 
@@ -750,6 +752,9 @@ function _add_scene_object!(
             transform=transform,
         ),
     )
+    next_node_id = Ref(builder.next_node_id)
+    _relabel_scene_node_ids!(object, next_node_id)
+    builder.next_node_id = next_node_id[]
     try
         MultiScaleTreeGraph.addchild!(builder.mtg, object)
     catch err
@@ -1005,7 +1010,7 @@ function add_ground!(
     y_edges = collect(range(Float64(ymin), Float64(ymax), length=ny + 1))
     root_scale = MultiScaleTreeGraph.scale(scene.mtg)
     mtg_type = typeof(MultiScaleTreeGraph.node_mtg(scene.mtg))
-    next_id = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
+    next_id = MultiScaleTreeGraph.max_id(scene.mtg) + 1
 
     for ix in 1:nx, iy in 1:ny
         x0 = x_edges[ix]
@@ -1064,7 +1069,12 @@ function add_ground!(
     add_ground!(scene; z=z, nx=nx, ny=ny, xy_bounds=bounds, group=group, type=type)
     builder.mtg = scene.mtg
     builder.domain = scene.scene_xy_bounds
+    builder.next_node_id = MultiScaleTreeGraph.max_id(builder.mtg) + 1
     return builder
+end
+
+function PlantGeom.add_ground!(builder::LightSceneBuilder; kwargs...)
+    return add_ground!(builder; kwargs...)
 end
 
 """

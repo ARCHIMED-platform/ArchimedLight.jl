@@ -5,6 +5,8 @@
     using GeometryBasics
     using Dates
     using ArchimedLight
+    import MultiScaleTreeGraph
+    import PlantGeom
 
     include(joinpath(@__DIR__, "synthetic_scene_support.jl"))
 end

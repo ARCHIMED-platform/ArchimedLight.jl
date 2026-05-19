@@ -1,5 +1,6 @@
 using ArchimedLight
 using DataFrames
+using PlantGeom
 
 bounds = (-1.0, -1.0, 1.0, 1.0)
 

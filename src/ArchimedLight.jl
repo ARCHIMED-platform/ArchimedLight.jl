@@ -1,6 +1,7 @@
 module ArchimedLight
 
 import PlantGeom
+import PlantGeom: add_object!, add_plant!
 import MultiScaleTreeGraph
 
 include("types.jl")
@@ -24,6 +25,7 @@ export InterceptionModel
 export EmitterModel
 export OpticalProperties
 export LightOptions
+export light_scene
 export scene_node
 export scene_node_ids
 export node_areas

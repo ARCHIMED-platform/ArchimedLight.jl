@@ -1,5 +1,6 @@
 @testitem "Beginner API model helpers and validation" tags = [:beginner_api, :fast] begin
     using ArchimedLight
+    using PlantGeom: add_plant!
 
     scene = light_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
         add_plant!(s, joinpath(@__DIR__, "..", "example_1", "scene", "opf", "simple_OPF_shapes.opf"); group="simple_plant", id=1)
@@ -37,6 +38,7 @@ end
 @testitem "Beginner API scene builder object placement" tags = [:beginner_api, :fast] begin
     using ArchimedLight
     using GeometryBasics
+    using PlantGeom: add_object!
 
     mesh = GeometryBasics.Mesh(
         GeometryBasics.Point3f[
@@ -51,9 +53,10 @@ end
         add_object!(s, mesh; group="sensor", type="panel", id=4, at=(1.0, 2.0, 3.0), scale=2.0)
     end
     nid = only(scene_node_ids(scene))
-    @test scene.nodes[nid].group == "sensor"
-    @test scene.nodes[nid].type == "panel"
-    @test scene.nodes[nid].object_id == 4
+    sensor_summary = only(summarize_scene(scene).group_types)
+    @test sensor_summary.group == "sensor"
+    @test sensor_summary.type == "panel"
+    @test sensor_summary.object_ids == [4]
     @test node_areas(scene)[nid] ≈ 2.0
     @test node_barycenters(scene)[nid] == (5 / 3, 8 / 3, 3.0)
 
@@ -80,6 +83,7 @@ end
 
 @testitem "Beginner API run_light parity and cache lifecycle" tags = [:beginner_api, :fast] begin
     using ArchimedLight
+    using PlantGeom: add_plant!
 
     config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config)

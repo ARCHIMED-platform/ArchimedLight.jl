@@ -25,7 +25,7 @@
     @test options2.turtle_sectors == fixture.options.turtle_sectors
     @test length(meteo2.rows) == length(fixture.meteo.rows)
     @test collect(keys(models2.groups)) == collect(keys(fixture.models.groups))
-    @test !isempty([nid for (nid, node) in scene2.nodes if node.group == "pavement"])
+    @test any(item -> item.group == "pavement", ArchimedLight.summarize_scene(scene2).group_types)
     @test haskey(scene2.mtg, :geometry)
     @test scene2.mtg[:geometry] === nothing
 
@@ -33,7 +33,8 @@
         joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml");
         plot_paving_override=25,
     )
-    @test length([nid for (nid, node) in scene3.nodes if node.group == "pavement"]) == 25
+    pavement = only(item for item in ArchimedLight.summarize_scene(scene3).group_types if item.group == "pavement")
+    @test pavement.nodes == 25
     @test scene3.mtg[:geometry] === nothing
 
     raw_scene = ArchimedLight.read_scene(

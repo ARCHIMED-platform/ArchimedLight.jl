@@ -1471,9 +1471,10 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
     end
     first_row = first(rows)
-    columns = Symbol.(propertynames(first_row))
+    columns = collect(Symbol.(propertynames(first_row)))
     radiation_inputs = try
-        _effective_radiation_use_tokens(first_row)
+        inputs = _effective_radiation_use_tokens(first_row)
+        isempty(inputs) ? _inferred_radiation_input_columns(first_row) : inputs
     catch err
         push!(warnings, "Could not resolve radiation inputs: $(sprint(showerror, err))")
         String[]
@@ -1499,6 +1500,15 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
     append!(warnings, report.errors)
     append!(warnings, report.warnings)
     return MeteoSummary(length(rows), columns, duration_seconds, variable_duration, radiation_inputs, solar_geometry, unique(warnings))
+end
+
+function _inferred_radiation_input_columns(row)
+    inputs = String[]
+    _has_any_column(row, [:clearness, :Kt]) && push!(inputs, "clearness")
+    _has_any_column(row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global]) && push!(inputs, "RI_SW_f")
+    _has_any_column(row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par]) && push!(inputs, "RI_PAR_f")
+    _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir]) && push!(inputs, "RI_NIR_f")
+    return inputs
 end
 
 function check_simulation(sim::LightSimulation)
