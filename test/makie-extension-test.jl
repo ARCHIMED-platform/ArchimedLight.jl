@@ -1,5 +1,6 @@
 @testitem "Makie extension lightplot colors and timestep updates" tags=[:core, :fast] begin
     using CairoMakie
+    using PlantGeom
 
     include(joinpath(@__DIR__, "support.jl"))
 
@@ -92,7 +93,7 @@
     @test all(isapprox.(observed_v, expected_v; atol=1f-6, rtol=1f-6))
 
     # Compatibility path for explicit metric maps still works when geometry is provided separately.
-    node_ids = ArchimedLight.scene_node_ids(fixture.scene)
+    node_ids = PlantGeom.scene_node_ids(fixture.scene)
     metric_1 = Dict(nid => Float64(i) for (i, nid) in enumerate(node_ids))
     metric_fig, _, metric_plt = ArchimedLight.lightplot(
         fixture.scene,

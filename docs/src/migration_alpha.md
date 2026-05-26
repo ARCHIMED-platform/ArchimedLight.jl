@@ -32,7 +32,7 @@ series = run_light(sim, meteo)
 Old:
 
 ```julia
-scene = prepare_scene(mtg; scene_xy_bounds=bounds)
+scene = PlantGeom.prepare_scene(mtg; scene_xy_bounds=bounds)
 models = prepare_models(groups)
 step = run_light_step(scene, models, row, options)
 ```
@@ -40,7 +40,7 @@ step = run_light_step(scene, models, row, options)
 New:
 
 ```julia
-scene = prepare_scene(mtg; scene_xy_bounds=bounds)
+scene = PlantGeom.prepare_scene(mtg; scene_xy_bounds=bounds)
 models = models_for(
     "coffee" => (
         "Leaf" => translucent(par=0.15, nir=0.90),
@@ -51,10 +51,12 @@ sim = LightSimulation(scene, models; options=options)
 step = run_light(sim, row)
 ```
 
-You can also build the scene with `light_scene`:
+You can also build the scene with `PlantGeom.make_scene`:
 
 ```julia
-scene = light_scene(domain=bounds) do s
+using PlantGeom
+
+scene = make_scene(domain=bounds) do s
     add_plant!(s, plant_mtg; group="coffee", id=1)
     add_ground!(s; group="soil", type="ground")
 end

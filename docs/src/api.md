@@ -16,7 +16,9 @@ series = run_light(sim, meteo)
 Interactive run:
 
 ```julia
-scene = light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+using PlantGeom
+
+scene = make_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
     add_plant!(s, "plant.opf"; group="coffee", id=1)
     add_ground!(s; group="soil", type="ground")
 end
@@ -57,25 +59,25 @@ read_meteo(path_or_table)
 Use these when inputs are built in Julia:
 
 ```julia
-light_scene(f; domain, source_path="interactive.scene")
-add_plant!(builder, mtg_or_path; group, id, at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0))
-add_object!(builder, mtg_mesh_or_path; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0))
-add_ground!(builder; z=0.0, nx=9, ny=9, group="pavement", type="Cobblestone")
-prepare_scene(mtg; source_path="interactive.opf", scene_xy_bounds=nothing, relabel_ids=false)
+PlantGeom.make_scene(f; domain, source_path="interactive.scene", kwargs...)
+PlantGeom.add_plant!(builder, mtg_or_path; group, id, at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0))
+PlantGeom.add_object!(builder, mtg_mesh_or_path; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0))
+PlantGeom.add_ground!(builder; z=0.0, nx=9, ny=9, group="pavement", type="Cobblestone")
+PlantGeom.prepare_scene(mtg; source_path="interactive.opf", scene_xy_bounds=nothing, relabel_ids=false)
 models_for(group => (type => model, ...), ...)
 translucent(; par, nir, transparency=0.0)
 virtual_sensor()
 emitter(; radiance, par=0.48, nir=0.52)
 ```
 
-`add_plant!` is the plant-named wrapper. `add_object!` is the general placement
+`PlantGeom.add_plant!` is the plant-named wrapper. `PlantGeom.add_object!` is the general placement
 helper for MTGs, `GeometryBasics` meshes, `.opf`, and `.gwa` files. For mesh
 files such as `.obj` or `.ply`, use MeshIO/FileIO to load the mesh first:
 
 ```julia
 using FileIO, MeshIO
 mesh = load("sensor.obj")
-add_object!(builder, mesh; group="sensor", type="panel", id=10)
+PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10)
 ```
 
 Both placement helpers accept `at`, `scale`, `rotate`, `deg`, and OPS-style
@@ -84,20 +86,20 @@ Both placement helpers accept `at`, `scale`, `rotate`, `deg`, and OPS-style
 Tuple rotations use fixed X, then Y, then Z order:
 
 ```julia
-add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(10, 20, 30), deg=true)
+PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(10, 20, 30), deg=true)
 ```
 
 Named-tuple rotations preserve the field order, which is useful when you need a
 specific Euler sequence:
 
 ```julia
-add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(y=20, z=30, x=10), deg=true)
+PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(y=20, z=30, x=10), deg=true)
 ```
 
-`add_ground!` and `write_scene` also work on prepared scenes:
+`PlantGeom.add_ground!` and `write_scene` also work on prepared scenes:
 
 ```julia
-add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="pavement", type="Cobblestone")
+PlantGeom.add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="pavement", type="Cobblestone")
 write_scene(path, scene)
 ```
 

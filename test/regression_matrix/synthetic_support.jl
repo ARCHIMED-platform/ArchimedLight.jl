@@ -1,7 +1,9 @@
 using Dates
 using GeometryBasics
 using LinearAlgebra: cross, norm
+using MultiScaleTreeGraph
 using OrderedCollections: OrderedDict
+using PlantGeom
 using StaticArrays: SVector
 
 function _synthetic_options(;
@@ -71,7 +73,11 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
     faces = PlantGeom.Face3[]
     face2node = Int[]
-    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
+    nodes = Dict{Int,PlantGeom.SceneNodeData{Float64}}()
+    mtg = MultiScaleTreeGraph.Node(
+        MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 0, 0),
+        Dict{Symbol,Any}(),
+    )
 
     xs = Float64[]
     ys = Float64[]
@@ -104,15 +110,36 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
             (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
             (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
         )
-        group = String(get(spec, :group, "plate"))
-        type_name = String(get(spec, :type, "plate"))
         source_topology_id = Int(get(spec, :source_topology_id, i))
-        object_id = Int(get(spec, :object_id, source_topology_id))
-        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
+        nodes[i] = PlantGeom.SceneNodeData(area, barycenter, source_topology_id)
+        type_name = String(get(spec, :type, "plate"))
+        group = String(get(spec, :group, "plate"))
+        mesh = GeometryBasics.Mesh(
+            GeometryBasics.Point{3,Float32}[
+                GeometryBasics.Point{3,Float32}(Float32(p1[1]), Float32(p1[2]), Float32(p1[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p2[1]), Float32(p2[2]), Float32(p2[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p3[1]), Float32(p3[2]), Float32(p3[3])),
+                GeometryBasics.Point{3,Float32}(Float32(p4[1]), Float32(p4[2]), Float32(p4[3])),
+            ],
+            PlantGeom.Face3[(1, 2, 3), (1, 3, 4)],
+        )
+        MultiScaleTreeGraph.Node(
+            i,
+            mtg,
+            MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type_name), i, 1),
+            Dict{Symbol,Any}(
+                :geometry => PlantGeom.Geometry(ref_mesh=PlantGeom.RefMesh("synthetic_$(i)", mesh)),
+                :group => group,
+                :functional_group => group,
+                :type => type_name,
+                :object_id => Int(get(spec, :object_id, source_topology_id)),
+                :source_topology_id => source_topology_id,
+            ),
+        )
     end
 
-    ArchimedLight.SceneGeometry(
-        nothing,
+    PlantGeom.SceneGeometry(
+        mtg,
         GeometryBasics.Mesh(points, faces),
         face2node,
         nodes,

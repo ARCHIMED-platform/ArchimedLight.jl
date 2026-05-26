@@ -77,7 +77,7 @@ outputs (`*_q`, J component^-1 timestep^-1), plus optional extra-waveband
 energies when they were carried through the pipeline.
 """
 function integrate_light(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     first::FirstOrderResult,
     scat::Union{Nothing,ScatteringResult},
@@ -220,7 +220,7 @@ end
 
 function _build_sector_responses(
     prepared::PreparedInterceptionData,
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     options::LightOptions,
@@ -324,13 +324,13 @@ function _build_sector_responses(
     )
 end
 
-function _build_sector_responses(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
+function _build_sector_responses(scene::PlantGeom.SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
     prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true)
     return _build_sector_responses(prepared, scene, models, turtle, options)
 end
 
 function _sky_fraction_from_sector_responses(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     responses::SectorResponsesCache,
     turtle::TurtleGrid,
 )
@@ -355,7 +355,7 @@ function _sky_fraction_from_sector_responses(
 end
 
 function _compute_sky_fraction(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     options::LightOptions;
@@ -424,7 +424,7 @@ end
 
 function _stream_first_order_with_scattering_topology(
     prepared::PreparedInterceptionData,
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
@@ -831,7 +831,7 @@ function _default_scattering_factor_local(options::LightOptions, band::String)
 end
 
 function _compute_scattering_with_flags(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
@@ -891,12 +891,12 @@ function _compute_scattering_with_flags(
     return ScatteringResult(SpectralNodeValues(par_only.added_power_per_node, Dict{Int,Float64}()), par_only.iterations, par_only.converged)
 end
 
-function _interception_area_per_node_local(scene::SceneGeometry, models::LightModels, options::LightOptions)
+function _interception_area_per_node_local(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
     return _interception_area_per_node_from_geometry(geometry)
 end
 
-function _node_absorptance_per_band(scene::SceneGeometry, models::LightModels, options::LightOptions, band::String)
+function _node_absorptance_per_band(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions, band::String)
     geometry = _scene_geometry_for_interception(scene, models, options)
     virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     return _node_absorptance_per_band_from_geometry(scene, models, options, geometry, virtual_nodes, band)
@@ -932,7 +932,7 @@ function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, 
 end
 
 function _compute_extra_band_light(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     meteo_row,
     sky::SkyState,
@@ -1031,7 +1031,7 @@ mutable struct TurtleLightCacheEntry
 end
 
 mutable struct LightSimulationCache
-    scene::SceneGeometry
+    scene::PlantGeom.SceneGeometry
     models::LightModels
     options::LightOptions
     interception_backend::Any
@@ -1125,7 +1125,7 @@ function _cache_mode_for(
 end
 
 function prepare_light_cache(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions;
     interception_backend=:raster_cpu,
@@ -1187,7 +1187,7 @@ function cache_summary(cache::LightSimulationCache)
 end
 
 mutable struct LightSimulation
-    scene::SceneGeometry
+    scene::PlantGeom.SceneGeometry
     models::LightModels
     options::LightOptions
     interception_backend::Any
@@ -1205,7 +1205,7 @@ Create a reusable light simulation. Expensive geometry preparation and radiation
 caches are built lazily by [`run_light`](@ref).
 """
 function LightSimulation(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models;
     options::LightOptions=LightOptions(),
     interception_backend=:raster_cpu,
@@ -1272,7 +1272,7 @@ end
 Replace the scene and immediately release all prepared data tied to the old
 scene. The next `run_light` call prepares the new scene lazily.
 """
-function update_scene!(sim::LightSimulation, new_scene::SceneGeometry)
+function update_scene!(sim::LightSimulation, new_scene::PlantGeom.SceneGeometry)
     _drop_light_cache!(sim)
     sim.scene = new_scene
     return sim
@@ -1304,7 +1304,7 @@ function cache_summary(sim::LightSimulation)
     return cache_summary(sim.cache)
 end
 
-function check_scene(scene::SceneGeometry)
+function check_scene(scene::PlantGeom.SceneGeometry)
     errors = String[]
     warnings = String[]
     infos = String[]
@@ -1319,7 +1319,7 @@ function check_scene(scene::SceneGeometry)
     return ValidationReport(errors, warnings, infos)
 end
 
-function _missing_model_pairs(scene::SceneGeometry, models::LightModels)
+function _missing_model_pairs(scene::PlantGeom.SceneGeometry, models::LightModels)
     missing = Set{Tuple{String,String}}()
     ignored = _ignored_group_types(models)
     for nid in unique(scene.face2node)
@@ -1349,7 +1349,7 @@ function _missing_models_snippet(missing::Vector{Tuple{String,String}})
     return join(lines, "\n")
 end
 
-function check_models(scene::SceneGeometry, models)
+function check_models(scene::PlantGeom.SceneGeometry, models)
     lm = prepare_models(models)
     missing = _missing_model_pairs(scene, lm)
     errors = String[]
@@ -1361,7 +1361,15 @@ function check_models(scene::SceneGeometry, models)
     return ValidationReport(errors, String[], infos)
 end
 
-function summarize_scene(scene::SceneGeometry; models=nothing)
+"""
+    summarize_scene(scene; models=nothing)
+
+Return a `SceneSummary` describing the prepared scene domain, geometric nodes,
+faces, group/type pairs, object ids, and missing model pairs.
+
+Pass `models` to include a model coverage check in the summary.
+"""
+function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
     buckets = Dict{Tuple{String,String},NamedTuple}()
     face_counts = Dict{Int,Int}()
     for nid in scene.face2node
@@ -1458,6 +1466,12 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
     return ValidationReport(errors, warnings, infos)
 end
 
+"""
+    summarize_meteo(meteo; options=LightOptions())
+
+Return a `MeteoSummary` describing row count, columns, timestep duration,
+radiation inputs, and the detected solar-geometry path for a meteo table or row.
+"""
 function summarize_meteo(meteo; options::LightOptions=LightOptions())
     warnings = String[]
     rows = try
@@ -1515,7 +1529,7 @@ function check_simulation(sim::LightSimulation)
     _merge_reports(check_scene(sim.scene), check_models(sim.scene, sim.models))
 end
 
-function check_simulation(scene::SceneGeometry, meteo; models, options::LightOptions=LightOptions())
+function check_simulation(scene::PlantGeom.SceneGeometry, meteo; models, options::LightOptions=LightOptions())
     _merge_reports(check_scene(scene), check_models(scene, models), check_meteo(meteo; options=options))
 end
 
@@ -2036,7 +2050,7 @@ When using `read_config`, this option is enabled by requesting `sky_fraction`
 in `component_variables` or `opf_variables`.
 """
 function run_light_step(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     meteo_row,
     options::LightOptions;
@@ -2073,7 +2087,7 @@ When using `read_config`, this option is enabled by requesting `sky_fraction`
 in `component_variables` or `opf_variables`.
 """
 function run_light_series(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     meteo::MeteoTable,
     options::LightOptions;
@@ -2143,7 +2157,7 @@ function run_light_series(
 end
 
 function run_light_series(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     meteo::PlantMeteo.TimeStepTable,
     options::LightOptions;
@@ -2164,7 +2178,7 @@ function run_light_series(
 end
 
 function run_light_series(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     meteo,
     options::LightOptions;

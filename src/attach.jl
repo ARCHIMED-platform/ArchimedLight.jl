@@ -35,12 +35,12 @@ function _attach_node_values!(
     return mtg
 end
 
-function _geometry_node_ids(scene::SceneGeometry)
+function _geometry_node_ids(scene::PlantGeom.SceneGeometry)
     Set{Int}(keys(scene.nodes))
 end
 
-function _node_field(scene::SceneGeometry, step::LightStepResult, field::Symbol)
-    field == :area && return node_areas(scene)
+function _node_field(scene::PlantGeom.SceneGeometry, step::LightStepResult, field::Symbol)
+    field == :area && return PlantGeom.node_areas(scene)
     return _budget_node_field(step, field)
 end
 
@@ -86,7 +86,7 @@ Only geometry nodes present in the prepared scene are updated. Missing node ids
 receive `fill_value`.
 """
 function attach_node_values!(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     attr::Symbol,
     values::AbstractDict{<:Integer};
     fill_value=nothing,
@@ -168,7 +168,7 @@ attach_light_step!(
 `sky_fraction: true` in `component_variables` or `opf_variables`.
 """
 function attach_light_step!(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     step::LightStepResult;
     fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
@@ -240,13 +240,13 @@ attached vectors.
 `sky_fraction: true` in `component_variables` or `opf_variables`.
 """
 function attach_light_series!(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     steps::AbstractVector{<:LightStepResult};
     fields::AbstractVector{Symbol}=[:incident_par_flux],
     names::AbstractDict{Symbol,Symbol}=Dict{Symbol,Symbol}(),
     fill_value::Float64=NaN,
 )
-    node_ids = scene_node_ids(scene)
+    node_ids = PlantGeom.scene_node_ids(scene)
     for field in fields
         by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
         for step in steps

@@ -37,7 +37,10 @@ repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
 config = joinpath(repo_root, "example_2", "config.yml")
 sim, meteo = read_simulation(config)
 scene = sim.scene
-step = run_light(sim, first(meteo))
+models = sim.models
+options = sim.options
+row = first(meteo)
+step = run_light(sim, row)
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -53,7 +56,8 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 
 ```@example getting_started
 sky_options = LightOptions(options; include_sky_fraction=true)
-step_with_sky = run_light_step(scene, models, row, sky_options)
+sim_with_sky = LightSimulation(scene, models; options=sky_options)
+step_with_sky = run_light(sim_with_sky, row)
 attach_light_step!(
     scene,
     step_with_sky;
@@ -133,6 +137,7 @@ meteo = MeteoTable(
             date=Date(2020, 6, 21),
             hour_start=Time("06:00:00") + Hour(i-1),
             duration=Hour(1),
+            latitude=15.0,
             clearness=0.6,
         )
     for i in 1:10],

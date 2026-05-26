@@ -1,7 +1,6 @@
 module ArchimedLight
 
 import PlantGeom
-import PlantGeom: add_object!, add_plant!
 import MultiScaleTreeGraph
 
 include("types.jl")
@@ -15,8 +14,6 @@ include("attach.jl")
 include("visualization.jl")
 
 export MeteoTable
-export SceneNodeData
-export SceneGeometry
 export LightRenderGeometry
 export LightModels
 export GroupModel
@@ -25,11 +22,6 @@ export InterceptionModel
 export EmitterModel
 export OpticalProperties
 export LightOptions
-export light_scene
-export scene_node
-export scene_node_ids
-export node_areas
-export node_barycenters
 export InterceptionBackend, RasterCPUBackend
 export ScatteringBackend, RaycastScatteringBackend, LinksScatteringBackend
 export SkyState

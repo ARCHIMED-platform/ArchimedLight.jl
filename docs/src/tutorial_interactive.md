@@ -1,11 +1,11 @@
 # Tutorial: Interactive Workflow
 
-This tutorial shows the in-memory workflow: build or modify a plant directly in Julia, convert it to a `SceneGeometry`, then run the same light pipeline as in the file-based workflow.
+This tutorial shows the in-memory workflow: build or modify a plant directly in Julia, convert it to a `PlantGeom.SceneGeometry`, then run the same light pipeline as in the file-based workflow.
 
 The key bridge is:
 
 - `PlantGeom` builds or edits an MTG with geometry
-- `prepare_scene` turns that MTG into the dense scene representation used by `ArchimedLight.jl`
+- `PlantGeom.prepare_scene` turns that MTG into the dense scene representation used by `ArchimedLight.jl`
 
 ```@setup interactive_workflow
 using CairoMakie
@@ -111,13 +111,13 @@ plantviz(scene_mtg, figure=(size=(820, 560),))
 
 ## Convert To SceneGeometry
 
-The MTG is not yet in the format needed by `ArchimedLight.jl`. We need to convert it to a `SceneGeometry` with the `prepare_scene` function:
+The MTG is not yet in the format needed by `ArchimedLight.jl`. We need to convert it to a `PlantGeom.SceneGeometry` with the `PlantGeom.prepare_scene` function:
 
 ```@example interactive_workflow
-scene = prepare_scene(scene_mtg;scene_xy_bounds=(-0.8, -0.8, 0.8, 0.8))
+scene = PlantGeom.prepare_scene(scene_mtg;scene_xy_bounds=(-0.8, -0.8, 0.8, 0.8))
 ```
 
-`prepare_scene` computes the merged mesh, node areas, barycentres, and node-to-face mapping needed by the light solver. The `scene_xy_bounds` are used for the rasterization stage, so they should be chosen to fit the plant geometry.
+`PlantGeom.prepare_scene` computes the merged mesh, node areas, barycentres, and node-to-face mapping needed by the light solver. The `scene_xy_bounds` are used for the rasterization stage, so they should be chosen to fit the plant geometry.
 
 ## Add Models
 
@@ -167,7 +167,7 @@ That pattern is convenient for synthetic scenes, tests, and gradual model setup.
 
 ## Add Ground Explicitly
 
-The ground can be added as a special case of scene geometry with `add_ground!`. This is useful when:
+The ground can be added as a special case of scene geometry with `PlantGeom.add_ground!`. This is useful when:
 
 - you want to include the ground in the directional visibility and scattering calculations for better realism near the soil
 - you want to visualize the soil interception with an explicit ground patch
@@ -258,5 +258,5 @@ fig
 ## Practical Advice
 
 - pass `scene_xy_bounds=` explicitly when your scene was not read from an `.ops`
-- add ground explicitly with `add_ground!` when you want inspectable paving or better scattering realism near the soil
+- add ground explicitly with `PlantGeom.add_ground!` when you want inspectable paving or better scattering realism near the soil
 - use `attach_light_step!` once you want to visualize the results through `PlantGeom`

@@ -7,11 +7,11 @@ The light solver needs a scene description with four kinds of information:
 - per-component metadata used for model matching
 - stable node ids that let outputs be traced back to the original scene
 
-Historically that information often comes from `.ops`, `.opf`, and `.gwa` files. In an interactive workflow, the same information can be created directly in Julia and passed to `prepare_scene`.
+Historically that information often comes from `.ops`, `.opf`, and `.gwa` files. In an interactive workflow, the same information can be created directly in Julia and passed to `PlantGeom.prepare_scene`.
 
 ## What Matters In A Scene
 
-Whatever the source format, the prepared [`SceneGeometry`](@ref) used by the
+Whatever the source format, the prepared `PlantGeom.SceneGeometry` used by the
 solver must be able to answer these questions:
 
 - what horizontal domain should be rasterized?
@@ -23,14 +23,16 @@ solver must be able to answer these questions:
 
 ## Recommended Interactive Builder
 
-For new interactive workflows, start with `light_scene`:
+For new interactive workflows, start with `PlantGeom.make_scene`:
 
 ```julia
+using ArchimedLight
+using PlantGeom
 using FileIO, MeshIO
 
 sensor_mesh = load("sensor.obj")
 
-scene = light_scene(domain=(0.0, 0.0, 2.0, 2.0)) do s
+scene = make_scene(domain=(0.0, 0.0, 2.0, 2.0)) do s
     add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0), rotate=(z=15.0,), deg=true)
     add_plant!(s, plant_mtg; group="banana", id=2, at=(1.0, 0.0, 0.0), scale=0.8)
     add_object!(s, sensor_mesh; group="sensor", type="panel", id=10, at=(0.5, 0.0, 1.2), scale=0.05)
@@ -38,7 +40,7 @@ scene = light_scene(domain=(0.0, 0.0, 2.0, 2.0)) do s
 end
 ```
 
-This creates a prepared `SceneGeometry`. The important user-facing concepts are:
+This creates a prepared `PlantGeom.SceneGeometry`. The important user-facing concepts are:
 
 - `domain`: the XY plot footprint used by projection and toricity
 - `add_plant!`: imports or places one plant, and assigns its functional group and object id
@@ -75,7 +77,7 @@ sensor_mesh = load("sensor.obj")
 add_object!(s, sensor_mesh; group="sensor", type="panel", id=10)
 ```
 
-If you already have a complete MTG, you can still use `prepare_scene` directly.
+If you already have a complete MTG, you can still use `PlantGeom.prepare_scene` directly.
 
 ## 1. Plot Domain
 
@@ -96,10 +98,10 @@ This is what `read_scene` uses to recover the scene XY bounds.
 
 ### Dynamically In Julia
 
-In a dynamic workflow, the equivalent is `scene_xy_bounds=` in `prepare_scene`:
+In a dynamic workflow, the equivalent is `scene_xy_bounds=` in `PlantGeom.prepare_scene`:
 
 ```julia
-scene = prepare_scene(
+scene = PlantGeom.prepare_scene(
     mtg;
     scene_xy_bounds=(0.0, 0.0, 2.0, 2.0),
 )
@@ -108,14 +110,14 @@ scene = prepare_scene(
 This is the direct equivalent of the `.ops` terrain rectangle.
 
 If you want to add explicit soil or paving later on, the same bounds can also be
-reused by `add_ground!`:
+reused by `PlantGeom.add_ground!`:
 
 ```julia
 add_ground!(
     scene;
     nx=20, # Number of tiles in X direction
     ny=20, # Number of tiles in Y direction
-    xy_bounds=(0.0, 0.0, 2.0, 2.0), # Define the domain here if not already defined in prepare_scene
+    xy_bounds=(0.0, 0.0, 2.0, 2.0), # Define the domain here if not already defined in PlantGeom.prepare_scene
     group="pavement",
     type="Cobblestone",
 )
@@ -195,7 +197,7 @@ plant[:functional_group] = "coffee"
 ```
 
 This can be attached at the plant level or directly on geometric nodes,
-depending on how your MTG is organized. What matters is that `prepare_scene`
+depending on how your MTG is organized. What matters is that `PlantGeom.prepare_scene`
 can recover the right group for each geometric component.
 
 Example with two plants carrying different groups:
@@ -220,7 +222,7 @@ from explicit type metadata stored on the geometric nodes.
 
 ### Dynamically In Julia
 
-In a dynamic workflow, `prepare_scene` derives the type from:
+In a dynamic workflow, `PlantGeom.prepare_scene` derives the type from:
 
 1. explicit type-like attributes such as `:type`
 2. otherwise the node symbol
@@ -279,23 +281,23 @@ ids:
 leaf[:source_topology_id] = 42
 ```
 
-If you do not provide them, `prepare_scene` and `add_ground!` create consistent
+If you do not provide them, `PlantGeom.prepare_scene` and `PlantGeom.add_ground!` create consistent
 fallback ids automatically.
 
 ## 7. The Runtime Representation
 
-Once the scene metadata and geometry are in place, `prepare_scene` converts the
+Once the scene metadata and geometry are in place, `PlantGeom.prepare_scene` converts the
 original MTG into the dense representation used by the solver:
 
 ```julia
-scene = prepare_scene(
+scene = PlantGeom.prepare_scene(
     mtg;
     source_path="interactive.opf",
     scene_xy_bounds=(-1.0, -1.0, 1.0, 1.0),
 )
 ```
 
-The resulting [`SceneGeometry`](@ref) stores:
+The resulting `PlantGeom.SceneGeometry` stores:
 
 - one merged mesh for efficient geometric processing
 - a `face2node` map linking triangles back to scene node ids
@@ -343,7 +345,7 @@ type, often something like `(group="pavement", type="Cobblestone")`.
 You can obtain it in two ways:
 
 - from files, for example with automatic paving materialized by `read_simulation`
-- dynamically with `add_ground!` on an existing prepared scene
+- dynamically with `PlantGeom.add_ground!` on an existing prepared scene
 
 The dynamic route is often preferable when you want explicit inspectable ground
 geometry in the final MTG.

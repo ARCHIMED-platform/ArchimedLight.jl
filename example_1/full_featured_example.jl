@@ -210,7 +210,7 @@ function main()
     # Map intercepted PAR (per-step quantity) back to MTG nodes for visualization.
     par_q_by_source_topology = Dict{Int,Float64}()
     for (nid, q) in step.budget.incident_energy.total.par
-        node = scene_node(scene, nid)
+        node = PlantGeom.scene_node(scene, nid)
         node === nothing && continue
         par_q_by_source_topology[node.source_topology_id] = Float64(q)
     end

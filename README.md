@@ -73,11 +73,13 @@ With the default options, that means:
 You can also build everything in Julia:
 
 ```julia
+using ArchimedLight
+using PlantGeom
 using FileIO, MeshIO
 
 sensor_mesh = load("sensor.obj")
 
-scene = light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+scene = make_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
     add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0), rotate=(z=25.0,), deg=true)
     add_object!(s, sensor_mesh; group="sensor", type="panel", id=10, at=(0.5, 0.0, 1.2), scale=0.1)
     add_ground!(s; group="soil", type="ground", nx=20, ny=20)
@@ -123,7 +125,7 @@ julia --project=. example_1/full_featured_example.jl
 ## Stage flexibility
 - `read_simulation("config.yml")` is the convenience entrypoint for file-driven workflows and returns `sim, meteo`.
 - You can call each stage independently through the module (`ArchimedLight.compute_sky`, `ArchimedLight.build_turtle`, `ArchimedLight.compute_first_order`, `ArchimedLight.compute_scattering`, `ArchimedLight.integrate_light`, ...).
-- File-based and in-memory workflows share the same runtime path: `read_scene(...)`, `prepare_scene(...)`, and `light_scene(...)` all produce `SceneGeometry`, while `read_models(...)`, `prepare_models(...)`, and `models_for(...)` produce `LightModels`.
+- File-based and in-memory workflows share the same runtime path: `read_scene(...)`, `PlantGeom.prepare_scene(...)`, and `PlantGeom.make_scene(...)` all produce `PlantGeom.SceneGeometry`, while `read_models(...)`, `prepare_models(...)`, and `models_for(...)` produce `LightModels`.
 - `compute_sky` follows the ARCHIMED clearness/global conversion and DeJong hourly direct/diffuse partitioning.
 - `compute_sky` uses substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
@@ -132,7 +134,7 @@ julia --project=. example_1/full_featured_example.jl
 - `pixel_size` is validated with ARCHIMED-compatible bounds (`0 < pixel_size <= 0.5` meters).
 - `cache_pixel_table=true` enables an on-disk direction projection cache under the interception cache directory.
 - `build_turtle` follows the canonical ARCHIMED sector counts `1, 6, 16, 46, 136, 406`.
-- `add_ground!(scene; ...)` is an explicit scene-editing step, so inspectable ground is ordinary geometry in the exported MTG.
+- `PlantGeom.add_ground!(scene; ...)` is an explicit scene-editing step, so inspectable ground is ordinary geometry in the exported MTG.
 - Virtual sensors are declared on the interception model (`sensor=true`, or legacy `model: VirtualSensor` in YAML). They receive light but stay transparent and non-absorbing in the simulation.
 
 ## Testing

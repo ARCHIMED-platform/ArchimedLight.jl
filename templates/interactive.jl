@@ -4,7 +4,7 @@ using PlantGeom
 
 bounds = (-1.0, -1.0, 1.0, 1.0)
 
-scene = light_scene(domain=bounds) do s
+scene = make_scene(domain=bounds) do s
     add_plant!(s, "scene/plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0))
     add_ground!(s; group="soil", type="ground", nx=20, ny=20)
 end

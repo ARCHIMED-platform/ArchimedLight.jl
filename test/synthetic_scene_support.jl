@@ -116,7 +116,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     points = GeometryBasics.Point{3,Float32}[]
     faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
-    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
+    nodes = Dict{Int,PlantGeom.SceneNodeData{Float64}}()
     mtg = MultiScaleTreeGraph.Node(
         MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 0, 0),
         Dict{Symbol,Any}(),
@@ -158,7 +158,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         object_id = Int(get(spec, :object_id, source_topology_id))
         group = String(get(spec, :group, "plate"))
         type_name = String(get(spec, :type, "plate"))
-        nodes[nid] = ArchimedLight.SceneNodeData(area, barycenter, source_topology_id)
+        nodes[nid] = PlantGeom.SceneNodeData(area, barycenter, source_topology_id)
         mesh = GeometryBasics.Mesh(
             GeometryBasics.Point{3,Float32}[
                 GeometryBasics.Point{3,Float32}(Float32(p1[1]), Float32(p1[2]), Float32(p1[3])),
@@ -183,7 +183,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
         )
     end
 
-    ArchimedLight.SceneGeometry(
+    PlantGeom.SceneGeometry(
         mtg,
         GeometryBasics.Mesh(points, faces),
         face2node,

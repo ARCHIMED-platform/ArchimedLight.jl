@@ -1,5 +1,4 @@
 import Dates
-import GeometryBasics
 import LinearAlgebra: cross, norm
 import MultiScaleTreeGraph
 import OrderedCollections: OrderedDict
@@ -8,22 +7,6 @@ import PlantMeteo
 import StaticArrays
 import Tables
 import YAML
-
-"""
-    LightSceneBuilder
-
-Mutable helper used by `light_scene` to assemble an MTG-backed scene before it
-is converted to [`SceneGeometry`](@ref).
-"""
-mutable struct LightSceneBuilder
-    mtg
-    domain::Union{Nothing,NTuple{4,Float64}}
-    source_path::String
-    next_node_id::Int
-end
-
-LightSceneBuilder(mtg, domain::Union{Nothing,NTuple{4,Float64}}, source_path::String) =
-    LightSceneBuilder(mtg, domain, source_path, MultiScaleTreeGraph.max_id(mtg) + 1)
 
 function _as_bool(x, default::Bool)
     x === nothing && return default
@@ -346,24 +329,12 @@ function _config_ground_spec(models::LightModels)
     return (count=count, group=group_name, type=type_name)
 end
 
-function _scene_has_group_type(scene::SceneGeometry, group::AbstractString, type::AbstractString)
+function _scene_has_group_type(scene::PlantGeom.SceneGeometry, group::AbstractString, type::AbstractString)
     any(nid -> _scene_group(scene, nid, "") == group && _scene_type(scene, nid, "") == type, keys(scene.nodes))
 end
 
-function _paving_tile_mesh(vertices, faces_for_tile)
-    used = sort!(unique(vcat([[Int(f[1]), Int(f[2]), Int(f[3])] for f in faces_for_tile]...)))
-    remap = Dict{Int,Int}(old => new for (new, old) in enumerate(used))
-    tile_points = GeometryBasics.Point3f[
-        GeometryBasics.Point3f(Float32(vertices[idx][1]), Float32(vertices[idx][2]), Float32(vertices[idx][3])) for idx in used
-    ]
-    tile_faces = PlantGeom.Face3[
-        PlantGeom.Face3(remap[Int(f[1])], remap[Int(f[2])], remap[Int(f[3])]) for f in faces_for_tile
-    ]
-    return GeometryBasics.Mesh(tile_points, tile_faces)
-end
-
 function _materialize_paving!(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     count::Int;
     xy_bounds=nothing,
     group::AbstractString="pavement",
@@ -374,42 +345,20 @@ function _materialize_paving!(
     bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
     bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
     xmin, ymin, xmax, ymax = bounds
-    plotbox = (
-        origin_x=Float64(xmin),
-        origin_y=Float64(ymin),
-        xdim=Float64(xmax - xmin),
-        ydim=Float64(ymax - ymin),
+    plot_x = Float64(Float32(Float32(xmax) - Float32(xmin)))
+    plot_y = Float64(Float32(Float32(ymax) - Float32(ymin)))
+    cobble_edge = sqrt((plot_x * plot_y) / max(count, 1))
+    nx = max(1, floor(Int, plot_x / cobble_edge))
+    ny = max(1, floor(Int, plot_y / cobble_edge))
+    PlantGeom.add_ground!(
+        scene;
+        z=0.005,
+        nx=nx,
+        ny=ny,
+        xy_bounds=(Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax)),
+        group=group,
+        type=type,
     )
-    first_node = isempty(scene.nodes) ? 1 : (maximum(keys(scene.nodes)) + 1)
-    vertices, faces, face2node, _ = _paving_mesh(plotbox, count, first_node)
-    faces_by_node = Dict{Int,Vector{PlantGeom.Face3}}()
-    for (face, nid) in zip(faces, face2node)
-        push!(get!(faces_by_node, nid, PlantGeom.Face3[]), face)
-    end
-
-    root_scale = MultiScaleTreeGraph.scale(scene.mtg)
-    for nid in sort!(collect(keys(faces_by_node)))
-        mesh = _paving_tile_mesh(vertices, faces_by_node[nid])
-        ref_mesh = PlantGeom.RefMesh("$(group)_$(nid)", mesh)
-        MultiScaleTreeGraph.Node(
-            nid,
-            scene.mtg,
-            MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), nid, root_scale + 1),
-            Dict{Symbol,Any}(
-                :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
-                :group => String(group),
-                :functional_group => String(group),
-                :type => String(type),
-                :object_id => -1,
-                :source_topology_id => nid,
-            ),
-        )
-    end
-
-    scene.scene_xy_bounds = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
-    _drop_scene_surface_geometry!(scene.mtg)
-    _refresh_ref_mesh_registry!(scene.mtg)
-    _refresh_scene!(scene)
 end
 
 """
@@ -460,480 +409,11 @@ function _triangle_area3d(p1, p2, p3)
     0.5 * norm(cross(v1, v2))
 end
 
-@inline _node_attr(node, key::Symbol) = haskey(node, key) ? node[key] : nothing
-
-function _as_int_or(x, default::Int)
-    x === nothing && return default
-    x isa Integer && return Int(x)
-    x isa Number && return round(Int, x)
-    if x isa String
-        try
-            return parse(Int, strip(x))
-        catch
-            return default
-        end
-    end
-    return default
-end
-
-function _node_object_id(node, default::Int)
-    for key in (:plantID, :plant_id, :item_id, :itemID)
-        v = _node_attr(node, key)
-        v === nothing && continue
-        return _as_int_or(v, default)
-    end
-    return default
-end
-
-function _node_type_name(node, default::String="")
-    for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
-        v = _node_attr(node, key)
-        v === nothing && continue
-        s = strip(string(v))
-        isempty(s) || return s
-    end
-    s = string(MultiScaleTreeGraph.symbol(node))
-    isempty(s) ? default : s
-end
-
-@inline function _is_scene_geometry_node(node)
-    PlantGeom.has_geometry(node) || return false
-    !haskey(node, :scene_dimensions)
-end
-
-function _source_topology_id(node)
-    sid = _node_attr(node, :source_topology_id)
-    sid === nothing && return nothing
-    cid = _as_int_or(sid, 0)
-    cid > 0 ? cid : nothing
-end
-
-function _collect_scene_node_metadata!(
-    node,
-    nodes,
-    per_object_component_counter,
-    current_group::String="",
-    current_object_id::Int=1,
-)
-    group = current_group
-    object_id = _node_object_id(node, current_object_id)
-    type_name = _node_type_name(node, "")
-    fg = _node_attr(node, :functional_group)
-    fg !== nothing && (group = string(fg))
-
-    if _is_scene_geometry_node(node)
-        nid = Int(MultiScaleTreeGraph.node_id(node))
-
-        sid = _source_topology_id(node)
-        if sid !== nothing
-            source_topology_id = Int(sid)
-        else
-            k = get(per_object_component_counter, object_id, 0) + 1
-            per_object_component_counter[object_id] = k
-            source_topology_id = k + 1
-        end
-        nodes[nid] = (
-            group=group,
-            type=type_name,
-            source_topology_id=source_topology_id,
-            object_id=object_id,
-        )
-    end
-
-    children = MultiScaleTreeGraph.children(node)
-    if children !== nothing
-        for ch in children
-            _collect_scene_node_metadata!(ch, nodes, per_object_component_counter, group, object_id)
-        end
-    end
-end
-
-function _build_scene_geometry(mtg, source_path::AbstractString, scene_xy_bounds::Union{Nothing,NTuple{4,Float64}})
-    merged_mesh, face2node = PlantGeom.build_merged_mesh_with_map(mtg; filter_fun=_is_scene_geometry_node)
-
-    node_meta = Dict{Int,NamedTuple{(:group, :type, :source_topology_id, :object_id),Tuple{String,String,Int,Int}}}()
-    per_object_component_counter = Dict{Int,Int}()
-    _collect_scene_node_metadata!(mtg, node_meta, per_object_component_counter)
-
-    verts = GeometryBasics.decompose(GeometryBasics.Point3, merged_mesh)
-    faces = GeometryBasics.decompose(PlantGeom.Face3, merged_mesh)
-    node_area = Dict{Int,Float64}()
-    bary_acc = Dict{Int,NTuple{3,Float64}}()
-    for (i, f) in enumerate(faces)
-        nid = face2node[i]
-        p1 = verts[f[1]]
-        p2 = verts[f[2]]
-        p3 = verts[f[3]]
-        area = _triangle_area3d(p1, p2, p3)
-        node_area[nid] = get(node_area, nid, 0.0) + area
-        cx = (p1[1] + p2[1] + p3[1]) / 3.0
-        cy = (p1[2] + p2[2] + p3[2]) / 3.0
-        cz = (p1[3] + p2[3] + p3[3]) / 3.0
-        sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
-        bary_acc[nid] = (sx + area * cx, sy + area * cy, sz + area * cz)
-    end
-
-    nodes = Dict{Int,SceneNodeData{Float64}}()
-    for (nid, area) in node_area
-        barycenter =
-            if area > 0
-                sx, sy, sz = get(bary_acc, nid, (0.0, 0.0, 0.0))
-                (sx / area, sy / area, sz / area)
-            else
-                (NaN, NaN, NaN)
-            end
-        meta = get(node_meta, nid, (group="", type="", source_topology_id=nid, object_id=-1))
-        nodes[nid] = SceneNodeData(area, barycenter, meta.group, meta.type, meta.source_topology_id, meta.object_id)
-    end
-
-    SceneGeometry(mtg, merged_mesh, face2node, nodes, String(source_path), scene_xy_bounds)
-end
-
-function _relabel_scene_node_ids!(root, next_node_id::Base.RefValue{Int})
-    MultiScaleTreeGraph.traverse!(root) do node
-        setfield!(node, :id, next_node_id[])
-        next_node_id[] += 1
-    end
-    return root
-end
-
-function _coerce_domain(domain)
-    domain === nothing && return nothing
-    length(domain) == 4 || error("Scene domain must be a 4-tuple `(xmin, ymin, xmax, ymax)`.")
-    vals = ntuple(i -> Float64(domain[i]), 4)
-    vals[3] > vals[1] || error("Scene domain must satisfy xmax > xmin.")
-    vals[4] > vals[2] || error("Scene domain must satisfy ymax > ymin.")
-    return vals
-end
-
-function _set_scene_dimensions!(mtg, bounds::NTuple{4,Float64})
-    xmin, ymin, xmax, ymax = bounds
-    mtg[:scene_dimensions] = (
-        GeometryBasics.Point3f(Float32(xmin), Float32(ymin), 0.0f0),
-        GeometryBasics.Point3f(Float32(xmax), Float32(ymax), 0.0f0),
-    )
-    return mtg
-end
-
-function _scene_builder_root(domain::Union{Nothing,NTuple{4,Float64}})
-    root = MultiScaleTreeGraph.Node(
-        MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 1, 0),
-        Dict{Symbol,Any}(),
-    )
-    domain === nothing || _set_scene_dimensions!(root, domain)
-    return root
-end
-
-function _builder_refresh!(builder::LightSceneBuilder)
-    _refresh_ref_mesh_registry!(builder.mtg)
-    builder.domain === nothing || _set_scene_dimensions!(builder.mtg, builder.domain)
-    return prepare_scene(
-        builder.mtg;
-        source_path=builder.source_path,
-        scene_xy_bounds=builder.domain,
-        relabel_ids=false,
-    )
-end
-
-function _as_tuple3(x, name::AbstractString)
-    length(x) == 3 || error("`$name` must be a 3-tuple.")
-    ntuple(i -> Float64(x[i]), 3)
-end
-
-function _rotation_is_zero(rotate)
-    if rotate isa NamedTuple
-        return all(axis -> Float64(getproperty(rotate, axis)) == 0.0, propertynames(rotate))
-    end
-    x, y, z = _as_tuple3(rotate, "rotate")
-    return x == 0.0 && y == 0.0 && z == 0.0
-end
-
-function _mesh_object_mtg(mesh; type::AbstractString, name::AbstractString="object")
-    root = MultiScaleTreeGraph.Node(
-        MultiScaleTreeGraph.MutableNodeMTG(:/, :Object, 1, 1),
-        Dict{Symbol,Any}(),
-    )
-    MultiScaleTreeGraph.Node(
-        2,
-        root,
-        MultiScaleTreeGraph.MutableNodeMTG(:+, Symbol(type), 2, 2),
-        Dict{Symbol,Any}(
-            :geometry => PlantGeom.Geometry(ref_mesh=PlantGeom.RefMesh(String(name), mesh)),
-            :type => String(type),
-        ),
-    )
-    return root
-end
-
-function _read_scene_object(path::AbstractString; type::AbstractString="object")
-    ext = lowercase(splitext(path)[2])
-    ext == ".opf" && return PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
-    ext == ".gwa" && return PlantGeom.read_gwa(path)
-    error("add_object! accepts `.opf` and `.gwa` paths directly. For mesh files such as `.obj` or `.ply`, load them with MeshIO/FileIO first, then pass the mesh to add_object!. Use read_scene for `.ops` scenes.")
-end
-
-function _annotate_scene_object!(mtg; group::AbstractString, id::Integer, file_path::AbstractString="")
-    mtg[:functional_group] = String(group)
-    mtg[:object_id] = Int(id)
-    mtg[:plantID] = Int(id)
-    isempty(file_path) || (mtg[:filePath] = String(file_path))
-    MultiScaleTreeGraph.traverse!(mtg) do node
-        haskey(node, :functional_group) || (node[:functional_group] = String(group))
-        haskey(node, :object_id) || (node[:object_id] = Int(id))
-        return true
-    end
-    return mtg
-end
-
-function _transform_scene_object!(mtg, transformation)
-    MultiScaleTreeGraph.traverse!(mtg, filter_fun=PlantGeom.has_geometry) do node
-        PlantGeom.transform_mesh!(node, transformation)
-        return true
-    end
-    return mtg
-end
-
-function _placement_transform(;
-    at=(0.0, 0.0, 0.0),
-    scale=1.0,
-    rotate=(0.0, 0.0, 0.0),
-    deg::Bool=false,
-    rotation=nothing,
-    inclination_azimut=0.0,
-    inclination_angle=0.0,
-    transform=nothing,
-)
-    if rotation !== nothing || inclination_azimut != 0.0 || inclination_angle != 0.0
-        _rotation_is_zero(rotate) || error("Use either `rotate=` or OPS-style `rotation=`/`inclination_*=` placement, not both.")
-        scale isa Real || error("OPS-style placement with `rotation=`/`inclination_*=` requires scalar `scale`.")
-        ops = PlantGeom.scene_object_transformation(
-            ;
-            at=_as_tuple3(at, "at"),
-            scale=Float64(scale),
-            rotation=rotation === nothing ? 0.0 : (deg ? deg2rad(Float64(rotation)) : Float64(rotation)),
-            inclination_azimut=deg ? deg2rad(Float64(inclination_azimut)) : Float64(inclination_azimut),
-            inclination_angle=deg ? deg2rad(Float64(inclination_angle)) : Float64(inclination_angle),
-        )
-        return transform === nothing ? ops : ops ∘ transform
-    end
-    pose = PlantGeom.pose(; scale=scale, rotate=rotate, at=at, deg=deg)
-    return transform === nothing ? pose : pose ∘ transform
-end
-
-function _add_scene_object!(
-    builder::LightSceneBuilder,
-    obj;
-    group::AbstractString,
-    id::Integer,
-    type::AbstractString="object",
-    at=(0.0, 0.0, 0.0),
-    scale=1.0,
-    rotate=(0.0, 0.0, 0.0),
-    deg::Bool=false,
-    rotation=nothing,
-    inclination_azimut=0.0,
-    inclination_angle=0.0,
-    transform=nothing,
-    file_path::AbstractString="",
-)
-    object = obj isa GeometryBasics.AbstractMesh ? _mesh_object_mtg(obj; type=type) : deepcopy(obj)
-    _annotate_scene_object!(object; group=group, id=id, file_path=file_path)
-    _transform_scene_object!(
-        object,
-        _placement_transform(
-            ;
-            at=at,
-            scale=scale,
-            rotate=rotate,
-            deg=deg,
-            rotation=rotation,
-            inclination_azimut=inclination_azimut,
-            inclination_angle=inclination_angle,
-            transform=transform,
-        ),
-    )
-    next_node_id = Ref(builder.next_node_id)
-    _relabel_scene_node_ids!(object, next_node_id)
-    builder.next_node_id = next_node_id[]
-    try
-        MultiScaleTreeGraph.addchild!(builder.mtg, object)
-    catch err
-        msg = "Could not add object to the scene builder. Use MTGs read with PlantGeom defaults (`MutableNodeMTG`, Dict attributes), pass a GeometryBasics mesh, or pass an `.opf`/`.gwa` path. For mesh files such as `.obj` or `.ply`, load them with MeshIO/FileIO first. Original error: $(sprint(showerror, err))"
-        throw(ArgumentError(msg))
-    end
-    return builder
-end
-
 """
-    add_object!(builder, object; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0), deg=false)
-    add_object!(builder, path; group, id, type="object", at=(0, 0, 0), scale=1.0, rotate=(0, 0, 0), deg=false)
-
-Add an MTG, a `GeometryBasics` mesh, or an `.opf`/`.gwa` object file to a scene
-builder. For mesh file formats such as `.obj` or `.ply`, load the mesh with
-MeshIO/FileIO first and pass the resulting mesh to `add_object!`.
-
-Placement is applied to a deep copy of the object, so later modifications to the
-    original object do not affect the scene. Use `at` for translation,
-`scale` for uniform or axis-wise scaling, and `rotate` for local axis rotations.
-Tuple rotation uses fixed `x, y, z` order; named-tuple rotation preserves field
-order, so `rotate=(y=30, z=10, x=5)` rotates around Y, then Z, then X. Pass
-`deg=true` when rotation values are in degrees.
-
-OPS-style placement is also accepted with scalar `scale`, `rotation`,
-`inclination_azimut`, and `inclination_angle`.
-"""
-function add_object!(
-    builder::LightSceneBuilder,
-    object;
-    group::AbstractString,
-    id::Integer,
-    type::AbstractString="object",
-    at=(0.0, 0.0, 0.0),
-    scale=1.0,
-    rotate=(0.0, 0.0, 0.0),
-    deg::Bool=false,
-    rotation=nothing,
-    inclination_azimut=0.0,
-    inclination_angle=0.0,
-    transform=nothing,
-)
-    _add_scene_object!(
-        builder,
-        object;
-        group=group,
-        id=id,
-        type=type,
-        at=at,
-        scale=scale,
-        rotate=rotate,
-        deg=deg,
-        rotation=rotation,
-        inclination_azimut=inclination_azimut,
-        inclination_angle=inclination_angle,
-        transform=transform,
-    )
-end
-
-function add_object!(
-    builder::LightSceneBuilder,
-    path::AbstractString;
-    group::AbstractString,
-    id::Integer,
-    type::AbstractString="object",
-    at=(0.0, 0.0, 0.0),
-    scale=1.0,
-    rotate=(0.0, 0.0, 0.0),
-    deg::Bool=false,
-    rotation=nothing,
-    inclination_azimut=0.0,
-    inclination_angle=0.0,
-    transform=nothing,
-)
-    _add_scene_object!(
-        builder,
-        _read_scene_object(path; type=type);
-        group=group,
-        id=id,
-        type=type,
-        at=at,
-        scale=scale,
-        rotate=rotate,
-        deg=deg,
-        rotation=rotation,
-        inclination_azimut=inclination_azimut,
-        inclination_angle=inclination_angle,
-        transform=transform,
-        file_path=path,
-    )
-end
-
-"""
-    add_plant!(builder, plant; group, id, kwargs...)
-    add_plant!(builder, path; group, id, kwargs...)
-
-Plant-named convenience wrapper around [`add_object!`](@ref). Use this when the
-object being placed is botanically a plant; use `add_object!` for sensors,
-lamps, supports, meshes, and other non-plant geometry.
-"""
-function add_plant!(builder::LightSceneBuilder, plant; group::AbstractString, id::Integer, kwargs...)
-    add_object!(builder, plant; group=group, id=id, kwargs...)
-end
-
-function add_plant!(builder::LightSceneBuilder, path::AbstractString; group::AbstractString, id::Integer, kwargs...)
-    add_object!(builder, path; group=group, id=id, kwargs...)
-end
-
-"""
-    light_scene(f; domain, source_path="interactive.scene")
-
-Build a scene interactively and return a prepared [`SceneGeometry`](@ref).
-"""
-function light_scene(f::Function; domain, source_path::AbstractString="interactive.scene")
-    bounds = _coerce_domain(domain)
-    builder = LightSceneBuilder(_scene_builder_root(bounds), bounds, String(source_path))
-    f(builder)
-    return _builder_refresh!(builder)
-end
-
-function light_scene(; domain, source_path::AbstractString="interactive.scene")
-    bounds = _coerce_domain(domain)
-    return _builder_refresh!(LightSceneBuilder(_scene_builder_root(bounds), bounds, String(source_path)))
-end
-
-function _scene_xy_bounds_from_mtg(mtg)
-    haskey(mtg, :scene_dimensions) || return nothing
-    dims = mtg[:scene_dimensions]
-    dims === nothing && return nothing
-    if dims isa AbstractString
-        matches = collect(eachmatch(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", dims))
-        length(matches) >= 5 || return nothing
-        values = parse.(Float64, getfield.(matches, :match))
-        return (
-            min(values[1], values[4]),
-            min(values[2], values[5]),
-            max(values[1], values[4]),
-            max(values[2], values[5]),
-        )
-    end
-    p0 = dims[1]
-    p1 = dims[2]
-    (
-        min(Float64(p0[1]), Float64(p1[1])),
-        min(Float64(p0[2]), Float64(p1[2])),
-        max(Float64(p0[1]), Float64(p1[1])),
-        max(Float64(p0[2]), Float64(p1[2])),
-    )
-end
-
-"""
-    prepare_scene(mtg; source_path="interactive.opf", scene_xy_bounds=nothing, relabel_ids=false)::SceneGeometry
-
-Convert an MTG with geometry into the dense scene representation used by the
-light solver.
-
-The returned [`SceneGeometry`](@ref) stores the merged mesh, face-to-node map,
-per-node metadata, and optional xy bounds used for paving and rasterization.
-"""
-function prepare_scene(mtg; source_path::AbstractString="interactive.opf", scene_xy_bounds=nothing, relabel_ids::Bool=false)
-    PlantGeom.prepare_scene(mtg; source_path=source_path, scene_xy_bounds=scene_xy_bounds, relabel_ids=relabel_ids)
-end
-
-function _refresh_scene!(scene::SceneGeometry)
-    scene.mtg === nothing && error("Scene refresh requires an MTG-backed scene.")
-    PlantGeom.bump_scene_version!(scene.mtg)
-    refreshed = PlantGeom.prepare_scene(scene.mtg; source_path=scene.source_path, scene_xy_bounds=scene.scene_xy_bounds, relabel_ids=false)
-    scene.merged_mesh = refreshed.merged_mesh
-    scene.face2node = refreshed.face2node
-    scene.nodes = refreshed.nodes
-    scene.scene_xy_bounds = refreshed.scene_xy_bounds
-    return scene
-end
-
-"""
-    read_scene(path)::SceneGeometry
+    read_scene(path)::PlantGeom.SceneGeometry
 
 Read a scene file (`.ops`, `.opf`, or `.gwa`) and return a prepared
-[`SceneGeometry`](@ref).
+`PlantGeom.SceneGeometry`.
 
 The scene is relabelled into a dense node-id space and immediately converted to
 the merged-mesh representation expected by the interception pipeline.
@@ -952,26 +432,10 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     PlantGeom.prepare_scene(mtg; source_path=String(path), scene_xy_bounds=PlantGeom._scene_xy_bounds_from_mtg(mtg), relabel_ids=true)
 end
 
-function _register_ref_mesh!(mtg, ref_mesh)
-    if !haskey(mtg, :ref_meshes) || !(mtg[:ref_meshes] isa AbstractDict)
-        mtg[:ref_meshes] = Dict{Int,Any}()
-    end
-    ref_meshes = mtg[:ref_meshes]
-    next_id = isempty(ref_meshes) ? 0 : (maximum(Int.(keys(ref_meshes))) + 1)
-    ref_meshes[next_id] = ref_mesh
-    return next_id
-end
-
 function _refresh_ref_mesh_registry!(mtg)
     ref_meshes = PlantGeom.get_ref_meshes(mtg)
     mtg[:ref_meshes] = Dict(i - 1 => mesh_ for (i, mesh_) in enumerate(ref_meshes))
     return mtg[:ref_meshes]
-end
-
-function _drop_scene_surface_geometry!(mtg)
-    haskey(mtg, :geometry) || return mtg
-    mtg[:geometry] = nothing
-    return mtg
 end
 
 function _normalize_source_topology_ids!(mtg)
@@ -985,107 +449,14 @@ function _normalize_source_topology_ids!(mtg)
 end
 
 """
-    add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="pavement", type="Cobblestone")
-
-Add an explicit rectangular ground paving to an MTG-backed [`SceneGeometry`](@ref).
-
-The paving is discretized into `nx * ny` tiles covering `xy_bounds` (or the
-scene xy bounds when omitted), inserted into the scene MTG, and the prepared
-scene caches are refreshed.
-"""
-function add_ground!(
-    scene::SceneGeometry;
-    z::Real=0.0,
-    nx::Int=9,
-    ny::Int=9,
-    xy_bounds=nothing,
-    group::AbstractString="pavement",
-    type::AbstractString="Cobblestone",
-)
-    scene.mtg === nothing && error("add_ground! requires an MTG-backed scene.")
-    bounds = xy_bounds === nothing ? scene.scene_xy_bounds : xy_bounds
-    bounds === nothing && error("Ground bounds are undefined. Pass `xy_bounds=` or use a scene with known bounds.")
-    xmin, ymin, xmax, ymax = bounds
-    x_edges = collect(range(Float64(xmin), Float64(xmax), length=nx + 1))
-    y_edges = collect(range(Float64(ymin), Float64(ymax), length=ny + 1))
-    root_scale = MultiScaleTreeGraph.scale(scene.mtg)
-    mtg_type = typeof(MultiScaleTreeGraph.node_mtg(scene.mtg))
-    next_id = MultiScaleTreeGraph.max_id(scene.mtg) + 1
-
-    for ix in 1:nx, iy in 1:ny
-        x0 = x_edges[ix]
-        x1 = x_edges[ix+1]
-        y0 = y_edges[iy]
-        y1 = y_edges[iy+1]
-        points = GeometryBasics.Point3f[
-            GeometryBasics.Point3f(Float32(x0), Float32(y0), Float32(z)),
-            GeometryBasics.Point3f(Float32(x1), Float32(y0), Float32(z)),
-            GeometryBasics.Point3f(Float32(x1), Float32(y1), Float32(z)),
-            GeometryBasics.Point3f(Float32(x0), Float32(y1), Float32(z)),
-        ]
-        faces = PlantGeom.Face3[PlantGeom.Face3(1, 2, 3), PlantGeom.Face3(1, 3, 4)]
-        mesh = GeometryBasics.Mesh(points, faces)
-        nid = next_id
-        next_id += 1
-        ref_mesh = PlantGeom.RefMesh("$(group)_$(nid)", mesh)
-        MultiScaleTreeGraph.Node(
-            nid,
-            scene.mtg,
-            mtg_type(:+, Symbol(type), nid, root_scale + 1),
-            Dict{Symbol,Any}(
-                :geometry => PlantGeom.Geometry(ref_mesh=ref_mesh),
-                :group => String(group),
-                :functional_group => String(group),
-                :type => String(type),
-                :object_id => -1,
-                :source_topology_id => nid,
-            ),
-        )
-    end
-
-    scene.scene_xy_bounds = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
-    _drop_scene_surface_geometry!(scene.mtg)
-    _refresh_ref_mesh_registry!(scene.mtg)
-    _refresh_scene!(scene)
-end
-
-"""
-    add_ground!(builder; z=0.0, nx=9, ny=9, group="pavement", type="Cobblestone")
-
-Add explicit ground geometry to a [`LightSceneBuilder`](@ref).
-"""
-function add_ground!(
-    builder::LightSceneBuilder;
-    z::Real=0.0,
-    nx::Int=9,
-    ny::Int=9,
-    xy_bounds=nothing,
-    group::AbstractString="pavement",
-    type::AbstractString="Cobblestone",
-)
-    bounds = xy_bounds === nothing ? builder.domain : _coerce_domain(xy_bounds)
-    bounds === nothing && error("Ground bounds are undefined. Pass `domain=` to light_scene or `xy_bounds=` to add_ground!.")
-    scene = _builder_refresh!(builder)
-    add_ground!(scene; z=z, nx=nx, ny=ny, xy_bounds=bounds, group=group, type=type)
-    builder.mtg = scene.mtg
-    builder.domain = scene.scene_xy_bounds
-    builder.next_node_id = MultiScaleTreeGraph.max_id(builder.mtg) + 1
-    return builder
-end
-
-function PlantGeom.add_ground!(builder::LightSceneBuilder; kwargs...)
-    return add_ground!(builder; kwargs...)
-end
-
-"""
     write_scene(path, scene)
 
-Write an MTG-backed [`SceneGeometry`](@ref) to `path`.
+Write an MTG-backed `PlantGeom.SceneGeometry` to `path`.
 
 Supported output formats are `.ops`, `.opf`, and `.gwa`. The function refreshes
 the reference-mesh registry and normalizes topology ids before export.
 """
-function write_scene(path::AbstractString, scene::SceneGeometry)
+function write_scene(path::AbstractString, scene::PlantGeom.SceneGeometry)
     scene.mtg === nothing && error("write_scene requires an MTG-backed scene.")
     ext = lowercase(splitext(path)[2])
     mkpath(dirname(path))

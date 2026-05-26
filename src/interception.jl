@@ -910,7 +910,7 @@ function _ignored_group_types(models::LightModels)
     out
 end
 
-function _is_ignored_node(node_id::Int, scene::SceneGeometry, ignored::Dict{String,Set{String}})
+function _is_ignored_node(node_id::Int, scene::PlantGeom.SceneGeometry, ignored::Dict{String,Set{String}})
     isempty(ignored) && return false
     g = _normalize_group_name_local(_scene_group(scene, node_id, ""))
     t = strip(_scene_type(scene, node_id, ""))
@@ -1033,7 +1033,7 @@ function _resolved_node_interception_models(geometry::InterceptionSceneData, mod
     return out
 end
 
-function _validate_scene_models(scene::SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
+function _validate_scene_models(scene::PlantGeom.SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
     missing = Set{Tuple{String,String}}()
     for nid in unique(face2node)
         _is_ignored_node(nid, scene, ignored) && continue
@@ -1058,7 +1058,7 @@ function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
     return true
 end
 
-function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
+function _emitter_power_per_node(scene::PlantGeom.SceneGeometry, models::LightModels)
     by_group_type = _group_light_emitters(models)
     isempty(by_group_type) && return Dict{Int,Float64}(), Dict{Int,Float64}()
 
@@ -1333,7 +1333,7 @@ function _write_projection_cache(path::AbstractString, result::DirectionProjecti
     mv(tmp, path; force=true)
 end
 
-function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
+function _extract_scene_xy_bounds(scene::PlantGeom.SceneGeometry, vertices)
     if scene.scene_xy_bounds !== nothing
         return scene.scene_xy_bounds
     end
@@ -1355,7 +1355,7 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
     (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
 end
 
-function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
+function _plotbox(scene::PlantGeom.SceneGeometry, vertices, pixel_size::Float64)
     pixel_size > 0.0 || error("pixel_size must be > 0 m")
     # Java fixtures enforce a strict upper bound at 50 cm.
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
@@ -2486,7 +2486,7 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     return vertices, faces, face2node, node_area
 end
 
-function _scene_geometry_for_interception(scene::SceneGeometry, models::LightModels, options::LightOptions)
+function _scene_geometry_for_interception(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
@@ -2578,7 +2578,7 @@ function _node_absorptance_maps_from_geometry(
 end
 
 function _node_absorptance_per_band_from_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
     geometry::InterceptionSceneData,
@@ -2592,7 +2592,7 @@ function _node_absorptance_per_band_from_geometry(
 end
 
 function _prepare_interception_data(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions;
     include_budget_maps::Bool=false,
@@ -2644,7 +2644,7 @@ function _prepare_interception_data(
     )
 end
 
-function _interception_output_keys(scene::SceneGeometry, models::LightModels, options::LightOptions)
+function _interception_output_keys(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
@@ -2672,7 +2672,7 @@ incident power, and hit counts per geometry node.
 `InterceptionBackend` instance (currently `RasterCPUBackend()`).
 """
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
@@ -2699,7 +2699,7 @@ function _resolve_interception_backend(backend)
 end
 
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
@@ -2781,7 +2781,7 @@ function _compute_first_order(
 end
 
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,

@@ -4,8 +4,7 @@ using BenchmarkTools
 using CairoMakie
 using Dates
 using GeometryBasics
-using StaticArrays: SVector
-import LinearAlgebra: cross, norm
+using PlantGeom
 
 const PKG_ROOT = dirname(dirname(pathof(ArchimedLight)))
 const FAST_FIXTURE_ROOT = joinpath(PKG_ROOT, "test", "fast_fixtures")
@@ -42,57 +41,46 @@ function _override_options(options0::ArchimedLight.LightOptions; kwargs...)
 end
 
 function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
-    points = GeometryBasics.Point{3,Float64}[]
-    faces = GeometryBasics.TriangleFace{Int}[]
-    face2node = Int[]
-    nodes = Dict{Int,ArchimedLight.SceneNodeData{Float64}}()
     xs = Float64[]
     ys = Float64[]
-
-    for (i, spec) in enumerate(specs)
-        p1 = ntuple(j -> Float64(spec.p1[j]), 3)
-        p2 = ntuple(j -> Float64(spec.p2[j]), 3)
-        p3 = ntuple(j -> Float64(spec.p3[j]), 3)
-        p4 = ntuple(j -> Float64(spec.p4[j]), 3)
+    normalized = map(specs) do spec
+        p1 = ntuple(j -> Float32(spec.p1[j]), 3)
+        p2 = ntuple(j -> Float32(spec.p2[j]), 3)
+        p3 = ntuple(j -> Float32(spec.p3[j]), 3)
+        p4 = ntuple(j -> Float32(spec.p4[j]), 3)
         append!(xs, (p1[1], p2[1], p3[1], p4[1]))
         append!(ys, (p1[2], p2[2], p3[2], p4[2]))
-
-        base = length(points)
-        append!(
-            points,
-            GeometryBasics.Point{3,Float64}[
-                GeometryBasics.Point{3,Float64}(p1[1], p1[2], p1[3]),
-                GeometryBasics.Point{3,Float64}(p2[1], p2[2], p2[3]),
-                GeometryBasics.Point{3,Float64}(p3[1], p3[2], p3[3]),
-                GeometryBasics.Point{3,Float64}(p4[1], p4[2], p4[3]),
+        mesh = GeometryBasics.Mesh(
+            GeometryBasics.Point3f[
+                GeometryBasics.Point3f(p1...),
+                GeometryBasics.Point3f(p2...),
+                GeometryBasics.Point3f(p3...),
+                GeometryBasics.Point3f(p4...),
             ],
+            GeometryBasics.TriangleFace{Int}[(1, 2, 3), (1, 3, 4)],
         )
-        append!(faces, GeometryBasics.TriangleFace{Int}[(base + 1, base + 2, base + 3), (base + 1, base + 3, base + 4)])
-        append!(face2node, [i, i])
-
-        area1 = 0.5 * norm(cross(SVector(p2...) - SVector(p1...), SVector(p3...) - SVector(p1...)))
-        area2 = 0.5 * norm(cross(SVector(p3...) - SVector(p1...), SVector(p4...) - SVector(p1...)))
-        area = area1 + area2
-        barycenter = (
-            (p1[1] + p2[1] + p3[1] + p4[1]) / 4,
-            (p1[2] + p2[2] + p3[2] + p4[2]) / 4,
-            (p1[3] + p2[3] + p3[3] + p4[3]) / 4,
+        (
+            mesh=mesh,
+            group=String(get(spec, :group, "plate")),
+            type=String(get(spec, :type, "plate")),
+            object_id=Int(get(spec, :object_id, get(spec, :source_topology_id, 1))),
+            source_topology_id=Int(get(spec, :source_topology_id, 1)),
         )
-        source_topology_id = Int(get(spec, :source_topology_id, i))
-        object_id = Int(get(spec, :object_id, source_topology_id))
-        group = String(get(spec, :group, "plate"))
-        type_name = String(get(spec, :type, "plate"))
-        nodes[i] = ArchimedLight.SceneNodeData(area, barycenter, group, type_name, source_topology_id, object_id)
     end
 
-    return ArchimedLight.SceneGeometry(
-        nothing,
-        GeometryBasics.Mesh(points, faces),
-        face2node,
-        nodes,
-        "benchmark_synthetic_scene",
-        (minimum(xs), minimum(ys), maximum(xs), maximum(ys)),
-    )
+    bounds = (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
+    return PlantGeom.make_scene(domain=bounds, source_path="benchmark_synthetic_scene") do builder
+        for spec in normalized
+            PlantGeom.add_object!(
+                builder,
+                spec.mesh;
+                group=spec.group,
+                type=spec.type,
+                id=spec.object_id,
+                source_topology_id=spec.source_topology_id,
+            )
+        end
+    end
 end
 
 function _synthetic_meteo_row(;

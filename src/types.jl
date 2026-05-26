@@ -619,9 +619,6 @@ Base.length(meteo::MeteoTable) = length(meteo.rows)
 Base.getindex(meteo::MeteoTable, i::Integer) = meteo.rows[i]
 Base.first(meteo::MeteoTable) = first(meteo.rows)
 
-const SceneNodeData = PlantGeom.SceneNodeData
-const SceneGeometry = PlantGeom.SceneGeometry
-
 """
     LightRenderGeometry
 
@@ -636,39 +633,8 @@ struct LightRenderGeometry
     face2node::Vector{Int}
 end
 
-"""
-    scene_node(scene, node_id)
-
-Return the [`SceneNodeData`](@ref) entry for `node_id`, or `nothing` when the
-node is absent from `scene`.
-"""
-scene_node(scene::SceneGeometry, node_id::Integer) = get(scene.nodes, Int(node_id), nothing)
-
-"""
-    scene_node_ids(scene)
-
-Return the sorted geometry node ids present in `scene`.
-"""
-scene_node_ids(scene::SceneGeometry) = sort!(collect(keys(scene.nodes)))
-
-"""
-    node_areas(scene)
-
-Return a `Dict{Int,Float64}` mapping each geometry node id to its component area
-in the prepared scene.
-"""
-node_areas(scene::SceneGeometry) = Dict(nid => node.area for (nid, node) in scene.nodes)
-
-"""
-    node_barycenters(scene)
-
-Return a `Dict` mapping each geometry node id to its `(x, y, z)` barycenter in
-scene coordinates.
-"""
-node_barycenters(scene::SceneGeometry) = Dict(nid => node.barycenter for (nid, node) in scene.nodes)
-
-function _scene_node_field(scene::SceneGeometry, node_id::Integer, field::Symbol, default)
-    node = scene_node(scene, node_id)
+function _scene_node_field(scene::PlantGeom.SceneGeometry, node_id::Integer, field::Symbol, default)
+    node = PlantGeom.scene_node(scene, node_id)
     if node === nothing || !hasfield(typeof(node), field)
         return default
     end
@@ -676,10 +642,10 @@ function _scene_node_field(scene::SceneGeometry, node_id::Integer, field::Symbol
     return v === nothing ? default : v
 end
 
-_scene_area(scene::SceneGeometry, node_id::Integer, default=0.0) = _scene_node_field(scene, node_id, :area, default)
-_scene_barycenter(scene::SceneGeometry, node_id::Integer, default=(NaN, NaN, NaN)) =
+_scene_area(scene::PlantGeom.SceneGeometry, node_id::Integer, default=0.0) = _scene_node_field(scene, node_id, :area, default)
+_scene_barycenter(scene::PlantGeom.SceneGeometry, node_id::Integer, default=(NaN, NaN, NaN)) =
     _scene_node_field(scene, node_id, :barycenter, default)
-_scene_source_topology_id(scene::SceneGeometry, node_id::Integer, default=Int(node_id)) =
+_scene_source_topology_id(scene::PlantGeom.SceneGeometry, node_id::Integer, default=Int(node_id)) =
     _scene_node_field(scene, node_id, :source_topology_id, default)
 
 @inline function _mtg_node_attr(node, key::Symbol)
@@ -700,7 +666,7 @@ function _as_int_or_default(x, default::Int)
     return default
 end
 
-function _scene_mtg_node(scene::SceneGeometry, node_id::Integer)
+function _scene_mtg_node(scene::PlantGeom.SceneGeometry, node_id::Integer)
     scene.mtg === nothing && return nothing
     try
         return MultiScaleTreeGraph.get_node(scene.mtg, Int(node_id))
@@ -709,7 +675,7 @@ function _scene_mtg_node(scene::SceneGeometry, node_id::Integer)
     end
 end
 
-function _inherited_attr(scene::SceneGeometry, node_id::Integer, keys::Tuple, default)
+function _inherited_attr(scene::PlantGeom.SceneGeometry, node_id::Integer, keys::Tuple, default)
     node = _scene_mtg_node(scene, node_id)
     while node !== nothing
         for key in keys
@@ -722,12 +688,12 @@ function _inherited_attr(scene::SceneGeometry, node_id::Integer, keys::Tuple, de
     return default
 end
 
-function _scene_group(scene::SceneGeometry, node_id::Integer, default="")
+function _scene_group(scene::PlantGeom.SceneGeometry, node_id::Integer, default="")
     v = _inherited_attr(scene, node_id, (:group, :functional_group), nothing)
     v === nothing ? default : string(v)
 end
 
-function _scene_type(scene::SceneGeometry, node_id::Integer, default="")
+function _scene_type(scene::PlantGeom.SceneGeometry, node_id::Integer, default="")
     node = _scene_mtg_node(scene, node_id)
     for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
         v = _mtg_node_attr(node, key)
@@ -741,7 +707,7 @@ function _scene_type(scene::SceneGeometry, node_id::Integer, default="")
     isempty(s) ? default : s
 end
 
-function _scene_object_id(scene::SceneGeometry, node_id::Integer, default=-1)
+function _scene_object_id(scene::PlantGeom.SceneGeometry, node_id::Integer, default=-1)
     v = _inherited_attr(scene, node_id, (:object_id, :plantID, :plant_id, :item_id, :itemID, :id), nothing)
     _as_int_or_default(v, default)
 end

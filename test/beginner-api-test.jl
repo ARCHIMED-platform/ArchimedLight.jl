@@ -1,8 +1,8 @@
 @testitem "Beginner API model helpers and validation" tags = [:beginner_api, :fast] begin
     using ArchimedLight
-    using PlantGeom: add_plant!
+    using PlantGeom
 
-    scene = light_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
+    scene = make_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
         add_plant!(s, joinpath(@__DIR__, "..", "example_1", "scene", "opf", "simple_OPF_shapes.opf"); group="simple_plant", id=1)
     end
 
@@ -38,7 +38,7 @@ end
 @testitem "Beginner API scene builder object placement" tags = [:beginner_api, :fast] begin
     using ArchimedLight
     using GeometryBasics
-    using PlantGeom: add_object!
+    using PlantGeom
 
     mesh = GeometryBasics.Mesh(
         GeometryBasics.Point3f[
@@ -49,41 +49,41 @@ end
         GeometryBasics.TriangleFace{Int}[GeometryBasics.TriangleFace{Int}(1, 2, 3)],
     )
 
-    scene = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+    scene = make_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
         add_object!(s, mesh; group="sensor", type="panel", id=4, at=(1.0, 2.0, 3.0), scale=2.0)
     end
-    nid = only(scene_node_ids(scene))
+    nid = only(PlantGeom.scene_node_ids(scene))
     sensor_summary = only(summarize_scene(scene).group_types)
     @test sensor_summary.group == "sensor"
     @test sensor_summary.type == "panel"
     @test sensor_summary.object_ids == [4]
-    @test node_areas(scene)[nid] ≈ 2.0
-    @test node_barycenters(scene)[nid] == (5 / 3, 8 / 3, 3.0)
+    @test PlantGeom.node_areas(scene)[nid] ≈ 2.0
+    @test PlantGeom.node_barycenters(scene)[nid] == (5 / 3, 8 / 3, 3.0)
 
-    rotated = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+    rotated = make_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
         add_object!(s, mesh; group="sensor", type="panel", id=5, rotate=(z=90.0,), deg=true)
     end
-    rid = only(scene_node_ids(rotated))
-    @test collect(node_barycenters(rotated)[rid]) ≈ [-1 / 3, 1 / 3, 0.0]
+    rid = only(PlantGeom.scene_node_ids(rotated))
+    @test collect(PlantGeom.node_barycenters(rotated)[rid]) ≈ [-1 / 3, 1 / 3, 0.0]
 
-    xy_order = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+    xy_order = make_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
         add_object!(s, mesh; group="sensor", type="panel", id=6, rotate=(x=90.0, y=90.0), deg=true)
     end
-    yx_order = light_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
+    yx_order = make_scene(domain=(-5.0, -5.0, 5.0, 5.0)) do s
         add_object!(s, mesh; group="sensor", type="panel", id=7, rotate=(y=90.0, x=90.0), deg=true)
     end
-    xy_id = only(scene_node_ids(xy_order))
-    yx_id = only(scene_node_ids(yx_order))
-    @test !(collect(node_barycenters(xy_order)[xy_id]) ≈ collect(node_barycenters(yx_order)[yx_id]))
+    xy_id = only(PlantGeom.scene_node_ids(xy_order))
+    yx_id = only(PlantGeom.scene_node_ids(yx_order))
+    @test !(collect(PlantGeom.node_barycenters(xy_order)[xy_id]) ≈ collect(PlantGeom.node_barycenters(yx_order)[yx_id]))
 
-    @test_throws ErrorException light_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+    @test_throws ErrorException make_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
         add_object!(s, "panel.obj"; group="sensor", type="panel", id=6)
     end
 end
 
 @testitem "Beginner API run_light parity and cache lifecycle" tags = [:beginner_api, :fast] begin
     using ArchimedLight
-    using PlantGeom: add_plant!
+    using PlantGeom
 
     config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config)
@@ -99,7 +99,7 @@ end
     @test length(series) == length(prepare_meteo(meteo, options).rows)
     @test cache_summary(cached).cached_turtle_count >= 1
 
-    scene2 = light_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
+    scene2 = make_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
         add_plant!(s, joinpath(@__DIR__, "..", "example_1", "scene", "opf", "simple_OPF_shapes.opf"); group="simple_plant", id=1)
     end
     update_scene!(cached, scene2)

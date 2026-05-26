@@ -32,7 +32,7 @@ results returned by `run_light_step` or `run_light_series`, it returns the
 stored render geometry directly.
 """
 function light_render_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
 )
@@ -55,7 +55,7 @@ function _tile_offsets(n::Integer; centered::Bool=true)
 end
 
 function _tile_periods(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     geometry::LightRenderGeometry;
     xperiod::Union{Nothing,Real}=nothing,
     yperiod::Union{Nothing,Real}=nothing,
@@ -90,7 +90,7 @@ repetition matches the simulation plot box. Pass `xperiod` and `yperiod`
 explicitly to override that spacing.
 """
 function tile_light_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     geometry::LightRenderGeometry;
     nx::Integer=1,
     ny::Integer=1,
@@ -141,7 +141,7 @@ function tile_light_geometry(
 end
 
 function tile_light_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     step::LightStepResult;
     kwargs...,
 )
@@ -149,7 +149,7 @@ function tile_light_geometry(
 end
 
 function tile_light_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     steps::AbstractVector{<:LightStepResult};
     kwargs...,
 )
@@ -157,7 +157,7 @@ function tile_light_geometry(
 end
 
 function tile_light_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions;
     kwargs...,
@@ -403,7 +403,7 @@ function light_face_values(
 end
 
 function light_face_values(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
     data;
@@ -446,7 +446,7 @@ function light_vertex_values(
 end
 
 function light_vertex_values(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
     data;

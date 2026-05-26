@@ -33,6 +33,7 @@ The roles of those files are:
 
 ```@example file_workflow
 using ArchimedLight
+using PlantGeom
 
 repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
 config = joinpath(repo_root, "example_1", "config.yml")
@@ -52,7 +53,7 @@ rows = collect(meteo)
 At this point:
 
 - `options` is a `LightOptions`
-- `scene` is a `SceneGeometry`
+- `scene` is a `PlantGeom.SceneGeometry`
 - `meteo` is a `MeteoTable`
 - `models` is a `LightModels`
 

@@ -1,4 +1,6 @@
 @testitem "Core smoke" tags=[:core, :fast] begin
+    import PlantGeom
+
     include(joinpath(@__DIR__, "support.jl"))
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
@@ -42,7 +44,7 @@
     )
     @test haskey(raw_scene.mtg, :geometry)
     @test raw_scene.mtg[:geometry] !== nothing
-    ArchimedLight.add_ground!(raw_scene; nx=2, ny=2)
+    PlantGeom.add_ground!(raw_scene; nx=2, ny=2)
     @test raw_scene.mtg[:geometry] === nothing
 end
 

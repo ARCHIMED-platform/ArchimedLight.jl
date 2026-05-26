@@ -320,7 +320,7 @@ function _accumulate_scattering_counts!(
     return nothing
 end
 
-function _pair_counts_for_scattering(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
+function _pair_counts_for_scattering(scene::PlantGeom.SceneGeometry, models::LightModels, turtle::TurtleGrid, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
     virtual_nodes = _virtual_sensor_node_ids(geometry.node_group, geometry.node_type, models)
     cache_ctx = _projection_cache_context(geometry.vertices, geometry.faces, geometry.face2node, geometry.plotbox, options)
@@ -491,7 +491,7 @@ struct ScatteringSceneContext
 end
 
 function _build_scattering_topology_cache(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     prepared::PreparedInterceptionData,
     pair_counts::ScatteringPairCounts,
@@ -516,7 +516,7 @@ function _build_scattering_topology_cache(
 end
 
 function _build_scattering_topology_cache(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     prepared::PreparedInterceptionData,
     turtle::TurtleGrid,
@@ -537,7 +537,7 @@ function _build_scattering_topology_cache(
 end
 
 function _build_scattering_topology_cache(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     prepared::PreparedInterceptionData,
     turtle::TurtleGrid,
@@ -590,7 +590,7 @@ function _transfer_graph_from_topology(
     )
 end
 
-function _scattering_context(scene::SceneGeometry, models::LightModels, turtle::TurtleGrid, first::FirstOrderResult, options::LightOptions)
+function _scattering_context(scene::PlantGeom.SceneGeometry, models::LightModels, turtle::TurtleGrid, first::FirstOrderResult, options::LightOptions)
     pair_counts, sun_hits, geom_node_ids, node_group = _pair_counts_for_scattering(scene, models, turtle, options)
     group_type_coeffs = _group_optical_coeffs(models)
 
@@ -644,7 +644,7 @@ Build the scattering transfer graph (pair links and per-node hit normalization d
 independently from iterative scattering propagation.
 """
 function build_scattering_transfer_graph(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
@@ -657,7 +657,7 @@ function build_scattering_transfer_graph(
 end
 
 function build_scattering_transfer_graph(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
@@ -670,7 +670,7 @@ function build_scattering_transfer_graph(
 end
 
 function build_scattering_transfer_graph(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
@@ -939,7 +939,7 @@ function compute_scattering_band(
 end
 
 function compute_scattering_band(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
@@ -1043,7 +1043,7 @@ function compute_scattering(
 end
 
 function compute_scattering(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
