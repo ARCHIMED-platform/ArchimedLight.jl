@@ -157,7 +157,14 @@ objects.
 
 ### `transparency`
 
-`transparency` is the first-order transmitted fraction.
+`transparency` is the transmitted fraction used when the solver needs a full
+per-pixel hit stack, for example during scattering, virtual-sensor calculations,
+or explicit light-emitter transfer.
+
+For first-order-only interception, ArchimedLight follows the historical
+ARCHIMED upper-hit rule: the first visible surface receives the direct light for
+that pixel, and lower surfaces are not lit through it. In that mode a non-zero
+`transparency` does not create direct first-order flux on lower objects.
 
 File-based:
 

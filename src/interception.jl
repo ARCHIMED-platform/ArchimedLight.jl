@@ -432,6 +432,22 @@ end
 @inline function _accumulate_visible_area_dense!(
     visible_area::Vector{Float64},
     projection::DenseDirectionProjectionResult,
+    stack::UpperHitStack,
+    options::LightOptions,
+    pixel_area::Float64,
+    virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
+)
+    isempty(stack) && return nothing
+    node_idx = _stack_hit_node(stack, 1)
+    ratio = _projection_area_ratio(projection, options, node_idx)
+    visible_area[node_idx] += pixel_area * ratio
+    return nothing
+end
+
+@inline function _accumulate_visible_area_dense!(
+    visible_area::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
     stack,
     options::LightOptions,
     pixel_area::Float64,
@@ -878,18 +894,6 @@ function _has_sensor_models(models::LightModels)
     return false
 end
 
-function _has_transmissive_models(models::LightModels)
-    for group_model in values(models)
-        for type_model in values(group_model.types)
-            interception = type_model.interception
-            interception === nothing && continue
-            _is_sensor_interception(interception) && continue
-            clamp(interception.transparency, 0.0, 1.0) > 0.0 && return true
-        end
-    end
-    return false
-end
-
 function _ignored_group_types(models::LightModels)
     out = Dict{String,Set{String}}()
     for group_model in values(models)
@@ -1047,13 +1051,12 @@ function _validate_scene_models(scene::PlantGeom.SceneGeometry, face2node::Vecto
 end
 
 function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
-    # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
-    # or explicit light emitters require complete interception stacks.
+    # First-order interception uses the upper hit unless downstream transfer
+    # logic requires the full per-pixel stack.
     if options.scattering
         return false
     end
     _has_sensor_models(models) && return false
-    _has_transmissive_models(models) && return false
     isempty(_group_light_emitters(models)) || return false
     return true
 end
