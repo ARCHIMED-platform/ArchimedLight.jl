@@ -4,4 +4,4 @@ lazy = true
 
 [[archimedlight-release-fixtures.download]]
 url = "https://github.com/ARCHIMED-platform/ArchimedLight.jl/releases/download/v0.1.2/archimedlight-release-fixtures-v0.1.2.tar.gz"
-sha256 = "fcd4a06e17598f0879c9b502343c5f65754e1daf9b6aeb64f57af3a32e0b1eee"
+sha256 = "761cc512e91bc90e6e0a74644e077da49358839ccfdedb6e7748c11ba8a6a92e"
