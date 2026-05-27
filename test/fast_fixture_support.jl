@@ -1,4 +1,5 @@
 using ArchimedLight
+using PlantGeom
 
 function _render_ri_par_f_figure(scene, models, options, step; title::String)
     geometry = ArchimedLight._scene_geometry_for_interception(scene, models, options)
@@ -47,7 +48,7 @@ function _source_topology_area_q(scene, models, options, step)
     out = Dict{Tuple{Int,Int},NamedTuple{(:area, :Ri_PAR_0_q),Tuple{Float64,Float64}}}()
     keys_by_node = ArchimedLight._interception_output_keys(scene, models, options)
     for nid in keys(keys_by_node)
-        node = ArchimedLight.scene_node(scene, nid)
+        node = PlantGeom.scene_node(scene, nid)
         node === nothing && continue
         object_id, source_topology_id = keys_by_node[nid]
         out[(source_topology_id, object_id)] = (

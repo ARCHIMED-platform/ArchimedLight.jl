@@ -1,10 +1,3 @@
-import GeometryBasics
-import StaticArrays
-import PlantGeom
-import MultiScaleTreeGraph
-import LinearAlgebra: norm, cross
-import Serialization
-
 struct ProjectionCacheContext
     cache_dir::String
     scene_key::UInt64
@@ -288,10 +281,10 @@ end
         xh = _hit_height(x)
         j = i - 1
         while j >= 1 && _hit_height(stack[j]) < xh
-            stack[j + 1] = stack[j]
+            stack[j+1] = stack[j]
             j -= 1
         end
-        stack[j + 1] = x
+        stack[j+1] = x
     end
     return stack
 end
@@ -316,7 +309,7 @@ end
         xh = heights[idx]
         xn = nodes[idx]
         j = i - 1
-        while j >= 1 && heights[start + j - 1] < xh
+        while j >= 1 && heights[start+j-1] < xh
             src = start + j - 1
             dst = src + 1
             heights[dst] = heights[src]
@@ -361,11 +354,11 @@ end
 end
 @inline function _stack_hit_height(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds Float64(stack.parent.heights[_flat_stack_start(stack) + i - 1])
+    return @inbounds Float64(stack.parent.heights[_flat_stack_start(stack)+i-1])
 end
 @inline function _stack_hit_node(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds Int(stack.parent.nodes[_flat_stack_start(stack) + i - 1])
+    return @inbounds Int(stack.parent.nodes[_flat_stack_start(stack)+i-1])
 end
 
 @inline function _accumulate_emitter_transfer_counts_dense!(
@@ -380,7 +373,7 @@ end
         emitter_node_mask[src_idx] || continue
 
         to_idx = 0
-        for k in (j + 1):length(stack)
+        for k in (j+1):length(stack)
             node_idx = _stack_hit_node(stack, k)
             emitter_node_mask[node_idx] && continue
             to_idx = node_idx
@@ -407,13 +400,13 @@ end
     start = _flat_stack_start(stack)
     nodes = stack.parent.nodes
     n_hits = length(stack)
-    @inbounds for j in 0:(n_hits - 1)
-        src_idx = Int(nodes[start + j])
+    @inbounds for j in 0:(n_hits-1)
+        src_idx = Int(nodes[start+j])
         emitter_node_mask[src_idx] || continue
 
         to_idx = 0
-        for k in (j + 1):(n_hits - 1)
-            node_idx = Int(nodes[start + k])
+        for k in (j+1):(n_hits-1)
+            node_idx = Int(nodes[start+k])
             emitter_node_mask[node_idx] && continue
             to_idx = node_idx
             break
@@ -426,6 +419,22 @@ end
         edge_counts[edge] = get(edge_counts, edge, 0) + 1
         total_from[src] = get(total_from, src, 0) + 1
     end
+    return nothing
+end
+
+@inline function _accumulate_visible_area_dense!(
+    visible_area::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
+    stack::UpperHitStack,
+    options::LightOptions,
+    pixel_area::Float64,
+    virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
+)
+    isempty(stack) && return nothing
+    node_idx = _stack_hit_node(stack, 1)
+    ratio = _projection_area_ratio(projection, options, node_idx)
+    visible_area[node_idx] += pixel_area * ratio
     return nothing
 end
 
@@ -469,8 +478,8 @@ end
     start = _flat_stack_start(stack)
     nodes = stack.parent.nodes
     n_hits = length(stack)
-    @inbounds for h in 0:(n_hits - 1)
-        node_idx = Int(nodes[start + h])
+    @inbounds for h in 0:(n_hits-1)
+        node_idx = Int(nodes[start+h])
         if virtual_node_mask[node_idx]
             ratio = _projection_area_ratio(projection, options, node_idx)
             visible_area[node_idx] += pixel_area * ratio
@@ -559,7 +568,7 @@ function Base.deleteat!(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
     count = length(stack)
     start = _flat_stack_start(stack)
-    @inbounds for pos in i:(count - 1)
+    @inbounds for pos in i:(count-1)
         src = start + pos
         dst = start + pos - 1
         stack.parent.heights[dst] = stack.parent.heights[src]
@@ -878,18 +887,6 @@ function _has_sensor_models(models::LightModels)
     return false
 end
 
-function _has_transmissive_models(models::LightModels)
-    for group_model in values(models)
-        for type_model in values(group_model.types)
-            interception = type_model.interception
-            interception === nothing && continue
-            _is_sensor_interception(interception) && continue
-            clamp(interception.transparency, 0.0, 1.0) > 0.0 && return true
-        end
-    end
-    return false
-end
-
 function _ignored_group_types(models::LightModels)
     out = Dict{String,Set{String}}()
     for group_model in values(models)
@@ -910,7 +907,7 @@ function _ignored_group_types(models::LightModels)
     out
 end
 
-function _is_ignored_node(node_id::Int, scene::SceneGeometry, ignored::Dict{String,Set{String}})
+function _is_ignored_node(node_id::Int, scene::PlantGeom.SceneGeometry, ignored::Dict{String,Set{String}})
     isempty(ignored) && return false
     g = _normalize_group_name_local(_scene_group(scene, node_id, ""))
     t = strip(_scene_type(scene, node_id, ""))
@@ -969,33 +966,33 @@ function _resolved_type_key(group_model::GroupModel, type_name::AbstractString)
         for (type_key, type_model) in group_model.types
             sig = (
                 interception=
-                    if type_model.interception === nothing
-                        nothing
-                    else
-                        interception = type_model.interception
+                if type_model.interception === nothing
+                    nothing
+                else
+                    interception = type_model.interception
+                    (
+                        interception.use,
+                        interception.model,
+                        interception.transparency,
+                        interception.optical_properties === nothing ? nothing :
                         (
-                            interception.use,
-                            interception.model,
-                            interception.transparency,
-                            interception.optical_properties === nothing ? nothing :
-                            (
-                                interception.optical_properties.par,
-                                interception.optical_properties.nir,
-                            ),
-                        )
-                    end,
+                            interception.optical_properties.par,
+                            interception.optical_properties.nir,
+                        ),
+                    )
+                end,
                 emitter=
-                    if type_model.light_emitter === nothing
-                        nothing
-                    else
-                        emitter = type_model.light_emitter
-                        (
-                            emitter.model,
-                            emitter.radiance,
-                            emitter.gamma.par,
-                            emitter.gamma.nir,
-                        )
-                    end,
+                if type_model.light_emitter === nothing
+                    nothing
+                else
+                    emitter = type_model.light_emitter
+                    (
+                        emitter.model,
+                        emitter.radiance,
+                        emitter.gamma.par,
+                        emitter.gamma.nir,
+                    )
+                end,
             )
             if first_sig === nothing
                 first_key = type_key
@@ -1033,7 +1030,7 @@ function _resolved_node_interception_models(geometry::InterceptionSceneData, mod
     return out
 end
 
-function _validate_scene_models(scene::SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
+function _validate_scene_models(scene::PlantGeom.SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
     missing = Set{Tuple{String,String}}()
     for nid in unique(face2node)
         _is_ignored_node(nid, scene, ignored) && continue
@@ -1047,18 +1044,17 @@ function _validate_scene_models(scene::SceneGeometry, face2node::Vector{Int}, mo
 end
 
 function _use_upper_hit_pixel_table(models::LightModels, options::LightOptions)
-    # Java defaults to upper-hit pixel tables unless scattering, virtual sensors,
-    # or explicit light emitters require complete interception stacks.
+    # First-order interception uses the upper hit unless downstream transfer
+    # logic requires the full per-pixel stack.
     if options.scattering
         return false
     end
     _has_sensor_models(models) && return false
-    _has_transmissive_models(models) && return false
     isempty(_group_light_emitters(models)) || return false
     return true
 end
 
-function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
+function _emitter_power_per_node(scene::PlantGeom.SceneGeometry, models::LightModels)
     by_group_type = _group_light_emitters(models)
     isempty(by_group_type) && return Dict{Int,Float64}(), Dict{Int,Float64}()
 
@@ -1066,11 +1062,11 @@ function _emitter_power_per_node(scene::SceneGeometry, models::LightModels)
     nir = Dict{Int,Float64}()
     for ((group, type_name), pwr) in by_group_type
         nids = Int[
-            nid for (nid, node) in scene.nodes if node.group == group && node.type == type_name
+            nid for nid in keys(scene.nodes) if _scene_group(scene, nid, "") == group && _scene_type(scene, nid, "") == type_name
         ]
         if isempty(nids)
             # Fallback for scenes where type labels are unavailable.
-            nids = Int[nid for (nid, node) in scene.nodes if node.group == group]
+            nids = Int[nid for nid in keys(scene.nodes) if _scene_group(scene, nid, "") == group]
         end
         isempty(nids) && continue
 
@@ -1127,7 +1123,7 @@ function _accumulate_emitter_transfer_counts!(
             src in emitter_nodes || continue
 
             to = 0
-            for k in (j + 1):length(stack)
+            for k in (j+1):length(stack)
                 nid = _stack_hit_node(stack, k)
                 nid in emitter_nodes && continue
                 to = nid
@@ -1333,7 +1329,7 @@ function _write_projection_cache(path::AbstractString, result::DirectionProjecti
     mv(tmp, path; force=true)
 end
 
-function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
+function _extract_scene_xy_bounds(scene::PlantGeom.SceneGeometry, vertices)
     if scene.scene_xy_bounds !== nothing
         return scene.scene_xy_bounds
     end
@@ -1355,7 +1351,7 @@ function _extract_scene_xy_bounds(scene::SceneGeometry, vertices)
     (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
 end
 
-function _plotbox(scene::SceneGeometry, vertices, pixel_size::Float64)
+function _plotbox(scene::PlantGeom.SceneGeometry, vertices, pixel_size::Float64)
     pixel_size > 0.0 || error("pixel_size must be > 0 m")
     # Java fixtures enforce a strict upper bound at 50 cm.
     pixel_size <= 0.5 || error("pixel_size must be <= 0.5 m (50 cm)")
@@ -2486,7 +2482,7 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     return vertices, faces, face2node, node_area
 end
 
-function _scene_geometry_for_interception(scene::SceneGeometry, models::LightModels, options::LightOptions)
+function _scene_geometry_for_interception(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
@@ -2578,7 +2574,7 @@ function _node_absorptance_maps_from_geometry(
 end
 
 function _node_absorptance_per_band_from_geometry(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
     geometry::InterceptionSceneData,
@@ -2592,7 +2588,7 @@ function _node_absorptance_per_band_from_geometry(
 end
 
 function _prepare_interception_data(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions;
     include_budget_maps::Bool=false,
@@ -2644,7 +2640,7 @@ function _prepare_interception_data(
     )
 end
 
-function _interception_output_keys(scene::SceneGeometry, models::LightModels, options::LightOptions)
+function _interception_output_keys(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
     geometry = _scene_geometry_for_interception(scene, models, options)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
@@ -2672,7 +2668,7 @@ incident power, and hit counts per geometry node.
 `InterceptionBackend` instance (currently `RasterCPUBackend()`).
 """
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
@@ -2699,7 +2695,7 @@ function _resolve_interception_backend(backend)
 end
 
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,
@@ -2781,7 +2777,7 @@ function _compute_first_order(
 end
 
 function compute_first_order(
-    scene::SceneGeometry,
+    scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
     fluxes::DirectionalFluxes,

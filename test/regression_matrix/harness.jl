@@ -314,7 +314,7 @@ function _synthetic_scene_for_source(source_id::String)
         scene = _synthetic_horizontal_scene(with_ground([
             (x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1),
         ]))
-        return ArchimedLight.SceneGeometry(
+        return PlantGeom.SceneGeometry(
             scene.mtg,
             scene.merged_mesh,
             scene.face2node,

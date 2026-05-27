@@ -35,9 +35,12 @@ using ArchimedLight
 
 repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
 config = joinpath(repo_root, "example_2", "config.yml")
-options, scene, meteo, models = read_config(config)
-row = first(prepare_meteo(meteo, options).rows)
-step = run_light_step(scene, models, row, options)
+sim, meteo = read_simulation(config)
+scene = sim.scene
+models = sim.models
+options = sim.options
+row = first(meteo)
+step = run_light(sim, row)
 ```
 
 The result is a `LightStepResult`. The most useful field at first is `step.budget`, which groups values by:
@@ -53,7 +56,8 @@ The result is a `LightStepResult`. The most useful field at first is `step.budge
 
 ```@example getting_started
 sky_options = LightOptions(options; include_sky_fraction=true)
-step_with_sky = run_light_step(scene, models, row, sky_options)
+sim_with_sky = LightSimulation(scene, models; options=sky_options)
+step_with_sky = run_light(sim_with_sky, row)
 attach_light_step!(
     scene,
     step_with_sky;
@@ -122,7 +126,8 @@ Colorbar(fig_inf[1, 2], p_inf.plots[1], label="Ri_PAR_f (W m^-2)")
 fig_inf
 ```
 
-For a time series, we can generate the plot once and only update `timestep` during `record`, which is faster than regenerating the whole plot at every step:
+For a time series, we can generate the plot once and update `timestep` to inspect
+any simulated hour without rebuilding the geometry:
 
 ```@example getting_started
 # Generating a series of meteo row to simulate a day:
@@ -132,29 +137,24 @@ meteo = MeteoTable(
             date=Date(2020, 6, 21),
             hour_start=Time("06:00:00") + Hour(i-1),
             duration=Hour(1),
+            latitude=15.0,
             clearness=0.6,
         )
     for i in 1:10],
     (latitude=15.0, file="interactive",),
 )
 
-options = LightOptions(turtle_sectors=16, all_in_turtle=true, radiation_timestep_minutes=5, pixel_size=0.003, toricity=true)
-series = run_light_series(scene, models, meteo, options)
+update_options!(sim, LightOptions(turtle_sectors=16, all_in_turtle=true, radiation_timestep_minutes=5, pixel_size=0.003, toricity=true))
+series = run_light(sim, meteo)
 
 fig = Figure(resolution=(980, 700))
 ax = Axis3(fig[1, 1], title="Intercepted PAR flux over time (06:00)", azimuth=π/4, elevation = π/6, aspect=:data, perspectiveness= 0.4)
 p = lightplot!(ax, series; color=:Ri_PAR_f, colormap=:thermal)
 Colorbar(fig[1, 2], p.plots[1], label="Ri_PAR_f (W m^-2)")
+
+p[:timestep][] = length(series)
+ax.title[] = "Intercepted PAR flux over time ($(Time("06:00") + Hour(length(series)-1)))"
 fig
-
-record(fig, "light_series.mp4", 1:length(series), framerate = 1) do t
-    ax.title[] = """Intercepted PAR flux over time ($(Time("06:00") + Hour(t-1)))"""
-    p[:timestep][] = t
-end
-```
-
-```@raw html
-<video autoplay loop muted playsinline controls src="./light_series.mp4" />
 ```
 
 When `colorrange` is left automatic on a series plot, `lightplot(series)` uses
@@ -165,6 +165,7 @@ The `toricity` parameter is activated here, this is why we see the shade of the 
 
 ## What To Read Next
 
+- [Beginner Workflows](tutorial_beginner_workflows.md) shows file-based, interactive, and coupled-model usage.
 - [File-Based Workflow](tutorial_files.md) explains how the example directory is organised and how each file contributes to the simulation.
 - [Interactive Workflow](tutorial_interactive.md) shows how to build a scene directly in Julia and run light on it without `.ops` / `.opf` input files.
 - [Configuration And Options Reference](reference_config.md) lists the configuration keys that the current Julia package actually uses.

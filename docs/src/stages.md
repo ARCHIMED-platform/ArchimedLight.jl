@@ -1,25 +1,30 @@
 # Composable Stages
 
-`ArchimedLight.jl` is designed so each stage can be called independently.
+`ArchimedLight.jl` is designed so each stage can be called independently for
+advanced debugging and parity work. These staged functions are not exported by
+the beginner API; call them through the module name.
 
 ## Inputs
 
 ```julia
 using ArchimedLight
 
-options, scene, meteo, models = read_config("config.yml")
-row = first(prepare_meteo(meteo, options).rows)
+sim, meteo = read_simulation("config.yml")
+scene = sim.scene
+models = sim.models
+options = sim.options
+row = first(meteo)
 ```
 
 ## Stage-by-stage Execution
 
 ```julia
-sky = compute_sky(row, options)
-turtle = build_turtle(options, sky)
-fluxes = compute_directional_fluxes(row, sky, turtle, options)
-first = compute_first_order(scene, models, turtle, fluxes, options)
-scat = compute_scattering(scene, models, turtle, first, options)
-budget = integrate_light(scene, models, first, scat, options; meteo_row=row)
+sky = ArchimedLight.compute_sky(row, options)
+turtle = ArchimedLight.build_turtle(options, sky)
+fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+scat = ArchimedLight.compute_scattering(scene, models, turtle, first, options)
+budget = ArchimedLight.integrate_light(scene, models, first, scat, options; meteo_row=row)
 
 budget.incident_flux.total.par
 budget.incident_energy.total.par
@@ -45,31 +50,33 @@ Virtual sensors are declared on the interception model (`sensor=true`, or legacy
 ## Single-Call Pipeline
 
 ```julia
-step = run_light_step(scene, models, row, options)
-series = run_light_series(scene, models, meteo, options)
+step = run_light(sim, row)
+series = run_light(sim, meteo)
 
 attach_light_step!(scene, step; fields=[:incident_par_flux])
 write_scene("output/scene.opf", scene)
 
 # Optional backend kwargs:
-step = run_light_step(
-    scene,
-    models,
+step = run_light(
+    LightSimulation(
+        scene,
+        models;
+        options=options,
+        interception_backend=RasterCPUBackend(),
+        scattering_backend=RaycastScatteringBackend(),
+    ),
     row,
-    options;
-    interception_backend=RasterCPUBackend(),
-    scattering_backend=RaycastScatteringBackend(),
 )
 ```
 
 ## Caching Options
 
-- `LightOptions(cache_radiation=true)` reuses directional responses across meteo rows in `run_light_series`.
+- `LightOptions(cache_radiation=true)` reuses directional responses across meteo rows in `run_light`.
 - `LightOptions(cache_pixel_table=true)` stores per-direction projection tables in the on-disk cache directory used by the interception stage.
 
 ## Backends and Modes
 
-- `compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
-- `compute_scattering(...; mode=:raycast)` and `compute_scattering(...; mode=:links)` are available.
-- `compute_scattering(...; backend=RaycastScatteringBackend())` and `compute_scattering(...; backend=LinksScatteringBackend())` are also available.
-- `add_ground!(scene; ...)` is the explicit scene-editing step when you want inspectable paving or soil geometry in the MTG.
+- `ArchimedLight.compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
+- `ArchimedLight.compute_scattering(...; mode=:raycast)` and `ArchimedLight.compute_scattering(...; mode=:links)` are available.
+- `ArchimedLight.compute_scattering(...; backend=RaycastScatteringBackend())` and `ArchimedLight.compute_scattering(...; backend=LinksScatteringBackend())` are also available.
+- `PlantGeom.add_ground!(scene; ...)` is the explicit scene-editing step when you want inspectable paving or soil geometry in the MTG.

@@ -3,6 +3,7 @@ module ArchimedLightMakieExt
 using ArchimedLight
 using GeometryBasics
 using Makie
+import PlantGeom
 import Makie: Attributes, automatic, colormap_attributes!, generic_plot_attributes!, shading_attributes!
 
 Makie.@recipe(LightPlot, payload) do scene
@@ -149,12 +150,12 @@ function ArchimedLight.lightplot!(axis, geometry::LightRenderGeometry, data; kwa
     lightplot!(axis, (geometry, data); _lightplot_kwargs(kwargs)...)
 end
 
-function ArchimedLight.lightplot(scene::SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
+function ArchimedLight.lightplot(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
     payload = (ArchimedLight.light_render_geometry(scene, models, options), data)
     lightplot(payload; _lightplot_kwargs(kwargs)...)
 end
 
-function ArchimedLight.lightplot!(axis, scene::SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
+function ArchimedLight.lightplot!(axis, scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions, data; kwargs...)
     payload = (ArchimedLight.light_render_geometry(scene, models, options), data)
     lightplot!(axis, payload; _lightplot_kwargs(kwargs)...)
 end

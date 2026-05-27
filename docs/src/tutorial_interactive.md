@@ -1,11 +1,11 @@
 # Tutorial: Interactive Workflow
 
-This tutorial shows the in-memory workflow: build or modify a plant directly in Julia, convert it to a `SceneGeometry`, then run the same light pipeline as in the file-based workflow.
+This tutorial shows the in-memory workflow: build or modify a plant directly in Julia, convert it to a `PlantGeom.SceneGeometry`, then run the same light pipeline as in the file-based workflow.
 
 The key bridge is:
 
 - `PlantGeom` builds or edits an MTG with geometry
-- `prepare_scene` turns that MTG into the dense scene representation used by `ArchimedLight.jl`
+- `PlantGeom.prepare_scene` turns that MTG into the dense scene representation used by `ArchimedLight.jl`
 
 ```@setup interactive_workflow
 using CairoMakie
@@ -111,13 +111,13 @@ plantviz(scene_mtg, figure=(size=(820, 560),))
 
 ## Convert To SceneGeometry
 
-The MTG is not yet in the format needed by `ArchimedLight.jl`. We need to convert it to a `SceneGeometry` with the `prepare_scene` function:
+The MTG is not yet in the format needed by `ArchimedLight.jl`. We need to convert it to a `PlantGeom.SceneGeometry` with the `PlantGeom.prepare_scene` function:
 
 ```@example interactive_workflow
-scene = prepare_scene(scene_mtg;scene_xy_bounds=(-0.8, -0.8, 0.8, 0.8))
+scene = PlantGeom.prepare_scene(scene_mtg;scene_xy_bounds=(-0.8, -0.8, 0.8, 0.8))
 ```
 
-`prepare_scene` computes the merged mesh, node areas, barycentres, and node-to-face mapping needed by the light solver. The `scene_xy_bounds` are used for the rasterization stage, so they should be chosen to fit the plant geometry.
+`PlantGeom.prepare_scene` computes the merged mesh, node areas, barycentres, and node-to-face mapping needed by the light solver. The `scene_xy_bounds` are used for the rasterization stage, so they should be chosen to fit the plant geometry.
 
 ## Add Models
 
@@ -167,7 +167,7 @@ That pattern is convenient for synthetic scenes, tests, and gradual model setup.
 
 ## Add Ground Explicitly
 
-The ground can be added as a special case of scene geometry with `add_ground!`. This is useful when:
+The ground can be added as a special case of scene geometry with `PlantGeom.add_ground!`. This is useful when:
 
 - you want to include the ground in the directional visibility and scattering calculations for better realism near the soil
 - you want to visualize the soil interception with an explicit ground patch
@@ -219,19 +219,16 @@ options = LightOptions(
 )
 ```
 
-Finally, we run the light interception simulation with `run_light_step`:
+Finally, we create a `LightSimulation` and run one light step:
 
 ```@example interactive_workflow
-turtle = build_turtle(options, sky)
-fluxes = compute_directional_fluxes(sky, turtle, options)
-first = compute_first_order(scene, models, turtle, fluxes, options)
-scat = compute_scattering(scene, models, turtle, first, options)
-budget = integrate_light(scene, models, first, scat, options; step_duration_seconds=1800.0)
-
-step = LightStepResult(sky, turtle, fluxes, first, scat, budget, Dict{String,Float64}(), nothing)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
-This could be replaced with a simple call to `run_light_step` or `run_light_series` for a more compact syntax (with a meteo input), but the expanded version shows the main stages of the light pipeline.
+The same `LightSimulation` can also be reused with meteo rows or meteo tables.
+Use the staged pipeline only when you need to inspect or customize internal
+solver stages.
 
 To visualize the spatial distribution of light, we need to attach the results back to the MTG with `attach_light_step!`:
 
@@ -261,5 +258,5 @@ fig
 ## Practical Advice
 
 - pass `scene_xy_bounds=` explicitly when your scene was not read from an `.ops`
-- add ground explicitly with `add_ground!` when you want inspectable paving or better scattering realism near the soil
+- add ground explicitly with `PlantGeom.add_ground!` when you want inspectable paving or better scattering realism near the soil
 - use `attach_light_step!` once you want to visualize the results through `PlantGeom`

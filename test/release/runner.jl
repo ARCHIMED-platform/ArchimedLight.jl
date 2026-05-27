@@ -2,7 +2,49 @@ using Test
 using ReferenceTests
 using Dates
 
+const _CACHE_PAIR_FIXTURES = Set(["test-cached-radiation", "test-cached-radiation3"])
+
+function _cached_pair_fixture(fx::JuliaFixture)
+    cfg2 = joinpath(dirname(fx.config_path), "config2.yml")
+    isfile(cfg2) || error("$(fx.id): missing paired cached-radiation config2.yml")
+    return JuliaFixture(
+        fx.id * "-config2",
+        cfg2,
+        fx.visual_metric,
+        true,
+        fx.scene_override,
+        fx.meteo_override,
+        fx.force_scattering,
+    )
+end
+
+function run_cached_radiation_pair_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
+    @testset "$(fx.id)" begin
+        data1 = fixture_runtime_data(fx)
+        data2 = fixture_runtime_data(_cached_pair_fixture(fx))
+        out1 = mktempdir()
+        out2 = mktempdir()
+        observed1 = write_fixture_observed_outputs!(fx, out1; data=data1)
+        observed2 = write_fixture_observed_outputs!(fx, out2; data=data2)
+
+        for name in ("component_values.csv",)
+            @test haskey(observed1, name)
+            @test haskey(observed2, name)
+            cmp = compare_csv_reference(observed1[name], observed2[name]; label="$(fx.id):$(name)")
+            if !cmp.ok
+                @info "Cached radiation pair mismatch" fixture = fx.id file = name missing = cmp.missing extra = cmp.extra mismatch = cmp.mismatch detail = cmp.detail
+            end
+            @test cmp.ok
+        end
+    end
+    return nothing
+end
+
 function run_release_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
+    if fx.id in _CACHE_PAIR_FIXTURES
+        return run_cached_radiation_pair_fixture!(fx; index=index, total=total)
+    end
+
     started = now(UTC)
     @testset "$(fx.id)" begin
         data = fixture_runtime_data(fx)

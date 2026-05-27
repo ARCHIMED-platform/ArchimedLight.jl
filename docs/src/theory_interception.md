@@ -43,6 +43,16 @@ The pixel table is therefore both:
 - a visibility structure for first-order interception
 - a transfer structure reused later by scattering
 
+When only first-order interception is needed, ArchimedLight follows the historical
+ARCHIMED behavior and keeps the upper visible hit for each pixel. This is a
+geometric visibility rule: a lower surface does not receive direct light through
+an upper surface in this mode, even if the upper surface has a non-zero
+`transparency` value.
+
+When scattering, virtual sensors, or light emitters are active, the solver keeps
+the full hit stack instead. In that case `transparency` controls how much of the
+incoming flux continues down the stack and can therefore affect lower hits.
+
 ## The Area-Ratio Correction
 
 Rasterization introduces a known bias: a triangle rarely covers an integer number of pixels exactly.

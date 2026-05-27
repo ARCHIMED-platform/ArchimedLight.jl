@@ -1,6 +1,7 @@
 #!/usr/bin/env julia
 
 using ArchimedLight
+using PlantGeom
 using CSV
 using Tables
 using CairoMakie
@@ -51,7 +52,7 @@ function _component_rows(scene, models, options, step)
     out = NamedTuple[]
     keys_by_node = ArchimedLight._interception_output_keys(scene, models, options)
     for nid in sort(collect(keys(keys_by_node)))
-        node = ArchimedLight.scene_node(scene, nid)
+        node = PlantGeom.scene_node(scene, nid)
         node === nothing && continue
         object_id, source_topology_id = keys_by_node[nid]
         push!(

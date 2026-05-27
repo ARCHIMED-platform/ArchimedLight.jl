@@ -96,7 +96,7 @@ function _synthetic_scene_for_source(source_id::String; include_ground::Bool=fal
     end
     scene = _synthetic_horizontal_scene(all_specs)
     if bounds !== nothing
-        return ArchimedLight.SceneGeometry(
+        return PlantGeom.SceneGeometry(
             scene.mtg,
             scene.merged_mesh,
             scene.face2node,

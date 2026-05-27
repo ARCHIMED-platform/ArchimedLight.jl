@@ -8,7 +8,7 @@ The right mental model is that `config.yml` is mostly a wiring layer. It connect
 
 ## Top-Level Keys
 
-The current `read_config(path)` entry point reads these top-level keys directly:
+The `read_simulation(path)` entry point reads these top-level keys directly:
 
 ```yaml
 scene: scene/coffee.ops
@@ -53,15 +53,15 @@ component_variables:
 - `models`: list of model YAML files, or a config file that itself contains such a list
 - `meteo`: path to the meteo CSV
 
-Without those three keys, `read_config` cannot assemble the simulation inputs.
+Without those three keys, `read_simulation` cannot assemble the simulation inputs.
 
 ## Where Options Enter The Algorithm
 
 The runtime pipeline is still simple at a high level:
 
 ```text
-read_config
-  -> prepare_meteo
+read_simulation
+  -> run_light
   -> compute_sky
   -> build_turtle
   -> compute_directional_fluxes
@@ -199,7 +199,7 @@ This is worthwhile when many time steps are simulated on the same scene.
 
 `cache_radiation` exists because, for a fixed scene and a fixed directional discretization, the expensive part of the first-order computation is often the directional response itself rather than the meteo-dependent weighting of those responses. In a time series, many rows may reuse the same turtle structure and the same geometric projections, so it is wasteful to rebuild them every time.
 
-When this option is enabled, `run_light_series` builds a reusable light cache and reuses unit directional responses across meteo rows. In the raster CPU path, that cache now stores the first-order response and, when scattering is enabled, the scattered added-light response as well. The time-step results are then reconstructed by weighting those cached unit responses with the true directional fluxes of each row.
+When this option is enabled, `run_light(sim, meteo)` and repeated `run_light(sim, row)` calls reuse unit directional responses across meteo rows. In the raster CPU path, that cache stores the first-order response and, when scattering is enabled, the scattered added-light response as well. The time-step results are then reconstructed by weighting those cached unit responses with the true directional fluxes of each row.
 
 The main effect is therefore still on runtime, not on physics, but the optimization is now stronger than a simple first-order shortcut. It is especially useful for long series on an unchanged scene and for manual simulation loops where you run a few steps, pause, inspect or grow the scene, and then explicitly rebuild the cache when geometry or optics change.
 
@@ -343,11 +343,12 @@ Those keys remain useful documentation for old workflows, but they are not the m
 
 ## Interactive Equivalent
 
-The `config.yml` file is convenient if you want to store the configuration on portable files that you can also reuse with the historical java implementation. However, if you are working interactively in Julia, you can pass the same information directly to `run_light_step` by instantiating a `LightOptions` struct and building the scene, models, and meteo in memory:
+The `config.yml` file is convenient if you want to store the configuration on portable files that you can also reuse with the historical java implementation. However, if you are working interactively in Julia, you can pass the same information directly to `LightSimulation` by instantiating a `LightOptions` struct and building the scene, models, and meteo in memory:
 
 ```julia
 options = LightOptions()
-step = run_light_step(scene, models, first(rows), options)
+sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, first(rows))
 ```
 
 For example, this file-based block:

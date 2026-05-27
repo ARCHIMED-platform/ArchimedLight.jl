@@ -19,9 +19,9 @@ function simulate_home_figure(
     plot_paving_override::Int=HOME_FIGURE_PLOT_PAVING,
 )
     config_path = joinpath(repo_root, "example_2", "config.yml")
-    options, scene, meteo, models = read_config(config_path; plot_paving_override=plot_paving_override)
-    row = first(prepare_meteo(meteo, options).rows)
-    step = run_light_step(scene, models, row, options)
+    options, scene, meteo, models = ArchimedLight.read_config(config_path; plot_paving_override=plot_paving_override)
+    row = first(ArchimedLight.prepare_meteo(meteo, options).rows)
+    step = ArchimedLight.run_light_step(scene, models, row, options)
     return scene, models, options, step
 end
 
@@ -30,7 +30,7 @@ function build_home_figure(;
     plot_paving_override::Int=HOME_FIGURE_PLOT_PAVING,
 )
     scene, _, _, step = simulate_home_figure(repo_root, plot_paving_override)
-    attach_light_step!(scene, step; fields=[:incident_par_flux])
+    ArchimedLight.attach_light_step!(scene, step; fields=[:incident_par_flux])
     CairoMakie.activate!()
     fig, ax, p = plantviz(
         scene.mtg;

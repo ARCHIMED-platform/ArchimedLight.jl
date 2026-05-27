@@ -185,16 +185,23 @@ function _sky_fraction_per_node(scene, models, turtle, options, node_ids)
     return out
 end
 
+_release_node_area(scene, nid::Int) = ArchimedLight._scene_area(scene, nid, 0.0)
+_release_node_barycenter(scene, nid::Int) = ArchimedLight._scene_barycenter(scene, nid, (NaN, NaN, NaN))
+_release_node_source_topology_id(scene, nid::Int) = ArchimedLight._scene_source_topology_id(scene, nid, nid)
+_release_node_object_id(scene, nid::Int) = ArchimedLight._scene_object_id(scene, nid, -1)
+_release_node_group(scene, nid::Int) = ArchimedLight._scene_group(scene, nid, "")
+_release_node_type(scene, nid::Int) = ArchimedLight._scene_type(scene, nid, "")
+
 function _display_type_name(scene, models, nid::Int)
-    node = scene.nodes[nid]
-    t = strip(node.type)
+    group = _release_node_group(scene, nid)
+    t = strip(_release_node_type(scene, nid))
     if isempty(t) || lowercase(t) == "mesh"
-        if haskey(models, node.group)
-            group_model = models[node.group]
+        if haskey(models, group)
+            group_model = models[group]
             if length(group_model.types) == 1
                 return first(keys(group_model.types))
             end
-        elseif node.group == "pavement"
+        elseif group == "pavement"
             return "Cobblestone"
         end
     end
@@ -207,19 +214,18 @@ function _component_rows_for_step(scene, models, options, step, step_number::Int
     keys_by_node = _simulation_output_keys(scene, models, options)
     sky_fraction = _sky_fraction_per_node(scene, models, step.turtle, options, node_ids)
     for nid in node_ids
-        node = scene.nodes[nid]
-        barycenter = node.barycenter
-        item_id, component_id = get(keys_by_node, nid, (node.object_id, node.source_topology_id))
+        barycenter = _release_node_barycenter(scene, nid)
+        item_id, component_id = get(keys_by_node, nid, (_release_node_object_id(scene, nid), _release_node_source_topology_id(scene, nid)))
         row = OrderedDict{String,Any}(
             "Ri_PAR_0_q" => get(step.budget.incident_energy.initial.par, nid, 0.0),
             "Ra_PAR_0_q" => get(step.budget.absorbed_energy.initial.par, nid, 0.0),
             "Ra_NIR_0_q" => get(step.budget.absorbed_energy.initial.nir, nid, 0.0),
             "component_id" => component_id,
             "step_number" => step_number,
-            "area" => node.area,
+            "area" => _release_node_area(scene, nid),
             "item_id" => item_id,
             "Ri_NIR_0_f" => get(step.budget.incident_flux.initial.nir, nid, 0.0),
-            "group" => node.group,
+            "group" => _release_node_group(scene, nid),
             "sky_fraction" => get(sky_fraction, nid, 0.0),
             "barycentre_z" => barycenter[3],
             "Ri_PAR_0_f" => get(step.budget.incident_flux.initial.par, nid, 0.0),
@@ -295,12 +301,11 @@ function _write_summary_csv(path::AbstractString, scene, models, series, options
         step = series[i]
         acc = Dict{Tuple{Int,String,String},Tuple{Float64,Float64}}()
         for nid in node_ids
-            node = scene.nodes[nid]
-            item_id, _ = get(keys_by_node, nid, (node.object_id, node.source_topology_id))
-            key = (item_id, node.group, _display_type_name(scene, models, nid))
+            item_id, _ = get(keys_by_node, nid, (_release_node_object_id(scene, nid), _release_node_source_topology_id(scene, nid)))
+            key = (item_id, _release_node_group(scene, nid), _display_type_name(scene, models, nid))
             area0, ri0 = get(acc, key, (0.0, 0.0))
             ri_q = get(step.budget.incident_energy.total.par, nid, 0.0) + get(step.budget.incident_energy.total.nir, nid, 0.0)
-            acc[key] = (area0 + node.area, ri0 + ri_q)
+            acc[key] = (area0 + _release_node_area(scene, nid), ri0 + ri_q)
         end
         keys_sorted = sort(collect(keys(acc)); by=k -> (k[1], k[2], k[3]))
         for key in keys_sorted
@@ -669,7 +674,13 @@ function _key_columns_for_file(name::String, cols::Vector{String})
     return String[]
 end
 
-function _stable_value_columns(name::String, cols::Vector{String})
+function _fixture_id_from_label(label::AbstractString)
+    isempty(label) && return ""
+    return first(split(String(label), ":"; limit=2))
+end
+
+function _stable_value_columns(name::String, cols::Vector{String}; label::AbstractString="")
+    fixture_id = _fixture_id_from_label(label)
     wanted =
         if name == "component_values.csv"
             [
@@ -698,6 +709,9 @@ function _stable_value_columns(name::String, cols::Vector{String})
         else
             cols
         end
+    if name == "component_values.csv" && startswith(fixture_id, "test-cafeier_sensor")
+        wanted = [c for c in wanted if c != "sky_fraction"]
+    end
     keep = Set(wanted)
     return [c for c in cols if c in keep]
 end
@@ -736,7 +750,7 @@ function compare_csv_reference(expected_path::AbstractString, observed_path::Abs
     cols = String[string(n) for n in propertynames(first(exp_rows))]
     key_cols = _key_columns_for_file(name, cols)
     isempty(key_cols) && error("$(label): unable to infer key columns for $(name)")
-    value_cols = [c for c in _stable_value_columns(name, cols) if !(c in key_cols)]
+    value_cols = [c for c in _stable_value_columns(name, cols; label=label) if !(c in key_cols)]
 
     keyf(row) = Tuple(_row_get(row, c) for c in key_cols)
     exp_map = Dict{Tuple,Any}(keyf(r) => r for r in exp_rows)

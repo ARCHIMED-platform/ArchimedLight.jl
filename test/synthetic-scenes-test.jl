@@ -5,6 +5,8 @@
     using GeometryBasics
     using Dates
     using ArchimedLight
+    import MultiScaleTreeGraph
+    import PlantGeom
 
     include(joinpath(@__DIR__, "synthetic_scene_support.jl"))
 end
@@ -68,7 +70,7 @@ end
     @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 2, 0.0), 100.0; atol=1e-9, rtol=1e-9)
 end
 
-@testitem "Synthetic case translucent stack follows Java visible area" tags = [:synthetic, :fast, :translucent_stack] setup = [HelperModule] begin
+@testitem "Synthetic case translucent first-order and stack visibility" tags = [:synthetic, :fast, :translucent_stack] setup = [HelperModule] begin
     scene = HelperModule._synthetic_horizontal_scene([
         (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="leaf", type="plate", object_id=1),
         (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="leaf", type="plate", object_id=2),
@@ -91,10 +93,18 @@ end
     options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01)
     run = HelperModule._run_direct(scene, sky, options; models=models)
 
-    @test isapprox(get(run.first.projected_area_per_node, 1, 0.0), 0.75; atol=1e-10, rtol=1e-10)
-    @test isapprox(get(run.first.projected_area_per_node, 2, 0.0), 0.75; atol=1e-10, rtol=1e-10)
-    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 1, 0.0), 75.0; atol=1e-8, rtol=1e-8)
-    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 2, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(run.first.projected_area_per_node, 1, 0.0), 1.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(run.first.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 1, 0.0), 100.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(run.budget), 2, 0.0), 0.0; atol=1e-8, rtol=1e-8)
+
+    stack_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=true, pixel_size=0.01)
+    stack_run = HelperModule._run_direct(scene, sky, stack_options; models=models)
+
+    @test isapprox(get(stack_run.first.projected_area_per_node, 1, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(stack_run.first.projected_area_per_node, 2, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(stack_run.budget), 1, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(HelperModule._incident_par_initial_energy(stack_run.budget), 2, 0.0), 75.0; atol=1e-8, rtol=1e-8)
 end
 
 @testitem "Synthetic case run_light_step_matches_staged" tags = [:synthetic, :fast, :run_light_step_matches_staged] setup = [HelperModule] begin
