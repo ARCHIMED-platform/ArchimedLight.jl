@@ -1,10 +1,3 @@
-import GeometryBasics
-import StaticArrays
-import PlantGeom
-import MultiScaleTreeGraph
-import LinearAlgebra: norm, cross
-import Serialization
-
 struct ProjectionCacheContext
     cache_dir::String
     scene_key::UInt64
@@ -288,10 +281,10 @@ end
         xh = _hit_height(x)
         j = i - 1
         while j >= 1 && _hit_height(stack[j]) < xh
-            stack[j + 1] = stack[j]
+            stack[j+1] = stack[j]
             j -= 1
         end
-        stack[j + 1] = x
+        stack[j+1] = x
     end
     return stack
 end
@@ -316,7 +309,7 @@ end
         xh = heights[idx]
         xn = nodes[idx]
         j = i - 1
-        while j >= 1 && heights[start + j - 1] < xh
+        while j >= 1 && heights[start+j-1] < xh
             src = start + j - 1
             dst = src + 1
             heights[dst] = heights[src]
@@ -361,11 +354,11 @@ end
 end
 @inline function _stack_hit_height(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds Float64(stack.parent.heights[_flat_stack_start(stack) + i - 1])
+    return @inbounds Float64(stack.parent.heights[_flat_stack_start(stack)+i-1])
 end
 @inline function _stack_hit_node(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
-    return @inbounds Int(stack.parent.nodes[_flat_stack_start(stack) + i - 1])
+    return @inbounds Int(stack.parent.nodes[_flat_stack_start(stack)+i-1])
 end
 
 @inline function _accumulate_emitter_transfer_counts_dense!(
@@ -380,7 +373,7 @@ end
         emitter_node_mask[src_idx] || continue
 
         to_idx = 0
-        for k in (j + 1):length(stack)
+        for k in (j+1):length(stack)
             node_idx = _stack_hit_node(stack, k)
             emitter_node_mask[node_idx] && continue
             to_idx = node_idx
@@ -407,13 +400,13 @@ end
     start = _flat_stack_start(stack)
     nodes = stack.parent.nodes
     n_hits = length(stack)
-    @inbounds for j in 0:(n_hits - 1)
-        src_idx = Int(nodes[start + j])
+    @inbounds for j in 0:(n_hits-1)
+        src_idx = Int(nodes[start+j])
         emitter_node_mask[src_idx] || continue
 
         to_idx = 0
-        for k in (j + 1):(n_hits - 1)
-            node_idx = Int(nodes[start + k])
+        for k in (j+1):(n_hits-1)
+            node_idx = Int(nodes[start+k])
             emitter_node_mask[node_idx] && continue
             to_idx = node_idx
             break
@@ -485,8 +478,8 @@ end
     start = _flat_stack_start(stack)
     nodes = stack.parent.nodes
     n_hits = length(stack)
-    @inbounds for h in 0:(n_hits - 1)
-        node_idx = Int(nodes[start + h])
+    @inbounds for h in 0:(n_hits-1)
+        node_idx = Int(nodes[start+h])
         if virtual_node_mask[node_idx]
             ratio = _projection_area_ratio(projection, options, node_idx)
             visible_area[node_idx] += pixel_area * ratio
@@ -575,7 +568,7 @@ function Base.deleteat!(stack::FlatPixelHitStack, i::Int)
     @boundscheck checkbounds(stack, i)
     count = length(stack)
     start = _flat_stack_start(stack)
-    @inbounds for pos in i:(count - 1)
+    @inbounds for pos in i:(count-1)
         src = start + pos
         dst = start + pos - 1
         stack.parent.heights[dst] = stack.parent.heights[src]
@@ -973,33 +966,33 @@ function _resolved_type_key(group_model::GroupModel, type_name::AbstractString)
         for (type_key, type_model) in group_model.types
             sig = (
                 interception=
-                    if type_model.interception === nothing
-                        nothing
-                    else
-                        interception = type_model.interception
+                if type_model.interception === nothing
+                    nothing
+                else
+                    interception = type_model.interception
+                    (
+                        interception.use,
+                        interception.model,
+                        interception.transparency,
+                        interception.optical_properties === nothing ? nothing :
                         (
-                            interception.use,
-                            interception.model,
-                            interception.transparency,
-                            interception.optical_properties === nothing ? nothing :
-                            (
-                                interception.optical_properties.par,
-                                interception.optical_properties.nir,
-                            ),
-                        )
-                    end,
+                            interception.optical_properties.par,
+                            interception.optical_properties.nir,
+                        ),
+                    )
+                end,
                 emitter=
-                    if type_model.light_emitter === nothing
-                        nothing
-                    else
-                        emitter = type_model.light_emitter
-                        (
-                            emitter.model,
-                            emitter.radiance,
-                            emitter.gamma.par,
-                            emitter.gamma.nir,
-                        )
-                    end,
+                if type_model.light_emitter === nothing
+                    nothing
+                else
+                    emitter = type_model.light_emitter
+                    (
+                        emitter.model,
+                        emitter.radiance,
+                        emitter.gamma.par,
+                        emitter.gamma.nir,
+                    )
+                end,
             )
             if first_sig === nothing
                 first_key = type_key
@@ -1130,7 +1123,7 @@ function _accumulate_emitter_transfer_counts!(
             src in emitter_nodes || continue
 
             to = 0
-            for k in (j + 1):length(stack)
+            for k in (j+1):length(stack)
                 nid = _stack_hit_node(stack, k)
                 nid in emitter_nodes && continue
                 to = nid

@@ -1,7 +1,3 @@
-import StaticArrays
-import LinearAlgebra: norm, dot, cross
-import Dates
-
 function _normalize3(v)
     n = norm(v)
     n == 0.0 ? v : v / n
@@ -91,7 +87,7 @@ function _hull_faces_12(points)
     faces = NTuple{3,Int}[]
     eps = 1e-9
 
-    for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
+    for i in 1:(n-2), j in (i+1):(n-1), k in (j+1):n
         nrm = cross(points[j] - points[i], points[k] - points[i])
         norm(nrm) <= 1e-12 && continue
 

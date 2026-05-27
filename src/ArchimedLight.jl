@@ -2,6 +2,15 @@ module ArchimedLight
 
 import PlantGeom
 import MultiScaleTreeGraph
+import GeometryBasics
+import StaticArrays
+import LinearAlgebra: norm, dot, cross
+import Serialization
+import Dates
+import OrderedCollections: OrderedDict
+import PlantMeteo
+import Tables
+import YAML
 
 include("types.jl")
 include("io.jl")

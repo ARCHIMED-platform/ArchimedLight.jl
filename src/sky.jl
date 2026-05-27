@@ -1,5 +1,3 @@
-import Dates
-
 const _SOLAR_CONSTANT_MJ_M2_MIN = 0.0820
 const _CENTER_OF_SOLAR_DISK_RAD = deg2rad(-0.83)
 const _SOLAR_TO_PAR = 0.48

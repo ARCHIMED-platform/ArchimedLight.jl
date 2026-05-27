@@ -1,5 +1,3 @@
-import OrderedCollections: OrderedDict
-
 """
     InterceptionBackend
 
