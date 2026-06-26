@@ -15,14 +15,22 @@ ray. When two non-virtual objects appear as neighboring visible hits along commo
 ray paths, those shared paths become transfer links for that direction. In the
 figure, the short double-headed arrows show the parts of the ray paths where
 energy can be exchanged in both directions: purple between the top and middle
-objects, dark blue between the top and bottom objects, and orange between the
+objects, teal between the top and bottom objects, and orange between the
 middle and bottom objects.
 
-Those links are counted over all pixels and directions. During propagation, a
-node's current power is multiplied by its scattering coefficient, normalized by
-its number of relevant directional hits, split between the two transfer sides,
-and added to the linked neighbors. The received scattered power becomes part of
-the next iteration.
+Panel 2 abstracts those shared ray segments into a graph: each object is a
+node, and each repeated common segment adds to the corresponding pair link for
+that direction. Those links are counted over all pixels and directions. During
+propagation, a node's current power is multiplied by its scattering coefficient,
+normalized by its total number of relevant directional hits, and split between
+the two transfer sides. Each pair link then receives that per-hit share
+multiplied by its common-hit count, so neighbors receive energy in proportion to
+their shared ray paths with the source node. The received scattered power becomes
+part of the next iteration.
+
+An object can also scatter energy toward open sky along one side of a directional
+path. In that case the energy is treated as leaving the scene: the sky is not
+added as a receiving node, and no new scattering exchanges are created with it.
 
 ## The Main Assumptions
 
@@ -94,9 +102,10 @@ For each node and band:
 
 1. start from the current intercepted or previously scattered energy
 2. multiply by the node scattering coefficient
-3. divide by the number of relevant directional hits
-4. split upward and downward transfer symmetrically
-5. accumulate received scattered energy on neighboring visible hits
+3. divide by the total number of relevant directional hits and by two transfer sides
+4. multiply that per-hit share by each pair link's common-hit count
+5. accumulate the resulting received energy on linked neighboring hits
+6. treat sky-facing shares with no receiving scene object as escaped energy
 
 The process repeats until the remaining scene-scale scattered energy becomes small enough.
 

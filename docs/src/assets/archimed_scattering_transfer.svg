@@ -69,6 +69,19 @@
          id="path1" />
     </marker>
     <marker
+       id="stepArrow"
+       markerWidth="5"
+       markerHeight="5"
+       refX="4.2"
+       refY="2.5"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="M0 0 L5 2.5 L0 5 Z"
+         fill="#3c5a50"
+         id="path-step-arrow" />
+    </marker>
+    <marker
        id="grayArrow"
        markerWidth="6"
        markerHeight="6"
@@ -78,7 +91,7 @@
        markerUnits="strokeWidth">
       <path
          d="M0 0 L6 3 L0 6 Z"
-         fill="#9aa7a3"
+         fill="#8fa19b"
          id="path2" />
     </marker>
     <marker
@@ -130,7 +143,7 @@
        markerUnits="strokeWidth">
       <path
          d="M0 0 L6 3 L0 6 Z"
-         fill="#f1d91d"
+         fill="#f4c542"
          id="path-yellow-arrow" />
     </marker>
     <marker
@@ -143,7 +156,7 @@
        markerUnits="strokeWidth">
       <path
          d="M0 0 L6 3 L0 6 Z"
-         fill="#236476"
+         fill="#1f6f7f"
          id="path-top-mid-arrow" />
     </marker>
     <marker
@@ -156,7 +169,7 @@
        markerUnits="strokeWidth">
       <path
          d="M6 0 L0 3 L6 6 Z"
-         fill="#236476"
+         fill="#1f6f7f"
          id="path-top-mid-arrow-start" />
     </marker>
     <marker
@@ -169,7 +182,7 @@
        markerUnits="strokeWidth">
       <path
          d="M0 0 L6 3 L0 6 Z"
-         fill="#7a4ba8"
+         fill="#7c5bb5"
          id="path-top-middle-arrow" />
     </marker>
     <marker
@@ -182,7 +195,7 @@
        markerUnits="strokeWidth">
       <path
          d="M6 0 L0 3 L6 6 Z"
-         fill="#7a4ba8"
+         fill="#7c5bb5"
          id="path-top-middle-arrow-start" />
     </marker>
     <marker
@@ -195,7 +208,7 @@
        markerUnits="strokeWidth">
       <path
          d="M0 0 L6 3 L0 6 Z"
-         fill="#e8703a"
+         fill="#d66a3f"
          id="path-mid-bottom-arrow" />
     </marker>
     <marker
@@ -208,7 +221,7 @@
        markerUnits="strokeWidth">
       <path
          d="M6 0 L0 3 L6 6 Z"
-         fill="#e8703a"
+         fill="#d66a3f"
          id="path-mid-bottom-arrow-start" />
     </marker>
     <filter
@@ -235,21 +248,22 @@
       .label { font: 650 13px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; fill: #28463d; }
       .small { font: 500 12px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; fill: #536960; }
       .tiny { font: 550 10px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; fill: #5f746d; }
-      .leafLabel { font: 750 10px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; fill: #f4fae8; }
+      .leafLabel { font: 750 10px -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; fill: #f7ffe9; }
       .mono { font: 650 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #2b4038; }
       .arrow { fill: none; stroke: #2f5145; stroke-width: 2.8; marker-end: url(#arrow); }
       .thinArrow { fill: none; stroke: #2f5145; stroke-width: 2; marker-end: url(#arrow); }
-      .grayRay { fill: none; stroke: #9aa7a3; stroke-width: 2; stroke-linecap: round; marker-end: url(#grayArrow); }
-      .incomingRay { fill: none; stroke: #f1d91d; stroke-width: 2.4; stroke-linecap: round; marker-end: url(#yellowArrow); }
+      .stepArrow { fill: none; stroke: #3c5a50; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#stepArrow); }
+      .grayRay { fill: none; stroke: #8fa19b; stroke-width: 2; stroke-linecap: round; marker-end: url(#grayArrow); }
+      .incomingRay { fill: none; stroke: #f4c542; stroke-width: 2.4; stroke-linecap: round; marker-end: url(#yellowArrow); }
       .blueExchange { fill: none; stroke: #2f73bd; stroke-width: 3; stroke-linecap: round; marker-start: url(#blueArrow); marker-end: url(#blueArrow); }
       .redExchange { fill: none; stroke: #d23b35; stroke-width: 3; stroke-linecap: round; marker-start: url(#redArrow); marker-end: url(#redArrow); }
-      .topMiddleExchange { fill: none; stroke: #7a4ba8; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#topMiddleArrowStart); marker-end: url(#topMiddleArrow); }
-      .topMidExchange { fill: none; stroke: #236476; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#topMidArrowStart); marker-end: url(#topMidArrow); }
-      .midBottomExchange { fill: none; stroke: #e8703a; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#midBottomArrowStart); marker-end: url(#midBottomArrow); }
+      .topMiddleExchange { fill: none; stroke: #7c5bb5; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#topMiddleArrowStart); marker-end: url(#topMiddleArrow); }
+      .topMidExchange { fill: none; stroke: #1f6f7f; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#topMidArrowStart); marker-end: url(#topMidArrow); }
+      .midBottomExchange { fill: none; stroke: #d66a3f; stroke-width: 2.4; stroke-linecap: round; marker-start: url(#midBottomArrowStart); marker-end: url(#midBottomArrow); }
       .greenPath { fill: none; stroke: #5c8c3a; stroke-width: 2.5; stroke-linecap: round; marker-end: url(#greenArrow); }
-      .objectTop { fill: #9abb69; stroke: #314622; stroke-width: 2; }
-      .objectMid { fill: #a9c97a; stroke: #48642a; stroke-width: 2; }
-      .objectBottom { fill: #8fb567; stroke: #435d27; stroke-width: 2; }
+      .objectTop { fill: #86b85f; stroke: #38542d; stroke-width: 2; }
+      .objectMid { fill: #9ac56b; stroke: #496833; stroke-width: 2; }
+      .objectBottom { fill: #77a95a; stroke: #3e5f31; stroke-width: 2; }
       .nodeTop { fill: #e8f4ec; stroke: #7bad6e; stroke-width: 2; }
       .nodeMid { fill: #fff8e8; stroke: #d4b56f; stroke-width: 2; }
       .nodeBottom { fill: #eef7ff; stroke: #7faed0; stroke-width: 2; }
@@ -284,16 +298,16 @@
      id="text8">For each direction, first-order hit paths define which neighboring objects can exchange scattered energy.</text>
   <line
      x1="382"
-     y1="265"
-     x2="430"
-     y2="265"
+     y1="304.5"
+     x2="426"
+     y2="304.5"
      class="arrow"
      id="line8" />
   <line
      x1="774"
-     y1="265"
-     x2="822"
-     y2="265"
+     y1="304.5"
+     x2="818"
+     y2="304.5"
      class="arrow"
      id="line9" />
   <g
@@ -304,7 +318,7 @@
        x="0"
        y="0"
        width="342"
-       height="342"
+       height="385"
        rx="8"
        id="rect9" />
     <rect
@@ -543,7 +557,7 @@
        x="0"
        y="0"
        width="342"
-       height="342"
+       height="385"
        rx="8"
        id="rect33" />
     <rect
@@ -567,133 +581,63 @@
     <g
        transform="translate(34 76)"
        id="g47">
-      <rect
-         x="0"
-         y="0"
-         width="110"
-         height="224"
-         rx="6"
-         class="box"
-         id="rect35" />
-      <text
-         x="16"
-         y="24"
-         class="label"
-         id="text35">per-pixel</text>
-      <text
-         x="16"
-         y="43"
-         class="label"
-         id="text36">hit stacks</text>
-      <line
-         x1="39.648155"
-         y1="68"
-         x2="39.648155"
-         y2="176"
-         stroke="#9aacaa"
-         stroke-width="3"
-         stroke-linecap="round"
-         id="line36" />
-      <circle
-         cx="39.648155"
-         cy="68"
-         r="9"
-         class="nodeTop"
-         id="circle36" />
-      <circle
-         cx="39.648155"
-         cy="122"
-         r="9"
-         class="nodeMid"
-         id="circle37" />
-      <circle
-         cx="39.648155"
-         cy="176"
-         r="9"
-         class="nodeBottom"
-         id="circle38" />
-      <text
-         x="55.648155"
-         y="72"
-         class="tiny"
-         id="text38"
-         style="font-style:normal;font-variant:normal;font-weight:550;font-stretch:normal;font-size:10px;line-height:normal;font-family:'-apple-system', BlinkMacSystemFont, 'Segoe UI', sans-serif">top</text>
-      <text
-         x="55.648155"
-         y="126"
-         class="tiny"
-         id="text39"
-         style="font-style:normal;font-variant:normal;font-weight:550;font-stretch:normal;font-size:10px;line-height:normal;font-family:'-apple-system', BlinkMacSystemFont, 'Segoe UI', sans-serif">middle</text>
-      <text
-         x="55.648155"
-         y="180"
-         class="tiny"
-         id="text40"
-         style="font-style:normal;font-variant:normal;font-weight:550;font-stretch:normal;font-size:10px;line-height:normal;font-family:'-apple-system', BlinkMacSystemFont, 'Segoe UI', sans-serif">bottom</text>
-      <line
-         x1="123"
-         y1="112"
-         x2="162"
-         y2="112"
-         class="thinArrow"
-         id="line40" />
-      <circle
-         cx="214"
-         cy="58"
-         r="27"
-         class="nodeTop"
-         id="circle40" />
-      <text
-         x="199"
-         y="63"
-         class="label"
-         id="text41">top</text>
-      <circle
-         cx="214"
-         cy="132"
-         r="27"
-         class="nodeMid"
-         id="circle41" />
-      <text
-         x="205"
-         y="137"
-         class="label"
-         id="text42">mid</text>
-      <circle
-         cx="214"
-         cy="206"
-         r="27"
-         class="nodeBottom"
-         id="circle42" />
-      <text
-         x="194"
-         y="211"
-         class="label"
-         id="text43">bottom</text>
+      <g
+         transform="translate(0 -28)"
+         id="link-graph-main">
       <path
-         d="M241 66 C316 102 316 162 241 198"
+         d="M109 42 C56 52 20 108 40 162"
+         class="topMiddleExchange"
+         id="path44-top-middle" />
+      <path
+         d="M165 42 C218 52 254 108 234 162"
          class="topMidExchange"
          id="path43" />
       <path
-         d="M187 198 C112 162 112 102 187 66"
-         class="topMidExchange"
-         id="path44" />
-      <path
-         d="M241 140 C304 156 304 182 241 198"
+         d="M68 190 C94 228 180 228 206 190"
          class="midBottomExchange"
          id="path45" />
-      <path
-         d="M187 198 C124 182 124 156 187 140"
-         class="midBottomExchange"
-         id="path46" />
+      <circle
+         cx="137"
+         cy="42"
+         r="28"
+         class="nodeTop"
+         id="circle40" />
+      <circle
+         cx="68"
+         cy="162"
+         r="28"
+         class="nodeMid"
+         id="circle41" />
+      <circle
+         cx="206"
+         cy="162"
+         r="28"
+         class="nodeBottom"
+         id="circle42" />
       <text
-         x="30"
-         y="254"
-         class="small"
-         id="text46">common hit stacks are counted</text>
+         x="122"
+         y="47"
+         class="label"
+         id="text41">top</text>
+      <text
+         x="59"
+         y="167"
+         class="label"
+         id="text42">mid</text>
+      <text
+         x="186"
+         y="167"
+         class="label"
+         id="text43">bottom</text>
+      </g>
       <text
          x="42"
-         y="270"
+         y="246"
+         class="small"
+         id="text46">shared ray segments are counted</text>
+      <text
+         x="78"
+         y="262"
          class="small"
          id="text47">as pair links by direction</text>
     </g>
@@ -706,7 +650,7 @@
        x="0"
        y="0"
        width="338"
-       height="342"
+       height="385"
        rx="8"
        id="rect47" />
     <rect
@@ -749,79 +693,104 @@
          id="text50">first-order or previous iteration</text>
       <line
          x1="139"
-         y1="52"
+         y1="49"
          x2="139"
-         y2="70"
-         class="thinArrow"
+         y2="64"
+         class="stepArrow"
          id="line50" />
       <rect
          x="0"
-         y="74"
+         y="66"
          width="278"
-         height="48"
+         height="44"
          rx="6"
          class="box"
          id="rect50" />
       <text
          x="18"
-         y="95"
+         y="85"
          class="label"
          id="text51">scattered pool</text>
       <text
          x="18"
-         y="113"
+         y="103"
          class="mono"
          id="text52">power x scattering coefficient</text>
       <line
          x1="139"
-         y1="126"
+         y1="113"
          x2="139"
-         y2="144"
-         class="thinArrow"
+         y2="128"
+         class="stepArrow"
          id="line52" />
       <rect
          x="0"
-         y="148"
+         y="130"
          width="278"
-         height="48"
+         height="44"
          rx="6"
          class="box"
          id="rect52" />
       <text
          x="18"
-         y="169"
+         y="149"
          class="label"
-         id="text53">share per side</text>
+         id="text53">per-hit share</text>
       <text
          x="18"
-         y="187"
+         y="167"
          class="mono"
-         id="text54">pool / hit count / 2</text>
+         id="text54">pool / total hits / 2</text>
       <line
          x1="139"
-         y1="200"
+         y1="177"
          x2="139"
-         y2="218"
-         class="thinArrow"
+         y2="192"
+         class="stepArrow"
          id="line54" />
       <rect
          x="0"
-         y="222"
+         y="194"
          width="278"
-         height="48"
+         height="44"
          rx="6"
          class="box"
          id="rect54" />
       <text
          x="18"
-         y="243"
+         y="213"
          class="label"
-         id="text55">received power</text>
+         id="text55">link transfer</text>
       <text
          x="18"
-         y="261"
+         y="231"
+         class="mono"
+         id="text56">per-hit share x common-hit count</text>
+      <line
+         x1="139"
+         y1="241"
+         x2="139"
+         y2="256"
+         class="stepArrow"
+         id="line56" />
+      <rect
+         x="0"
+         y="258"
+         width="278"
+         height="44"
+         rx="6"
+         class="box"
+         id="rect56" />
+      <text
+         x="18"
+         y="277"
+         class="label"
+         id="text57">received power</text>
+      <text
+         x="18"
+         y="295"
          class="small"
-         id="text56">accumulates on linked neighbors</text>
+         id="text58">accumulates on linked neighbors</text>
     </g>
   </g>
 </svg>
