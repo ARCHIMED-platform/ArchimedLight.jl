@@ -2,13 +2,27 @@
 
 After first-order interception, ARCHIMED can redistribute part of the intercepted energy between scene components through iterative scattering.
 
-This page also summarizes the main optical and modelling assumptions behind the light-only package.
-
 ## Scattering In One Sentence
 
-The model takes the energy first intercepted by each component, applies a waveband-specific scattering coefficient, and redistributes that scattered pool between adjacent visible hits along the same pixel-stack geometry used for interception.
+The model takes the energy first intercepted by each component, applies a waveband-specific scattering coefficient, and redistributes that scattered pool between adjacent visible hits along the same directional ray paths used for interception.
 
 ![Scattering transfer graph on one pixel stack](assets/archimed_scattering_transfer.svg)
+
+The important point is that scattering links are not built from arbitrary
+distances between objects. For each turtle direction, ARCHIMED projects the scene
+onto a raster grid and records the ordered stack of objects hit by each pixel
+ray. When two non-virtual objects appear as neighboring visible hits along common
+ray paths, those shared paths become transfer links for that direction. In the
+figure, the short double-headed arrows show the parts of the ray paths where
+energy can be exchanged in both directions: purple between the top and middle
+objects, dark blue between the top and bottom objects, and orange between the
+middle and bottom objects.
+
+Those links are counted over all pixels and directions. During propagation, a
+node's current power is multiplied by its scattering coefficient, normalized by
+its number of relevant directional hits, split between the two transfer sides,
+and added to the linked neighbors. The received scattered power becomes part of
+the next iteration.
 
 ## The Main Assumptions
 
