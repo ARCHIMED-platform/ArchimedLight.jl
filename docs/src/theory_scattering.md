@@ -8,93 +8,28 @@ The model takes the energy first intercepted by each component, applies a waveba
 
 ![Scattering transfer graph on one pixel stack](assets/archimed_scattering_transfer.svg)
 
-The important point is that scattering links are not built from arbitrary
-distances between objects. For each turtle direction, ARCHIMED projects the scene
-onto a raster grid and records the ordered stack of objects hit by each pixel
-ray. When two non-virtual objects appear as neighboring visible hits along common
-ray paths, those shared paths become transfer links for that direction. In the
-figure, the short double-headed arrows show the parts of the ray paths where
-energy can be exchanged in both directions: purple between the top and middle
-objects, teal between the top and bottom objects, and orange between the
-middle and bottom objects.
+The figure shows the three steps used to turn first-order ray paths into
+scattering transfers.
 
-Panel 2 abstracts those shared ray segments into a graph: each object is a
-node, and each repeated common segment adds to the corresponding pair link for
-that direction. Those links are counted over all pixels and directions. During
-propagation, a node's current power is multiplied by its scattering coefficient,
-normalized by its total number of relevant directional hits, and split between
-the two transfer sides. Each pair link then receives that per-hit share
-multiplied by its common-hit count, so neighbors receive energy in proportion to
-their shared ray paths with the source node. The received scattered power becomes
-part of the next iteration.
+Panel 1 shows the geometric information that ARCHIMED reuses. For each turtle
+direction, the scene is projected onto a raster grid and each pixel ray records
+the ordered stack of objects it crosses. In the figure, the short double-headed 
+arrows mark the ray segments where energy can be exchanged in both directions: purple between the top and middle
+objects, teal between the top and bottom objects, and orange between the middle
+and bottom objects.
+
+Energy exchange is then computed using links (Panel 2) between nodes that present shared ray segments. The links are built from the number of shared hits along the ray path, and they are used to transfer energy between the nodes in proportion to their shared ray paths. Each node's scattering coefficient determines how much of its intercepted energy is redistributed, and the pair links determine how that scattered energy is shared with their neighbors.
+
+Panel 3 shows how the graph is used during propagation. A node's current power is
+multiplied by its scattering coefficient, normalized by its total number of
+relevant directional hits, and split between the two transfer sides. Each pair
+link then receives that per-hit share multiplied by its common-hit count, so
+neighbors receive energy in proportion to their shared ray paths with the source
+node. The received scattered power becomes part of the next iteration.
 
 An object can also scatter energy toward open sky along one side of a directional
 path. In that case the energy is treated as leaving the scene: the sky is not
 added as a receiving node, and no new scattering exchanges are created with it.
-
-## The Main Assumptions
-
-### Surface-Based Scene
-
-The model works on explicit surfaces, not on a continuous participating medium.
-
-### Finite Direction Set
-
-Both incident radiation and scattering exchanges are described over a finite set of discrete directions.
-
-### Simplified Optical Behavior
-
-The optical model is not a full BRDF / BTDF description.
-The current light runtime mainly needs waveband-specific scattering fractions, typically one for PAR and one for NIR.
-
-### Lambertian-Style Redistribution
-
-The scattering logic assumes that the scattered pool can be redistributed across the available directional links in a way consistent with the historical ARCHIMED Lambertian simplification.
-
-## Optical Coefficients
-
-In model files, `optical_properties` store scattering factors by waveband:
-
-```yaml
-optical_properties:
-  PAR: 0.15
-  NIR: 0.90
-```
-
-Interpreting those values:
-
-- low PAR scattering means most intercepted PAR is absorbed
-- high NIR scattering means much more of the intercepted NIR is re-emitted into the scattering process
-
-This matches a classic plant optics intuition: leaves absorb PAR relatively strongly but scatter and transmit much more NIR.
-
-## Artificial Light Emitters
-
-The historical ARCHIMED source formalism can be read with three indices:
-source `s`, waveband `b`, and direction `d`. Natural illumination has sources
-such as the sun and sky sectors. An artificial emitter adds another source to
-that same light budget.
-
-For an emitter, `radiance` is the total emitted magnitude attached to the
-emitting component type, and `gamma` partitions that magnitude by waveband. For
-example, `gamma.PAR = 0.48` means that 48 percent of the emitted energy is
-treated as PAR. Conceptually, the emitted source term for a band is:
-
-```text
-I[b, s] = gamma[b, s] * I[s]
-```
-
-The Julia runtime treats `LightEmitter` components as Lambertian-style scene
-sources. Their emitted light is routed through the same directional visibility
-and pixel-stack machinery used by first-order interception, so receivers still
-use their usual model semantics: group/type matching, transparency, virtual
-sensor behavior, and waveband-specific optical properties. If scattering is
-enabled, the emitter-contributed first-order light joins the same scattered
-energy pool as sky and sun light.
-
-This is deliberately simpler than a full photometric lamp or point-source ray
-tracer. It is an ARCHIMED-compatible source term for artificial illumination,
-controlled experiments, and diagnostic scenes.
 
 ## How One Scattering Iteration Works
 
@@ -119,30 +54,61 @@ current scattered energy <= scattering_stop_ratio × initial scene intercepted e
 
 The default `scattering_stop_ratio = 0.01` means the iteration stops once the remaining scattering pool falls below 1 percent of the initial intercepted energy in the band.
 
+## The Main Assumptions
+
+### Finite Direction Set
+
+Both incident radiation and scattering exchanges are described over a finite set of discrete directions. The directional discretization is a key assumption of the ARCHIMED method, and it is used for both first-order interception and scattering. The directional set is defined by the turtle sectors, which are built from the meteo step and the sky model.
+
+### Lambertian-Style Redistribution
+
+The scattering logic assumes that the scattered pool can be redistributed across the available directional links in proportion to their shared ray paths. This is a Lambertian-style assumption, which is a common simplification in plant optics. It is not a full BRDF / BTDF description, but it is sufficient for the purpose of redistributing intercepted energy between scene components.
+
+## Optical Coefficients
+
+In model files, `optical_properties` store scattering factors by waveband:
+
+```yaml
+optical_properties:
+  PAR: 0.15
+  NIR: 0.90
+```
+
+PAR has typically low scattering because most intercepted PAR is absorbed by leaves. Whereas NIR scattering is typically high, meaning much more of the intercepted NIR is re-emitted into the scattering process.
+
+## Artificial Light Emitters
+
+The light source formalism can be read with three indices:
+source `s`, waveband `b`, and direction `d`. Natural illumination has sources
+such as the sun and sky sectors. An artificial emitter adds another source to
+that same light budget.
+
+For an emitter, `radiance` is the total emitted magnitude attached to the
+emitting component type, and `gamma` partitions that magnitude by waveband. For
+example, `gamma.PAR = 0.48` means that 48 percent of the emitted energy is
+treated as PAR. Conceptually, the emitted source term for a band is:
+
+```text
+I[b, s] = gamma[b, s] * I[s]
+```
+
+This package treats `LightEmitter` components as Lambertian-style scene
+sources. Their emitted light is routed through the same directional visibility
+and pixel-stack machinery used by first-order interception, so receivers still
+use their usual model semantics: group/type matching, transparency, virtual
+sensor behavior, and waveband-specific optical properties. If scattering is
+enabled, the emitter-contributed first-order light joins the same scattered
+energy pool as sky and sun light.
+
+This is deliberately simpler than a full photometric lamp or point-source ray
+tracer, but it is sufficient for the purpose of adding artificial light to a scene.
+
 ## Virtual Sensors
 
-Virtual sensors are special:
-
-- they receive light
-- they can report it
-- they do not behave as opaque absorbing geometry
-- they remain transparent in the scattering transfer logic
-
-That is why they matter both for model semantics and for the choice of pixel-stack depth.
+Virtual sensors are special because they receive light and can report how much they receive, but they do not behave as absorbing geometry. In other words, they are treated as transparent during scattering. This is important because it allows the model to report light received by sensors without changing the scattering behavior of the scene.
+They usually are used to measure light received at a specific location, such as a sensor on a leaf or a camera in the scene.
 
 ## Soil And Ground Matter More When Scattering Is Enabled
 
 Without ground geometry, a significant part of the lower-canopy exchange can be missed.
-That is why the historical ARCHIMED workflows often recommend paving or explicit ground tiles whenever scattering is active.
-
-## Where The Julia Port Differs Structurally
-
-The Java code stored much of the scattering state directly in mutable per-node objects.
-The Julia port keeps the same model semantics, but represents the transfer logic through explicit containers such as:
-
-- first-order results
-- scattering transfer graphs
-- scattering result objects
-- final `LightBudget`
-
-The physical story stays the same even though the software architecture is more data-oriented.
+That is why it is highly recommended to use a paving or explicit ground tiles whenever scattering is active.
