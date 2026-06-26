@@ -46,6 +46,34 @@ Interpreting those values:
 
 This matches a classic plant optics intuition: leaves absorb PAR relatively strongly but scatter and transmit much more NIR.
 
+## Artificial Light Emitters
+
+The historical ARCHIMED source formalism can be read with three indices:
+source `s`, waveband `b`, and direction `d`. Natural illumination has sources
+such as the sun and sky sectors. An artificial emitter adds another source to
+that same light budget.
+
+For an emitter, `radiance` is the total emitted magnitude attached to the
+emitting component type, and `gamma` partitions that magnitude by waveband. For
+example, `gamma.PAR = 0.48` means that 48 percent of the emitted energy is
+treated as PAR. Conceptually, the emitted source term for a band is:
+
+```text
+I[b, s] = gamma[b, s] * I[s]
+```
+
+The Julia runtime treats `LightEmitter` components as Lambertian-style scene
+sources. Their emitted light is routed through the same directional visibility
+and pixel-stack machinery used by first-order interception, so receivers still
+use their usual model semantics: group/type matching, transparency, virtual
+sensor behavior, and waveband-specific optical properties. If scattering is
+enabled, the emitter-contributed first-order light joins the same scattered
+energy pool as sky and sun light.
+
+This is deliberately simpler than a full photometric lamp or point-source ray
+tracer. It is an ARCHIMED-compatible source term for artificial illumination,
+controlled experiments, and diagnostic scenes.
+
 ## How One Scattering Iteration Works
 
 For each node and band:

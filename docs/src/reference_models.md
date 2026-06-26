@@ -317,7 +317,8 @@ TypeModel(
 ```
 
 This is useful for artificial lighting or diagnostic scenes. Most canopy
-workflows still rely mainly on meteo forcing.
+workflows still rely mainly on meteo forcing. For the source notation and how
+emitters enter the light algorithm, see [Artificial Light Emitters](theory_scattering.md#artificial-light-emitters).
 
 ## 8. Wildcard Models
 
