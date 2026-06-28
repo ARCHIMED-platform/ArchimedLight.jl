@@ -13,6 +13,109 @@ Reference interception backend based on CPU raster projection.
 struct RasterCPUBackend <: InterceptionBackend end
 
 """
+    RaycoreBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=256,
+        max_hits_per_pixel=32, hit_epsilon=1.0f-4,
+        edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
+        scattering_eltype=nothing)
+
+Shared configuration for Raycore-based interception and scattering backends.
+The `backend` field is a KernelAbstractions backend, not a CUDA/Metal package
+object; GPU packages are loaded by users or tests outside ArchimedLight core.
+"""
+struct RaycoreBackendConfig{B}
+    backend::B
+    workgroupsize::Int
+    max_hits_per_pixel::Int
+    hit_epsilon::Float32
+    edge_accumulation::Symbol
+    dense_edge_limit_bytes::Int
+    scattering_eltype::DataType
+
+    function RaycoreBackendConfig(
+        backend::B,
+        workgroupsize::Integer,
+        max_hits_per_pixel::Integer,
+        hit_epsilon::Real,
+        edge_accumulation::Symbol,
+        dense_edge_limit_bytes::Integer,
+        scattering_eltype::Type{<:AbstractFloat},
+    ) where {B}
+        workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
+        max_hits_per_pixel > 0 || error("RaycoreBackendConfig max_hits_per_pixel must be positive.")
+        hit_epsilon > 0 || error("RaycoreBackendConfig hit_epsilon must be positive.")
+        dense_edge_limit_bytes > 0 || error("RaycoreBackendConfig dense_edge_limit_bytes must be positive.")
+        edge_accumulation in (:auto, :sparse_host_reduce, :dense_atomic) ||
+            error("Unsupported Raycore edge_accumulation: $edge_accumulation (supported: :auto, :sparse_host_reduce, :dense_atomic)")
+        scattering_eltype in (Float32, Float64) ||
+            error("RaycoreBackendConfig scattering_eltype must be Float32 or Float64.")
+        return new{B}(
+            backend,
+            Int(workgroupsize),
+            Int(max_hits_per_pixel),
+            Float32(hit_epsilon),
+            edge_accumulation,
+            Int(dense_edge_limit_bytes),
+            scattering_eltype,
+        )
+    end
+end
+
+_raycore_default_scattering_eltype(backend) = backend isa KernelAbstractions.CPU ? Float64 : Float32
+
+function RaycoreBackendConfig(;
+    backend=KernelAbstractions.CPU(),
+    workgroupsize::Integer=256,
+    max_hits_per_pixel::Integer=32,
+    hit_epsilon::Real=1.0f-4,
+    edge_accumulation::Symbol=:auto,
+    dense_edge_limit_bytes::Integer=512 * 1024^2,
+    scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
+)
+    return RaycoreBackendConfig(
+        backend,
+        workgroupsize,
+        max_hits_per_pixel,
+        hit_epsilon,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
+    )
+end
+
+"""
+    RaycoreInterceptionBackend(; kwargs...)
+    RaycoreInterceptionBackend(config::RaycoreBackendConfig)
+
+Interception backend placeholder for Raycore/KernelAbstractions projection.
+"""
+struct RaycoreInterceptionBackend{C<:RaycoreBackendConfig} <: InterceptionBackend
+    config::C
+end
+
+RaycoreInterceptionBackend(; kwargs...) = RaycoreInterceptionBackend(RaycoreBackendConfig(; kwargs...))
+
+function _raycore_config_with(
+    config::RaycoreBackendConfig;
+    backend=config.backend,
+    workgroupsize=config.workgroupsize,
+    max_hits_per_pixel=config.max_hits_per_pixel,
+    hit_epsilon=config.hit_epsilon,
+    edge_accumulation=config.edge_accumulation,
+    dense_edge_limit_bytes=config.dense_edge_limit_bytes,
+    scattering_eltype=config.scattering_eltype,
+)
+    return RaycoreBackendConfig(
+        backend,
+        workgroupsize,
+        max_hits_per_pixel,
+        hit_epsilon,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        scattering_eltype,
+    )
+end
+
+"""
     ScatteringBackend
 
 Abstract supertype for multiple-scattering backends.
@@ -33,6 +136,32 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 Scattering backend that uses precomputed link-style transfer relationships.
 """
 struct LinksScatteringBackend <: ScatteringBackend end
+
+"""
+    RaycoreScatteringBackend(interception_backend::RaycoreInterceptionBackend; kwargs...)
+    RaycoreScatteringBackend(; kwargs...)
+
+Scattering backend placeholder for Raycore-generated visibility stacks.
+"""
+struct RaycoreScatteringBackend{C<:RaycoreBackendConfig} <: ScatteringBackend
+    config::C
+end
+
+RaycoreScatteringBackend(; kwargs...) = RaycoreScatteringBackend(RaycoreBackendConfig(; kwargs...))
+
+function RaycoreScatteringBackend(
+    interception_backend::RaycoreInterceptionBackend;
+    edge_accumulation::Symbol=interception_backend.config.edge_accumulation,
+    dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
+)
+    return RaycoreScatteringBackend(
+        _raycore_config_with(
+            interception_backend.config;
+            edge_accumulation=edge_accumulation,
+            dense_edge_limit_bytes=dense_edge_limit_bytes,
+        ),
+    )
+end
 
 """
     OpticalProperties(par=0.0, nir=0.0)

@@ -112,3 +112,31 @@ end
     ref_png = joinpath(case_root, "expected", "ri_par_f_step0.png")
     @test_reference relpath(ref_png, @__DIR__) fig by = ReferenceTests.psnr_equality(35)
 end
+
+@testitem "Fast fixture Raycore simpleplant parity" tags=[:fast_fixture, :fast, :raycore_backend, :simpleplant_raycore] begin
+    include(joinpath(@__DIR__, "support.jl"))
+    include(joinpath(@__DIR__, "fast_fixture_support.jl"))
+
+    for name in ("simpleplant_16_notoric", "simpleplant_16_toric")
+        case_root = joinpath(@__DIR__, "fast_fixtures", name)
+        fixture = load_fixture_inputs(joinpath(case_root, "input"))
+        raster_step = first(ArchimedLight.run_light_series(fixture.scene, fixture.models, fixture.meteo, fixture.options))
+        raycore_step = first(
+            ArchimedLight.run_light_series(
+                fixture.scene,
+                fixture.models,
+                fixture.meteo,
+                fixture.options;
+                interception_backend=ArchimedLight.RaycoreInterceptionBackend(),
+            ),
+        )
+
+        raster_map = _source_topology_area_q(fixture.scene, fixture.models, fixture.options, raster_step)
+        raycore_map = _source_topology_area_q(fixture.scene, fixture.models, fixture.options, raycore_step)
+        @test keys(raycore_map) == keys(raster_map)
+        for key in keys(raster_map)
+            @test isapprox(raycore_map[key].area, raster_map[key].area; atol=1e-8, rtol=1e-6)
+            @test isapprox(raycore_map[key].Ri_PAR_0_q, raster_map[key].Ri_PAR_0_q; atol=1e-4, rtol=1e-6)
+        end
+    end
+end

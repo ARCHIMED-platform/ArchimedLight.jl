@@ -117,3 +117,157 @@ end
     @test stack[1] == (1.0, 1)
     @test stack[end] == (300.0, 300)
 end
+
+@testitem "Raycore backend plumbing" tags=[:core, :fast, :raycore_backend] begin
+    ib = ArchimedLight.RaycoreInterceptionBackend()
+
+    @test ib isa ArchimedLight.InterceptionBackend
+    @test ib.config.workgroupsize == 256
+    @test ib.config.max_hits_per_pixel == 32
+    @test ib.config.hit_epsilon == Float32(1.0f-4)
+    @test ib.config.edge_accumulation == :auto
+    @test ib.config.dense_edge_limit_bytes == 512 * 1024^2
+    @test ib.config.scattering_eltype == Float64
+
+    resolved = ArchimedLight._resolve_interception_backend(:raycore_cpu)
+    @test resolved isa ArchimedLight.RaycoreInterceptionBackend
+
+    err = try
+        ArchimedLight._resolve_interception_backend(:not_a_backend)
+        nothing
+    catch caught
+        caught
+    end
+    @test err isa ErrorException
+    @test occursin(":raycore_cpu", sprint(showerror, err))
+
+    sb = ArchimedLight.RaycoreScatteringBackend(ib; edge_accumulation=:sparse_host_reduce)
+    @test sb isa ArchimedLight.ScatteringBackend
+    @test sb.config.backend == ib.config.backend
+    @test sb.config.edge_accumulation == :sparse_host_reduce
+    @test sb.config.scattering_eltype == Float64
+    @test ArchimedLight._resolve_scattering_backend(:raycast, sb) === sb
+
+    ib32 = ArchimedLight.RaycoreInterceptionBackend(scattering_eltype=Float32)
+    sb32 = ArchimedLight.RaycoreScatteringBackend(ib32)
+    @test ib32.config.scattering_eltype == Float32
+    @test sb32.config.scattering_eltype == Float32
+
+    @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(workgroupsize=0)
+    @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(edge_accumulation=:unsupported)
+end
+
+@testitem "Raycore optional device smoke" tags=[:core, :raycore_backend] begin
+    using GeometryBasics
+    import PlantGeom
+
+    KA = ArchimedLight.KernelAbstractions
+
+    function _optional_package(name::Symbol)
+        Base.find_package(String(name)) === nothing &&
+            error("ARCHIMEDLIGHT_TEST_$(uppercase(String(name)))=1 was set, but package $name is not available.")
+        return Base.require(Main, name)
+    end
+
+    function _optional_backend(name::Symbol)
+        if name == :CUDA
+            mod = _optional_package(:CUDA)
+            getproperty(mod, :functional)() ||
+                error("ARCHIMEDLIGHT_TEST_CUDA=1 was set, but CUDA.functional() is false.")
+            return KA.get_backend(getproperty(mod, :CuArray)(zeros(Float32, 1)))
+        elseif name == :Metal
+            mod = _optional_package(:Metal)
+            return KA.get_backend(getproperty(mod, :MtlArray)(zeros(Float32, 1)))
+        elseif name == :oneAPI
+            mod = _optional_package(:oneAPI)
+            return KA.get_backend(getproperty(mod, :oneArray)(zeros(Float32, 1)))
+        elseif name == :AMDGPU
+            mod = _optional_package(:AMDGPU)
+            return KA.get_backend(getproperty(mod, :ROCArray)(zeros(Float32, 1)))
+        end
+        error("Unsupported optional backend $name")
+    end
+
+    function _smoke_scene()
+        mesh = GeometryBasics.Mesh(
+            GeometryBasics.Point3f[
+                GeometryBasics.Point3f(0, 0, 1),
+                GeometryBasics.Point3f(1, 0, 1),
+                GeometryBasics.Point3f(1, 1, 1),
+                GeometryBasics.Point3f(0, 1, 1),
+            ],
+            GeometryBasics.TriangleFace{Int}[(1, 2, 3), (1, 3, 4)],
+        )
+        return PlantGeom.make_scene(domain=(0.0, 0.0, 1.0, 1.0), source_path="raycore_optional_device_smoke") do builder
+            PlantGeom.add_object!(
+                builder,
+                mesh;
+                group="plate",
+                type="plate",
+                id=1,
+                source_topology_id=1,
+            )
+        end
+    end
+
+    function _smoke_models()
+        return ArchimedLight.prepare_models([
+            ArchimedLight.GroupModel(
+                "*";
+                types=ArchimedLight.OrderedDict(
+                    "*" => ArchimedLight.TypeModel(
+                        interception=ArchimedLight.InterceptionModel(
+                            model="Translucent",
+                            transparency=0.0,
+                            optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                        ),
+                    ),
+                ),
+            ),
+        ])
+    end
+
+    requested = Pair{String,Symbol}[
+        "ARCHIMEDLIGHT_TEST_CUDA" => :CUDA,
+        "ARCHIMEDLIGHT_TEST_METAL" => :Metal,
+        "ARCHIMEDLIGHT_TEST_ONEAPI" => :oneAPI,
+        "ARCHIMEDLIGHT_TEST_AMDGPU" => :AMDGPU,
+    ]
+    selected = [backend for (env, backend) in requested if lowercase(get(ENV, env, "")) in ("1", "true", "yes", "on")]
+
+    if isempty(selected)
+        @test true
+    else
+        scene = _smoke_scene()
+        models = _smoke_models()
+        options = ArchimedLight.LightOptions(
+            turtle_sectors=1,
+            all_in_turtle=false,
+            scattering=false,
+            pixel_size=0.01,
+        )
+        sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+        turtle = ArchimedLight.build_turtle(options, sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+        raster = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+        raster_area = sum(values(raster.projected_area_per_node); init=0.0)
+        raster_par = sum(values(raster.incident_power.par); init=0.0)
+
+        for name in selected
+            backend = _optional_backend(name)
+            raycore = ArchimedLight.compute_first_order(
+                scene,
+                models,
+                turtle,
+                fluxes,
+                options;
+                backend=ArchimedLight.RaycoreInterceptionBackend(backend=backend),
+            )
+            raycore_area = sum(values(raycore.projected_area_per_node); init=0.0)
+            raycore_par = sum(values(raycore.incident_power.par); init=0.0)
+            @test raycore_area > 0.0
+            @test isapprox(raycore_area, raster_area; atol=1e-10, rtol=1e-10)
+            @test isapprox(raycore_par, raster_par; atol=1e-8, rtol=1e-8)
+        end
+    end
+end

@@ -23,6 +23,353 @@ end
     @test isapprox(get(HelperModule._incident_par_initial_flux(run.budget), 1, 0.0), 100.0; atol=1e-10, rtol=1e-10)
 end
 
+@testitem "Synthetic case Raycore scene adapter metadata" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false)
+
+    data = ArchimedLight._prepare_raycore_interception_data(
+        scene,
+        models,
+        options,
+        ArchimedLight.RaycoreInterceptionBackend(),
+    )
+
+    @test data.prepared.geometry.face2node_index == [1, 1]
+    node_idx = ArchimedLight._raycore_closest_hit_node_index(data, (0.5, 0.5, 0.0), (0.0, 0.0, 1.0))
+    @test node_idx == 1
+    @test data.prepared.geometry.node_ids[node_idx] == 1
+
+    traced = ArchimedLight._raycore_trace_top_hits(
+        data,
+        [(0.5, 0.5, 2.0), (2.0, 2.0, 2.0)],
+        [(0.0, 0.0, -1.0), (0.0, 0.0, -1.0)];
+        t_maxs=[3.0f0, 3.0f0],
+    )
+    @test traced.nodes == UInt32[1, 0]
+    @test traced.heights[1] ≈ 1.0f0
+    @test isinf(traced.distances[2])
+end
+
+@testitem "Synthetic case Raycore first-order top-hit" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false)
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+    first_cpu = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+    first_raycore = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=:raycore_cpu)
+
+    @test get(first_raycore.projected_area_per_node, 1, 0.0) ≈ get(first_cpu.projected_area_per_node, 1, 0.0)
+    @test get(first_raycore.incident_power.par, 1, 0.0) ≈ get(first_cpu.incident_power.par, 1, 0.0)
+    @test get(first_raycore.hits_per_node, 1, 0) == get(first_cpu.hits_per_node, 1, 0)
+
+    stacked = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    stacked_first = ArchimedLight.compute_first_order(stacked, models, turtle, fluxes, options; backend=:raycore_cpu)
+    @test isapprox(get(stacked_first.projected_area_per_node, 1, 0.0), 1.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(get(stacked_first.projected_area_per_node, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(get(stacked_first.incident_power.par, 1, 0.0), 100.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(stacked_first.incident_power.par, 2, 0.0), 0.0; atol=1e-12, rtol=1e-12)
+end
+
+@testitem "Synthetic case Raycore full stack first-order" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+
+    sensor_scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="sensor", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="plant", type="plate", object_id=2),
+    ])
+    sensor_models = HelperModule._virtual_sensor_models()
+    sensor_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false)
+    sensor_turtle = ArchimedLight.build_turtle(sensor_options, sky)
+    sensor_fluxes = ArchimedLight.compute_directional_fluxes(sky, sensor_turtle, sensor_options)
+    sensor_first = ArchimedLight.compute_first_order(sensor_scene, sensor_models, sensor_turtle, sensor_fluxes, sensor_options; backend=:raycore_cpu)
+    @test isapprox(get(sensor_first.incident_power.par, 1, 0.0), 100.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(sensor_first.incident_power.par, 2, 0.0), 100.0; atol=1e-8, rtol=1e-8)
+
+    leaf_scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="leaf", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="leaf", type="plate", object_id=2),
+    ])
+    leaf_models = ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "leaf";
+            types=HelperModule.OrderedDict(
+                "plate" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.25,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
+    upper_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false)
+    upper_turtle = ArchimedLight.build_turtle(upper_options, sky)
+    upper_fluxes = ArchimedLight.compute_directional_fluxes(sky, upper_turtle, upper_options)
+    upper_first = ArchimedLight.compute_first_order(leaf_scene, leaf_models, upper_turtle, upper_fluxes, upper_options; backend=:raycore_cpu)
+    @test isapprox(get(upper_first.projected_area_per_node, 1, 0.0), 1.0; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(upper_first.projected_area_per_node, 2, 0.0), 0.0; atol=1e-10, rtol=1e-10)
+
+    stack_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false)
+    stack_turtle = ArchimedLight.build_turtle(stack_options, sky)
+    stack_fluxes = ArchimedLight.compute_directional_fluxes(sky, stack_turtle, stack_options)
+    stack_data = ArchimedLight._prepare_raycore_interception_data(
+        leaf_scene,
+        leaf_models,
+        stack_options,
+        ArchimedLight.RaycoreInterceptionBackend(),
+    )
+    traced_stack = ArchimedLight._raycore_trace_stacks(
+        stack_data,
+        [(0.5, 0.5, 2.0)],
+        [(0.0, 0.0, -1.0)];
+        t_maxs=[3.0f0],
+    )
+    @test traced_stack.counts == Int32[2]
+    @test traced_stack.nodes[1:2] == UInt32[1, 2]
+    @test traced_stack.heights[1] ≈ 1.0f0
+    @test traced_stack.heights[2] ≈ 0.1f0
+
+    stack_first = ArchimedLight.compute_first_order(leaf_scene, leaf_models, stack_turtle, stack_fluxes, stack_options; backend=:raycore_cpu)
+    @test isapprox(get(stack_first.projected_area_per_node, 1, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(stack_first.projected_area_per_node, 2, 0.0), 0.75; atol=1e-10, rtol=1e-10)
+    @test isapprox(get(stack_first.incident_power.par, 1, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+    @test isapprox(get(stack_first.incident_power.par, 2, 0.0), 75.0; atol=1e-8, rtol=1e-8)
+
+    err = @test_throws ErrorException ArchimedLight.compute_first_order(
+        leaf_scene,
+        leaf_models,
+        stack_turtle,
+        stack_fluxes,
+        stack_options;
+        backend=ArchimedLight.RaycoreInterceptionBackend(max_hits_per_pixel=1),
+    )
+    @test occursin("max_hits_per_pixel=1 exceeded", sprint(showerror, err.value))
+end
+
+@testitem "Synthetic case Raycore emitter transfer" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="lamp", type="bulb", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="target", type="plate", object_id=2),
+    ])
+    models = ArchimedLight.prepare_models([
+        ArchimedLight.GroupModel(
+            "lamp";
+            types=HelperModule.OrderedDict(
+                "bulb" => ArchimedLight.TypeModel(
+                    light_emitter=ArchimedLight.EmitterModel(radiance=100.0, gamma=ArchimedLight.OpticalProperties(0.6, 0.4)),
+                ),
+            ),
+        ),
+        ArchimedLight.GroupModel(
+            "target";
+            types=HelperModule.OrderedDict(
+                "plate" => ArchimedLight.TypeModel(
+                    interception=ArchimedLight.InterceptionModel(
+                        model="Translucent",
+                        transparency=0.0,
+                        optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                    ),
+                ),
+            ),
+        ),
+    ])
+    options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=false, pixel_size=0.01, toricity=false)
+    sky = ArchimedLight.SkyState(180.0, 90.0, 0.0, 0.0, 0.0, 1.0)
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+
+    cpu_first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
+    raycore_first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=:raycore_cpu)
+
+    @test get(raycore_first.incident_power.par, 2, 0.0) > 0.0
+    @test isapprox(get(raycore_first.incident_power.par, 2, 0.0), get(cpu_first.incident_power.par, 2, 0.0); atol=1e-8, rtol=1e-8)
+    @test isapprox(get(raycore_first.incident_power.nir, 2, 0.0), get(cpu_first.incident_power.nir, 2, 0.0); atol=1e-8, rtol=1e-8)
+end
+
+@testitem "Synthetic case Raycore scattering topology" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false)
+    sky = ArchimedLight.SkyState(180.0, 90.0, 100.0, 0.0, 1.0, 0.0)
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(sky, turtle, options)
+    ib = ArchimedLight.RaycoreInterceptionBackend()
+    sb = ArchimedLight.RaycoreScatteringBackend(ib)
+    dense_sb = ArchimedLight.RaycoreScatteringBackend(ib; edge_accumulation=:dense_atomic)
+    sparse_sb = ArchimedLight.RaycoreScatteringBackend(ib; edge_accumulation=:sparse_host_reduce)
+    float32_sb = ArchimedLight.RaycoreScatteringBackend(ArchimedLight.RaycoreInterceptionBackend(scattering_eltype=Float32))
+
+    first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
+    cpu_graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=ArchimedLight.RaycastScatteringBackend())
+    graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sb)
+    dense_graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=dense_sb)
+    sparse_graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sparse_sb)
+    cpu_scat = ArchimedLight.compute_scattering(cpu_graph, first, options; backend=ArchimedLight.RaycastScatteringBackend())
+    scat = ArchimedLight.compute_scattering(graph, first, options; backend=sb)
+    scat32 = ArchimedLight.compute_scattering(graph, first, options; backend=float32_sb)
+
+    @test length(graph.pair_counts) > 0
+    @test graph.pair_counts.to_nodes == cpu_graph.pair_counts.to_nodes
+    @test graph.pair_counts.from_nodes == cpu_graph.pair_counts.from_nodes
+    @test graph.pair_counts.counts == cpu_graph.pair_counts.counts
+    @test dense_graph.pair_counts.to_nodes == cpu_graph.pair_counts.to_nodes
+    @test dense_graph.pair_counts.from_nodes == cpu_graph.pair_counts.from_nodes
+    @test dense_graph.pair_counts.counts == cpu_graph.pair_counts.counts
+    @test sparse_graph.pair_counts.to_nodes == cpu_graph.pair_counts.to_nodes
+    @test sparse_graph.pair_counts.from_nodes == cpu_graph.pair_counts.from_nodes
+    @test sparse_graph.pair_counts.counts == cpu_graph.pair_counts.counts
+    @test graph.all_hits == cpu_graph.all_hits
+    @test get(scat.added_power.par, 2, 0.0) > 0.0
+    @test HelperModule._dicts_close(scat.added_power.par, cpu_scat.added_power.par; atol=1e-10, rtol=1e-10)
+    @test HelperModule._dicts_close(scat.added_power.nir, cpu_scat.added_power.nir; atol=1e-10, rtol=1e-10)
+    @test HelperModule._dicts_close(scat32.added_power.par, cpu_scat.added_power.par; atol=1e-5, rtol=1e-5)
+    @test HelperModule._dicts_close(scat32.added_power.nir, cpu_scat.added_power.nir; atol=1e-5, rtol=1e-5)
+    @test scat.iterations == cpu_scat.iterations
+    @test scat.converged == cpu_scat.converged
+    @test scat32.iterations == cpu_scat.iterations
+    @test scat32.converged == cpu_scat.converged
+
+    too_small_dense_sb = ArchimedLight.RaycoreScatteringBackend(
+        ib;
+        edge_accumulation=:dense_atomic,
+        dense_edge_limit_bytes=1,
+    )
+    err = @test_throws ErrorException ArchimedLight.build_scattering_transfer_graph(
+        scene,
+        models,
+        turtle,
+        first,
+        options;
+        backend=too_small_dense_sb,
+    )
+    @test occursin("dense_edge_limit_bytes=1", sprint(showerror, err.value))
+end
+
+@testitem "Synthetic case Raycore toricity wraparound" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.8, x1=1.2, y0=0.0, y1=1.0, z=1.0, group="edge", type="plate", object_id=1)])
+    scene.scene_xy_bounds = (0.0, 0.0, 1.0, 1.0)
+    sky = ArchimedLight.SkyState(270.0, 45.0, 100.0, 0.0, 1.0, 0.0)
+    models = HelperModule._default_synthetic_models()
+
+    non_toric_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=false)
+    non_toric_turtle = ArchimedLight.build_turtle(non_toric_options, sky)
+    non_toric_fluxes = ArchimedLight.compute_directional_fluxes(sky, non_toric_turtle, non_toric_options)
+    non_toric_first = ArchimedLight.compute_first_order(scene, models, non_toric_turtle, non_toric_fluxes, non_toric_options; backend=:raycore_cpu)
+
+    toric_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=false, scattering=false, pixel_size=0.01, toricity=true)
+    toric_turtle = ArchimedLight.build_turtle(toric_options, sky)
+    toric_fluxes = ArchimedLight.compute_directional_fluxes(sky, toric_turtle, toric_options)
+    toric_cpu = ArchimedLight.compute_first_order(scene, models, toric_turtle, toric_fluxes, toric_options)
+    toric_raycore = ArchimedLight.compute_first_order(scene, models, toric_turtle, toric_fluxes, toric_options; backend=:raycore_cpu)
+
+    @test get(toric_raycore.hits_per_node, 1, 0) > get(non_toric_first.hits_per_node, 1, 0)
+    @test get(toric_raycore.incident_power.par, 1, 0.0) > get(non_toric_first.incident_power.par, 1, 0.0)
+    @test isapprox(get(toric_raycore.projected_area_per_node, 1, 0.0), get(toric_cpu.projected_area_per_node, 1, 0.0); atol=1e-8, rtol=1e-8)
+    @test isapprox(get(toric_raycore.incident_power.par, 1, 0.0), get(toric_cpu.incident_power.par, 1, 0.0); atol=1e-8, rtol=1e-8)
+end
+
+@testitem "Synthetic case Raycore pipeline entry points" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, toricity=false)
+    row = HelperModule._synthetic_meteo_row(; ri_par_f=100.0, ri_nir_f=30.0, direct_fraction=1.0)
+    ib = ArchimedLight.RaycoreInterceptionBackend()
+    sb = ArchimedLight.RaycoreScatteringBackend(ib)
+
+    sky = ArchimedLight.compute_sky(row, options)
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+    first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
+    graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sb)
+    scat = ArchimedLight.compute_scattering(graph, first, options; backend=sb)
+    budget = ArchimedLight.integrate_light(scene, models, first, scat, options; meteo_row=row)
+
+    step = ArchimedLight.run_light_step(
+        scene,
+        models,
+        row,
+        options;
+        interception_backend=ib,
+        scattering_backend=sb,
+    )
+
+    @test step.first_order.projected_area_per_node == first.projected_area_per_node
+    @test step.scattering.added_power.par == scat.added_power.par
+    @test step.budget.incident_energy.total.par == budget.incident_energy.total.par
+end
+
+@testitem "Synthetic case Raycore series response cache" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+    using Dates
+
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    rows = [
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
+        HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=90.0, ri_nir_f=70.0),
+    ]
+    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_raycore_series"))
+    ib = ArchimedLight.RaycoreInterceptionBackend()
+
+    uncached_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=true, scattering=false, pixel_size=0.01, cache_radiation=false, toricity=false)
+    cached_options = HelperModule._synthetic_options(sectors=1, all_in_turtle=true, scattering=false, pixel_size=0.01, cache_radiation=true, toricity=false)
+    cached_cache = ArchimedLight.prepare_light_cache(scene, models, cached_options; interception_backend=ib)
+    uncached = ArchimedLight.run_light_series(scene, models, meteo, uncached_options; interception_backend=ib)
+    cached = ArchimedLight.run_light_series(scene, models, meteo, cached_options; interception_backend=ib)
+
+    @test ArchimedLight.cache_summary(cached_cache).mode == :full
+    @test length(cached) == length(uncached)
+    for i in eachindex(cached)
+        @test cached[i].first_order.projected_area_per_node == uncached[i].first_order.projected_area_per_node
+        @test cached[i].budget.incident_energy.total.par == uncached[i].budget.incident_energy.total.par
+    end
+
+    stacked = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
+    ])
+    scatter_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true, toricity=false)
+    scatter_uncached_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false, toricity=false)
+    sb = ArchimedLight.RaycoreScatteringBackend(ib)
+    scatter_cache = ArchimedLight.prepare_light_cache(stacked, models, scatter_options; interception_backend=ib, scattering_backend=sb)
+    scatter_uncached = ArchimedLight.run_light_series(stacked, models, meteo, scatter_uncached_options; interception_backend=ib, scattering_backend=sb)
+    scatter_cached = ArchimedLight.run_light_series(stacked, models, meteo, scatter_options; interception_backend=ib, scattering_backend=sb)
+
+    @test ArchimedLight.cache_summary(scatter_cache).mode == :full
+    @test length(scatter_cached) == length(scatter_uncached)
+    for i in eachindex(scatter_cached)
+        @test scatter_cached[i].first_order.projected_area_per_node == scatter_uncached[i].first_order.projected_area_per_node
+        @test HelperModule._dicts_close(scatter_cached[i].scattering.added_power.par, scatter_uncached[i].scattering.added_power.par; atol=1e-10, rtol=1e-10)
+        @test HelperModule._dicts_close(scatter_cached[i].budget.incident_energy.total.par, scatter_uncached[i].budget.incident_energy.total.par; atol=1e-8, rtol=1e-10)
+    end
+
+    extra_rows = [
+        merge(rows[1], (RI_UV_F=25.0,)),
+        merge(rows[2], (RI_UV_F=10.0,)),
+    ]
+    extra_meteo = ArchimedLight.MeteoTable(extra_rows, (; source="synthetic_raycore_extra_band_cache"))
+    extra_uncached = ArchimedLight.run_light_series(stacked, models, extra_meteo, scatter_uncached_options; interception_backend=ib, scattering_backend=sb)
+    extra_cached = ArchimedLight.run_light_series(stacked, models, extra_meteo, scatter_options; interception_backend=ib, scattering_backend=sb)
+
+    @test length(extra_cached) == length(extra_uncached)
+    for i in eachindex(extra_cached)
+        @test HelperModule._budgets_close(extra_cached[i].budget, extra_uncached[i].budget; atol=1e-8, rtol=1e-10)
+    end
+end
+
 @testitem "Synthetic case stacked_scattering" tags = [:synthetic, :fast, :stacked_scattering] setup = [HelperModule] begin
     scene = HelperModule._synthetic_horizontal_scene([
         (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),

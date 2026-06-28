@@ -101,9 +101,9 @@ function _key_columns_for_file(name::String, cols::Vector{String})
             [
                 ["step_number", "component_id"],
                 ["step_number", "item_id", "component_id"],
+                ["step_number", "node_id"],
                 ["step_number", "source_topology_id"],
                 ["step_number", "object_id", "source_topology_id"],
-                ["step_number", "node_id"],
             ]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
