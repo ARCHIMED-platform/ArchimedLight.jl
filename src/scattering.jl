@@ -872,7 +872,18 @@ function _pair_counts_from_raycore_projections(
 end
 
 function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{Int,Int}, options::LightOptions, node_ids)
-    all_hits = Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
+    dense = first.dense
+    all_hits =
+        if dense !== nothing && isempty(first.hits_per_node)
+            if dense.node_ids == node_ids
+                Dict{Int,Int}(nid => dense.hits_per_node[i] for (i, nid) in pairs(node_ids))
+            else
+                dense_index = Dict{Int,Int}(nid => i for (i, nid) in pairs(dense.node_ids))
+                Dict{Int,Int}(nid => get(dense.hits_per_node, get(dense_index, nid, 0), 0) for nid in node_ids)
+            end
+        else
+            Dict{Int,Int}(nid => get(first.hits_per_node, nid, 0) for nid in node_ids)
+        end
     if !options.all_in_turtle
         for (nid, hsun) in sun_hits
             all_hits[nid] = max(0, get(all_hits, nid, 0) - hsun)
@@ -1012,14 +1023,16 @@ end
 
 function _node_ids_for_scattering(topology::ScatteringTopologyCache, first::FirstOrderResult)
     node_ids = copy(topology.node_ids)
-    node_set = Set{Int}(node_ids)
-    for nid in keys(first.incident_power.par)
-        if !(nid in node_set)
-            push!(node_ids, nid)
-            push!(node_set, nid)
-        end
+    dense = first.dense
+    if dense !== nothing &&
+       isempty(first.incident_power.par) &&
+       isempty(first.incident_power.nir) &&
+       dense.node_ids == topology.node_ids
+        return node_ids
     end
-    for nid in keys(first.incident_power.nir)
+    node_set = Set{Int}(node_ids)
+    dense_ids = dense === nothing ? () : dense.node_ids
+    for nid in Iterators.flatten((keys(first.incident_power.par), keys(first.incident_power.nir), dense_ids))
         if !(nid in node_set)
             push!(node_ids, nid)
             push!(node_set, nid)
@@ -1309,6 +1322,11 @@ function _initial_scattering_power(
 )
     if initial_power_per_node !== nothing
         return _copy_node_values(initial_power_per_node, graph.node_ids)
+    end
+    dense = first.dense
+    if dense !== nothing && dense.node_ids == graph.node_ids
+        source = uppercase(String(band)) == "NIR" ? dense.incident_power.nir : dense.incident_power.par
+        return _dense_vector_to_node_dict(graph.node_ids, source)
     end
     source = uppercase(String(band)) == "NIR" ? first.incident_power.nir : first.incident_power.par
     return _copy_node_values(source, graph.node_ids)

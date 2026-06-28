@@ -71,8 +71,10 @@ step = run_light(sim, first(meteo))
     to the Julia environment that runs the simulation or benchmark.
 
 When `workgroupsize` is not provided, ArchimedLight currently uses `256`.
-Metal uses this default based on the bundled coffee cached benchmark. Pass
-`workgroupsize=...` explicitly when benchmarking a different device or scene.
+Treat this as a conservative default, not a universal optimum. The best value
+can differ between full scattering and standalone topology rows, so pass
+`workgroupsize=...` explicitly when benchmarking a different device, scene, or
+component.
 
 ## Cache Behavior
 
@@ -196,14 +198,14 @@ Silicon:
 
 | component | backend | median time | median allocation |
 |---|---|---:|---:|
-| first-order | normal CPU | 792.355 ms | 200.456 MiB |
-| first-order | Raycore Metal | 134.202 ms | 54.601 MiB |
-| scattering | normal CPU | 1367.455 ms | 1351.062 MiB |
-| scattering | Raycore Metal | 599.936 ms | 128.378 MiB |
-| topology | normal CPU | 1327.113 ms | 1332.727 MiB |
-| topology | Raycore Metal | 508.786 ms | 70.754 MiB |
-| propagation | normal CPU | 39.225 ms | 3.928 MiB |
-| propagation | Raycore Metal | 47.906 ms | 3.796 MiB |
+| first-order | normal CPU | 797.083 ms | 200.394 MiB |
+| first-order | Raycore Metal | 142.261 ms | 80.223 MiB |
+| scattering | normal CPU | 1351.643 ms | 1321.927 MiB |
+| scattering | Raycore Metal | 843.185 ms | 487.055 MiB |
+| topology | normal CPU | 1307.387 ms | 1329.930 MiB |
+| topology | Raycore Metal | 577.707 ms | 142.694 MiB |
+| propagation | normal CPU | 40.373 ms | 5.608 MiB |
+| propagation | Raycore Metal | 50.052 ms | 4.956 MiB |
 | stack trace | Raycore Metal | 90.545 ms | 0.181 MiB |
 
 These numbers are local benchmark evidence, not a performance guarantee. They

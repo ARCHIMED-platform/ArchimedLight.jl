@@ -812,20 +812,49 @@ function _first_order_result_from_dense(
     incident_power_par::Vector{Float64},
     incident_power_nir::Vector{Float64},
     hits_per_node::Vector{Int},
+    materialize_public::Bool=true,
 )
+    projected_area_map =
+        materialize_public ? _all_dense_float_node_map(node_ids, projected_area_per_node) : Dict{Int,Float64}()
+    incident_par_map =
+        materialize_public ? _all_dense_float_node_map(node_ids, incident_power_par) : Dict{Int,Float64}()
+    incident_nir_map =
+        materialize_public ? _all_dense_float_node_map(node_ids, incident_power_nir) : Dict{Int,Float64}()
+    hits_map =
+        materialize_public ? _all_dense_int_node_map(node_ids, hits_per_node) : Dict{Int,Int}()
     return FirstOrderResult(
-        _all_dense_float_node_map(node_ids, projected_area_per_node),
+        projected_area_map,
         SpectralNodeValues(
-            _all_dense_float_node_map(node_ids, incident_power_par),
-            _all_dense_float_node_map(node_ids, incident_power_nir),
+            incident_par_map,
+            incident_nir_map,
         ),
-        _all_dense_int_node_map(node_ids, hits_per_node),
+        hits_map,
         DenseFirstOrderResult(
             node_ids,
             projected_area_per_node,
             DenseSpectralNodeValues(incident_power_par, incident_power_nir),
             hits_per_node,
         ),
+    )
+end
+
+function _materialize_first_order_result(first::FirstOrderResult)
+    dense = first.dense
+    dense === nothing && return first
+    expected = length(dense.node_ids)
+    if length(first.projected_area_per_node) == expected &&
+       length(first.incident_power.par) == expected &&
+       length(first.incident_power.nir) == expected &&
+       length(first.hits_per_node) == expected
+        return first
+    end
+    return _first_order_result_from_dense(
+        dense.node_ids,
+        dense.projected_area_per_node,
+        dense.incident_power.par,
+        dense.incident_power.nir,
+        dense.hits_per_node,
+        true,
     )
 end
 

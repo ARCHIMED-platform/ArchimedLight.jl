@@ -377,6 +377,18 @@ end
     first_public_only = ArchimedLight.FirstOrderResult(first.projected_area_per_node, first.incident_power, first.hits_per_node)
     scat_public_only = ArchimedLight.ScatteringResult(scat.added_power, scat.iterations, scat.converged)
     budget_public_only = ArchimedLight.integrate_light(scene, models, first_public_only, scat_public_only, options; meteo_row=row)
+    first_dense_only = ArchimedLight._first_order_result_from_dense(
+        first.dense.node_ids,
+        first.dense.projected_area_per_node,
+        first.dense.incident_power.par,
+        first.dense.incident_power.nir,
+        first.dense.hits_per_node,
+        false,
+    )
+    graph_dense_only = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first_dense_only, options; backend=sb)
+    scat_dense_only = ArchimedLight.compute_scattering(graph_dense_only, first_dense_only, options; backend=sb)
+    budget_dense_only = ArchimedLight.integrate_light(scene, models, first_dense_only, scat_dense_only, options; meteo_row=row)
+    first_materialized = ArchimedLight._materialize_first_order_result(first_dense_only)
 
     step = ArchimedLight.run_light_step(
         scene,
@@ -403,7 +415,16 @@ end
     @test first.dense.node_ids == scat.dense.node_ids
     @test first.dense.incident_power.par == [get(first.incident_power.par, nid, 0.0) for nid in first.dense.node_ids]
     @test scat.dense.added_power.par == [get(scat.added_power.par, nid, 0.0) for nid in scat.dense.node_ids]
+    @test isempty(first_dense_only.projected_area_per_node)
+    @test isempty(first_dense_only.incident_power.par)
+    @test isempty(first_dense_only.incident_power.nir)
+    @test isempty(first_dense_only.hits_per_node)
+    @test first_materialized.projected_area_per_node == first.projected_area_per_node
+    @test first_materialized.incident_power.par == first.incident_power.par
+    @test first_materialized.incident_power.nir == first.incident_power.nir
+    @test first_materialized.hits_per_node == first.hits_per_node
     @test HelperModule._budgets_close(budget, budget_public_only; atol=1e-10, rtol=1e-10)
+    @test HelperModule._budgets_close(budget, budget_dense_only; atol=1e-10, rtol=1e-10)
     @test par_only_step.scattering.added_power.nir == Dict{Int,Float64}()
     @test par_only_step.scattering.dense !== nothing
     @test par_only_step.scattering.dense.node_ids == par_only_step.first_order.dense.node_ids

@@ -503,6 +503,7 @@ end
 function _combine_sector_responses(
     responses::SectorResponsesCache,
     fluxes::DirectionalFluxes,
+    materialize_public::Bool=true,
 )
     node_ids = responses.node_ids
     projected_area_per_node = zeros(Float64, length(node_ids))
@@ -545,6 +546,7 @@ function _combine_sector_responses(
         incident_power_par,
         incident_power_nir,
         hits_per_node,
+        materialize_public,
     )
 end
 
@@ -1274,7 +1276,6 @@ function _compute_scattering_with_flags(
                 mode=mode,
                 backend=backend,
                 band="PAR",
-                initial_power_per_node=first.incident_power.par,
                 default_coeff=options.scattering_coeff_par,
             )
         elseif responses_cache !== nothing && responses_cache.scattering_topology !== nothing
@@ -1285,7 +1286,6 @@ function _compute_scattering_with_flags(
                 mode=mode,
                 backend=backend,
                 band="PAR",
-                initial_power_per_node=first.incident_power.par,
                 default_coeff=options.scattering_coeff_par,
             )
         elseif raycore_data !== nothing && backend isa RaycoreScatteringBackend
@@ -1298,7 +1298,6 @@ function _compute_scattering_with_flags(
                 options,
                 backend;
                 band="PAR",
-                initial_power_per_node=first.incident_power.par,
                 default_coeff=options.scattering_coeff_par,
             )
         else
@@ -1311,7 +1310,6 @@ function _compute_scattering_with_flags(
                 mode=mode,
                 backend=backend,
                 band="PAR",
-                initial_power_per_node=first.incident_power.par,
                 default_coeff=options.scattering_coeff_par,
             )
         end
@@ -2167,7 +2165,7 @@ function _ensure_sector_band_cache!(
         else
             _unit_directional_fluxes(entry.turtle, sector_idx; par=1.0)
         end
-    first = _combine_sector_responses(entry.responses_cache, unit_fluxes)
+    first = _combine_sector_responses(entry.responses_cache, unit_fluxes, false)
     result =
         compute_scattering_band(
             entry.responses_cache.scattering_topology,
@@ -2380,7 +2378,7 @@ function _run_light_step_cached(
             prepared=prepared,
             responses_cache=responses_cache,
         ) : nothing
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, sky_fraction, cache.render_geometry)
+    return LightStepResult(sky, turtle, fluxes, _materialize_first_order_result(first), scat, budget, extra_irr, sky_fraction, cache.render_geometry)
 end
 
 function _run_light_sky_cached(
@@ -2457,7 +2455,7 @@ function _run_light_sky_cached(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, nothing, cache.render_geometry)
+    return LightStepResult(sky, turtle, fluxes, _materialize_first_order_result(first), scat, budget, extra_irr, nothing, cache.render_geometry)
 end
 
 function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
