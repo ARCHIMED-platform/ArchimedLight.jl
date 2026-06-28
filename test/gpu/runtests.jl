@@ -1,5 +1,6 @@
 using KernelAbstractions
 using Test
+using ArchimedLight
 
 const METAL_FLAG = lowercase(get(ENV, "ARCHIMEDLIGHT_TEST_METAL", ""))
 const METAL_REQUESTED = METAL_FLAG in ("1", "true", "yes", "on", "required", "force", "error")
@@ -46,6 +47,9 @@ end
     else
         backend = _metal_backend()
         if backend !== nothing
+            @test ArchimedLight.RaycoreInterceptionBackend(backend=backend).config.workgroupsize == 256
+            @test ArchimedLight.RaycoreInterceptionBackend(backend=backend, workgroupsize=64).config.workgroupsize == 64
+
             include(joinpath(@__DIR__, "..", "..", "scripts", "raycore_device_smoke.jl"))
             result = run_raycore_device_smoke(;
                 backend=backend,

@@ -136,7 +136,7 @@ struct PreparedInterceptionData
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
 end
 
-struct RaycoreSceneData{P,T,K,B,N,C,S,H,O}
+struct RaycoreSceneData{P,T,K,B,N,C,S,H,O,E,F,D,V,M,I,R}
     prepared::P
     tlas::T
     kernel_tlas::K
@@ -147,10 +147,22 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,H,O}
     stack_nodes_dev::S
     stack_heights_dev::H
     stack_overflow_dev::O
+    edge_keys_dev::E
+    edge_key_counts_dev::F
+    dense_edge_counts_dev::D
+    virtual_node_mask_dev::V
+    pavement_node_mask_dev::M
+    node_ids_dev::I
     stack_counts_host::Vector{Int32}
     stack_nodes_host::Vector{UInt32}
     stack_heights_host::Vector{Float32}
     stack_overflow_host::Vector{Bool}
+    edge_keys_host::Vector{UInt64}
+    edge_key_counts_host::Vector{Int32}
+    edge_compact_host::Vector{UInt64}
+    projection_far_cache::Dict{Tuple{Float64,Float64,Float64,Bool},Float32}
+    projected_mesh_area_cache::Dict{Tuple{Float64,Float64,Float64},Vector{Float64}}
+    area_ratio_cache::R
     workgroupsize::Int
     max_hits_per_pixel::Int
     hit_epsilon::Float32
@@ -776,11 +788,46 @@ function _dense_int_node_map(node_ids::Vector{Int}, values::Vector{Int})
     return out
 end
 
-_all_dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64}) =
-    Dict{Int,Float64}(node_ids[i] => values[i] for i in eachindex(node_ids))
+function _all_dense_float_node_map(node_ids::Vector{Int}, values::Vector{Float64})
+    out = Dict{Int,Float64}()
+    sizehint!(out, length(node_ids))
+    @inbounds for i in eachindex(node_ids)
+        out[node_ids[i]] = values[i]
+    end
+    return out
+end
 
-_all_dense_int_node_map(node_ids::Vector{Int}, values::Vector{Int}) =
-    Dict{Int,Int}(node_ids[i] => values[i] for i in eachindex(node_ids))
+function _all_dense_int_node_map(node_ids::Vector{Int}, values::Vector{Int})
+    out = Dict{Int,Int}()
+    sizehint!(out, length(node_ids))
+    @inbounds for i in eachindex(node_ids)
+        out[node_ids[i]] = values[i]
+    end
+    return out
+end
+
+function _first_order_result_from_dense(
+    node_ids::Vector{Int},
+    projected_area_per_node::Vector{Float64},
+    incident_power_par::Vector{Float64},
+    incident_power_nir::Vector{Float64},
+    hits_per_node::Vector{Int},
+)
+    return FirstOrderResult(
+        _all_dense_float_node_map(node_ids, projected_area_per_node),
+        SpectralNodeValues(
+            _all_dense_float_node_map(node_ids, incident_power_par),
+            _all_dense_float_node_map(node_ids, incident_power_nir),
+        ),
+        _all_dense_int_node_map(node_ids, hits_per_node),
+        DenseFirstOrderResult(
+            node_ids,
+            projected_area_per_node,
+            DenseSpectralNodeValues(incident_power_par, incident_power_nir),
+            hits_per_node,
+        ),
+    )
+end
 
 function _as_bool_local(x, default::Bool)
     x === nothing && return default
@@ -2752,10 +2799,32 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
     stack_nodes_dev = KernelAbstractions.allocate(config.backend, UInt32, stack_len)
     stack_heights_dev = KernelAbstractions.allocate(config.backend, Float32, stack_len)
     stack_overflow_dev = KernelAbstractions.allocate(config.backend, Bool, n_pixels)
+    edge_key_capacity = n_pixels * max(0, 2 * (config.max_hits_per_pixel - 1))
+    edge_keys_dev = KernelAbstractions.allocate(config.backend, UInt64, edge_key_capacity)
+    edge_key_counts_dev = KernelAbstractions.allocate(config.backend, Int32, n_pixels)
+    n_nodes = length(prepared.geometry.node_ids)
+    dense_pairs_i128 = Int128(n_nodes) * Int128(n_nodes)
+    dense_bytes_i128 = dense_pairs_i128 * Int128(sizeof(Int32))
+    dense_scratch_enabled =
+        config.edge_accumulation != :sparse_host_reduce &&
+        dense_pairs_i128 <= typemax(Int) &&
+        dense_bytes_i128 <= config.dense_edge_limit_bytes &&
+        KernelAbstractions.supports_atomics(config.backend)
+    dense_edge_counts_dev =
+        dense_scratch_enabled ? KernelAbstractions.allocate(config.backend, Int32, Int(dense_pairs_i128)) : nothing
+    virtual_node_mask_dev = KernelAbstractions.allocate(config.backend, Bool, length(prepared.virtual_node_mask))
+    pavement_node_mask_dev = KernelAbstractions.allocate(config.backend, Bool, length(prepared.geometry.pavement_node_mask))
+    node_ids_dev = KernelAbstractions.allocate(config.backend, Int, length(prepared.geometry.node_ids))
+    KernelAbstractions.copyto!(config.backend, virtual_node_mask_dev, prepared.virtual_node_mask)
+    KernelAbstractions.copyto!(config.backend, pavement_node_mask_dev, prepared.geometry.pavement_node_mask)
+    KernelAbstractions.copyto!(config.backend, node_ids_dev, prepared.geometry.node_ids)
     stack_counts_host = Vector{Int32}(undef, n_pixels)
     stack_nodes_host = Vector{UInt32}(undef, stack_len)
     stack_heights_host = Vector{Float32}(undef, stack_len)
     stack_overflow_host = Vector{Bool}(undef, n_pixels)
+    edge_keys_host = Vector{UInt64}(undef, edge_key_capacity)
+    edge_key_counts_host = Vector{Int32}(undef, n_pixels)
+    edge_compact_host = UInt64[]
     return RaycoreSceneData(
         prepared,
         tlas,
@@ -2767,10 +2836,22 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
         stack_nodes_dev,
         stack_heights_dev,
         stack_overflow_dev,
+        edge_keys_dev,
+        edge_key_counts_dev,
+        dense_edge_counts_dev,
+        virtual_node_mask_dev,
+        pavement_node_mask_dev,
+        node_ids_dev,
         stack_counts_host,
         stack_nodes_host,
         stack_heights_host,
         stack_overflow_host,
+        edge_keys_host,
+        edge_key_counts_host,
+        edge_compact_host,
+        Dict{Tuple{Float64,Float64,Float64,Bool},Float32}(),
+        Dict{Tuple{Float64,Float64,Float64},Vector{Float64}}(),
+        Dict{Tuple{Symbol,Float64,Float64,Float64},Vector{Float64}}(),
         config.workgroupsize,
         config.max_hits_per_pixel,
         config.hit_epsilon,
@@ -2970,7 +3051,7 @@ function _raycore_trace_direction_top_hits_direct(
     plotbox = geometry.plotbox
     n_pixels = plotbox.nx * plotbox.ny
     backend = data.backend
-    far = _raycore_projection_far(geometry, direction; toricity=options.toricity)
+    far = _raycore_projection_far(data, direction, options)
     dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
 
     static_tlas = _raycore_kernel_tlas(data)
@@ -3014,7 +3095,7 @@ function _raycore_trace_direction_top_nodes_direct(
     plotbox = geometry.plotbox
     n_pixels = plotbox.nx * plotbox.ny
     backend = data.backend
-    far = _raycore_projection_far(geometry, direction; toricity=options.toricity)
+    far = _raycore_projection_far(data, direction, options)
     dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
 
     static_tlas = _raycore_kernel_tlas(data)
@@ -3059,51 +3140,30 @@ KernelAbstractions.@kernel function _raycore_trace_stacks_kernel!(
         base_direction = directions[i]
         t_min = t_mins[i]
         t_max = t_maxs[i]
-        last_node = UInt32(0)
-        last_height = Inf32
-        n_unique = 0
-        overflow[i] = false
-
-        for hit_iter in 1:max_hits
-            ray = Raycore.Ray(;
-                o=base_origin,
-                d=base_direction,
-                t_min=t_min,
-                t_max=t_max,
-            )
-            hit, tri, distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
-            hit || break
-
-            node = tri.metadata
+        ray = Raycore.Ray(;
+            o=base_origin,
+            d=base_direction,
+            t_min=t_min,
+            t_max=t_max,
+        )
+        offset = (i - 1) * max_hits
+        n_unique, overflow_hit = Raycore.all_hits!(
+            nodes,
+            heights,
+            static_tlas,
+            ray,
+            offset,
+            max_hits,
+            hit_epsilon,
+        )
+        for slot in 1:Int(n_unique)
+            out_idx = offset + slot
+            distance = heights[out_idx]
             hit_point = ray.o + ray.d * distance
-            height = hit_point[3]
-            if !(node == last_node && abs(height - last_height) <= hit_epsilon)
-                n_unique += 1
-                offset = (i - 1) * max_hits + n_unique
-                nodes[offset] = node
-                heights[offset] = height
-                last_node = node
-                last_height = height
-            end
-
-            next_t = Float32(distance + hit_epsilon)
-            next_t > t_min || (next_t = nextfloat(t_min))
-            t_min = next_t
-            t_min < t_max || break
-
-            if hit_iter == max_hits
-                overflow_ray = Raycore.Ray(;
-                    o=base_origin,
-                    d=base_direction,
-                    t_min=t_min,
-                    t_max=t_max,
-                )
-                overflow_hit, _tri, _distance, _bary2, _instance_idx2 =
-                    Raycore.closest_hit(static_tlas, overflow_ray)
-                overflow[i] = overflow_hit
-            end
+            heights[out_idx] = hit_point[3]
         end
         counts[i] = n_unique
+        overflow[i] = overflow_hit
     end
 end
 
@@ -3138,59 +3198,38 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
             dir_z * far,
         )
         base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
-        t_min = 0.0f0
         t_max = 2.0f0 * far
-        last_node = UInt32(0)
-        last_height = Inf32
-        n_unique = 0
-        overflow[pixel_idx] = false
-
-        for hit_iter in 1:max_hits
-            ray = Raycore.Ray(;
-                o=base_origin,
-                d=base_direction,
-                t_min=t_min,
-                t_max=t_max,
-            )
-            hit, tri, distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
-            hit || break
-
-            node = tri.metadata
+        ray = Raycore.Ray(;
+            o=base_origin,
+            d=base_direction,
+            t_min=0.0f0,
+            t_max=t_max,
+        )
+        offset = (pixel_idx - 1) * max_hits
+        n_unique, overflow_hit = Raycore.all_hits!(
+            nodes,
+            heights,
+            static_tlas,
+            ray,
+            offset,
+            max_hits,
+            hit_epsilon,
+        )
+        for slot in 1:Int(n_unique)
+            out_idx = offset + slot
+            distance = heights[out_idx]
             hit_point = ray.o + ray.d * distance
-            height = hit_point[3]
-            if !(node == last_node && abs(height - last_height) <= hit_epsilon)
-                n_unique += 1
-                offset = (pixel_idx - 1) * max_hits + n_unique
-                nodes[offset] = node
-                heights[offset] = height
-                last_node = node
-                last_height = height
-            end
-
-            next_t = Float32(distance + hit_epsilon)
-            next_t > t_min || (next_t = nextfloat(t_min))
-            t_min = next_t
-            t_min < t_max || break
-
-            if hit_iter == max_hits
-                overflow_ray = Raycore.Ray(;
-                    o=base_origin,
-                    d=base_direction,
-                    t_min=t_min,
-                    t_max=t_max,
-                )
-                overflow_hit, _tri, _distance, _bary2, _instance_idx2 =
-                    Raycore.closest_hit(static_tlas, overflow_ray)
-                overflow[pixel_idx] = overflow_hit
-            end
+            heights[out_idx] = hit_point[3]
         end
         counts[pixel_idx] = n_unique
+        overflow[pixel_idx] = overflow_hit
     end
 end
 
 KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!(
     counts,
     nodes,
+    distances,
     overflow,
     static_tlas,
     origin_x::Float32,
@@ -3218,52 +3257,25 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!
             dir_z * far,
         )
         base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
-        t_min = 0.0f0
         t_max = 2.0f0 * far
-        last_node = UInt32(0)
-        last_height = Inf32
-        n_unique = 0
-        overflow[pixel_idx] = false
-
-        for hit_iter in 1:max_hits
-            ray = Raycore.Ray(;
-                o=base_origin,
-                d=base_direction,
-                t_min=t_min,
-                t_max=t_max,
-            )
-            hit, tri, distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
-            hit || break
-
-            node = tri.metadata
-            hit_point = ray.o + ray.d * distance
-            height = hit_point[3]
-            if !(node == last_node && abs(height - last_height) <= hit_epsilon)
-                n_unique += 1
-                offset = (pixel_idx - 1) * max_hits + n_unique
-                nodes[offset] = node
-                last_node = node
-                last_height = height
-            end
-
-            next_t = Float32(distance + hit_epsilon)
-            next_t > t_min || (next_t = nextfloat(t_min))
-            t_min = next_t
-            t_min < t_max || break
-
-            if hit_iter == max_hits
-                overflow_ray = Raycore.Ray(;
-                    o=base_origin,
-                    d=base_direction,
-                    t_min=t_min,
-                    t_max=t_max,
-                )
-                overflow_hit, _tri, _distance, _bary2, _instance_idx2 =
-                    Raycore.closest_hit(static_tlas, overflow_ray)
-                overflow[pixel_idx] = overflow_hit
-            end
-        end
+        ray = Raycore.Ray(;
+            o=base_origin,
+            d=base_direction,
+            t_min=0.0f0,
+            t_max=t_max,
+        )
+        offset = (pixel_idx - 1) * max_hits
+        n_unique, overflow_hit = Raycore.all_hits!(
+            nodes,
+            distances,
+            static_tlas,
+            ray,
+            offset,
+            max_hits,
+            hit_epsilon,
+        )
         counts[pixel_idx] = n_unique
+        overflow[pixel_idx] = overflow_hit
     end
 end
 
@@ -3340,18 +3352,20 @@ function _raycore_trace_direction_stack_nodes(
     n_pixels = plotbox.nx * plotbox.ny
     backend = data.backend
     max_hits = data.max_hits_per_pixel
-    far = _raycore_projection_far(geometry, direction; toricity=options.toricity)
+    far = _raycore_projection_far(data, direction, options)
     dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
 
     static_tlas = _raycore_kernel_tlas(data)
     counts_dev = data.stack_counts_dev
     nodes_dev = data.stack_nodes_dev
+    distances_dev = data.stack_heights_dev
     overflow_dev = data.stack_overflow_dev
 
     kernel = _raycore_trace_direction_stack_nodes_kernel!(backend, data.workgroupsize)
     kernel(
         counts_dev,
         nodes_dev,
+        distances_dev,
         overflow_dev,
         static_tlas,
         Float32(plotbox.origin_x),
@@ -3380,6 +3394,56 @@ function _raycore_trace_direction_stack_nodes(
     )
 end
 
+function _raycore_trace_direction_stack_nodes_device(
+    data::RaycoreSceneData,
+    direction,
+    options::LightOptions,
+)
+    geometry = data.prepared.geometry
+    plotbox = geometry.plotbox
+    n_pixels = plotbox.nx * plotbox.ny
+    backend = data.backend
+    max_hits = data.max_hits_per_pixel
+    far = _raycore_projection_far(data, direction, options)
+    dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
+
+    static_tlas = _raycore_kernel_tlas(data)
+    counts_dev = data.stack_counts_dev
+    nodes_dev = data.stack_nodes_dev
+    distances_dev = data.stack_heights_dev
+    overflow_dev = data.stack_overflow_dev
+
+    kernel = _raycore_trace_direction_stack_nodes_kernel!(backend, data.workgroupsize)
+    kernel(
+        counts_dev,
+        nodes_dev,
+        distances_dev,
+        overflow_dev,
+        static_tlas,
+        Float32(plotbox.origin_x),
+        Float32(plotbox.origin_y),
+        Float32(plotbox.pix_x),
+        Float32(plotbox.pix_y),
+        plotbox.nx,
+        Float32(dir[1]),
+        Float32(dir[2]),
+        Float32(dir[3]),
+        far,
+        max_hits,
+        data.hit_epsilon;
+        ndrange=n_pixels,
+    )
+    KernelAbstractions.synchronize(backend)
+    copyto!(data.stack_overflow_host, overflow_dev)
+
+    return (
+        counts_dev=counts_dev,
+        nodes_dev=nodes_dev,
+        overflow=data.stack_overflow_host,
+        max_hits=max_hits,
+    )
+end
+
 function _raycore_trace_direction_stacks_direct(
     data::RaycoreSceneData,
     direction,
@@ -3390,7 +3454,7 @@ function _raycore_trace_direction_stacks_direct(
     n_pixels = plotbox.nx * plotbox.ny
     backend = data.backend
     max_hits = data.max_hits_per_pixel
-    far = _raycore_projection_far(geometry, direction; toricity=options.toricity)
+    far = _raycore_projection_far(data, direction, options)
     dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
 
     static_tlas = _raycore_kernel_tlas(data)
@@ -3457,6 +3521,17 @@ function _raycore_projection_far(geometry::InterceptionSceneData, direction; tor
     return Float32(max_distance + margin)
 end
 
+@inline function _raycore_direction_key(direction)
+    return (Float64(direction[1]), Float64(direction[2]), Float64(direction[3]))
+end
+
+function _raycore_projection_far(data::RaycoreSceneData, direction, options::LightOptions)
+    key = (_raycore_direction_key(direction)..., options.toricity)
+    return get!(data.projection_far_cache, key) do
+        _raycore_projection_far(data.prepared.geometry, direction; toricity=options.toricity)
+    end
+end
+
 function _raycore_projected_mesh_area_by_node(geometry::InterceptionSceneData, direction)
     projected_mesh_area = zeros(Float64, length(geometry.node_ids))
     vertices = geometry.vertices::Vector{StaticArrays.SVector{3,Float64}}
@@ -3507,6 +3582,31 @@ function _raycore_projected_mesh_area_by_node(geometry::InterceptionSceneData, d
             Float64(0.5f0 * abs(cx * dirx + cy * diry + cz * dirz) * inv_dirz)
     end
     return projected_mesh_area
+end
+
+function _raycore_projected_mesh_area_by_node(data::RaycoreSceneData, direction)
+    key = _raycore_direction_key(direction)
+    return get!(data.projected_mesh_area_cache, key) do
+        _raycore_projected_mesh_area_by_node(data.prepared.geometry, direction)
+    end
+end
+
+function _raycore_area_ratio_by_node(
+    data::RaycoreSceneData,
+    mode::Symbol,
+    direction,
+    projected_pixels_area::Vector{Float64},
+)
+    key = (mode, _raycore_direction_key(direction)...)
+    return get!(data.area_ratio_cache, key) do
+        projected_mesh_area = _raycore_projected_mesh_area_by_node(data, direction)
+        ratio = ones(Float64, length(projected_pixels_area))
+        @inbounds for idx in eachindex(ratio)
+            pixels_area = projected_pixels_area[idx]
+            ratio[idx] = pixels_area > 0.0 ? projected_mesh_area[idx] / pixels_area : 1.0
+        end
+        ratio
+    end
 end
 
 @inline function _raycore_ground_pixel_center(plotbox, pixel_idx::Int)
@@ -3586,7 +3686,7 @@ function _raycore_direction_projection_full_stack(
     end
 
     if options.area_ratio
-        projected_mesh_area .= _raycore_projected_mesh_area_by_node(geometry, direction)
+        projected_mesh_area .= _raycore_projected_mesh_area_by_node(data, direction)
     end
 
     return DenseDirectionProjectionResult(
@@ -3632,7 +3732,7 @@ function _raycore_direction_projection_top_hit(
     end
 
     if options.area_ratio
-        projected_mesh_area .= _raycore_projected_mesh_area_by_node(geometry, direction)
+        projected_mesh_area .= _raycore_projected_mesh_area_by_node(data, direction)
     end
 
     return DenseDirectionProjectionResult(
@@ -3720,13 +3820,12 @@ function _compute_first_order_raycore_from_projections(
         end
     end
 
-    return FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    return _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
 end
 
@@ -3778,7 +3877,10 @@ function _compute_first_order_raycore_top_hit(
             continue
         end
 
-        projected_mesh_area = options.area_ratio ? _raycore_projected_mesh_area_by_node(geometry, sector.direction) : nothing
+        sector_area_ratio =
+            options.area_ratio ?
+            _raycore_area_ratio_by_node(data, :top_hit, sector.direction, sector_projected_pixels_area) :
+            nothing
 
         @inbounds for idx in eachindex(sector_hits)
             count = sector_hits[idx]
@@ -3787,7 +3889,7 @@ function _compute_first_order_raycore_top_hit(
             projected_pixels = sector_projected_pixels_area[idx]
             pa =
                 if options.area_ratio
-                    ratio = projected_mesh_area[idx] / projected_pixels
+                    ratio = sector_area_ratio[idx]
                     acc = 0.0
                     for _ in 1:count
                         acc += pixel_area * ratio
@@ -3813,13 +3915,12 @@ function _compute_first_order_raycore_top_hit(
         end
     end
 
-    return FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    return _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
 end
 
@@ -3959,13 +4060,12 @@ function _compute_first_order(
         end
     end
 
-    return FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    return _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
 end
 

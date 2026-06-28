@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "1a13a24796584897bb84b98fef2284b5b75cdc43"
+project_hash = "ab2713bb7c75a91e692fb51284c2215d55f012e4"
 
 [[deps.AbstractTrees]]
 git-tree-sha1 = "2d9c9a55f9c93e8887ad391fbae72f8ef55e1177"
@@ -740,7 +740,7 @@ version = "1.6.0"
 
 [[deps.Raycore]]
 deps = ["AcceleratedKernels", "Adapt", "Atomix", "GPUArraysCore", "GeometryBasics", "KernelAbstractions", "LinearAlgebra", "Random", "StaticArrays", "Statistics"]
-git-tree-sha1 = "89860a315ef0643d42be2d7335aa894a7fc9d0d6"
+path = "/Users/rvezy/Documents/dev/Raycore"
 uuid = "afc56b53-c9a9-482a-a956-d1d800e05559"
 version = "0.2.0"
 

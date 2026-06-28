@@ -63,6 +63,7 @@ The simulation results are grouped by quantity and waveband in `LightBudget`. Wh
 - [Scattering And Optical Assumptions](theory_scattering.md)
 - [Full Example](full_example.md)
 - [Composable Stages](stages.md)
+- [GPU Backends And Benchmarks](gpu_backends.md)
 - [API Reference](api.md)
 
 ## Contributors

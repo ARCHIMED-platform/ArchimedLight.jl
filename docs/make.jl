@@ -47,6 +47,7 @@ makedocs(;
         "Advanced Usage" => [
             "Full Example" => "full_example.md",
             "Composable Stages" => "stages.md",
+            "GPU Backends And Benchmarks" => "gpu_backends.md",
             "Historical ARCHIMED Reference" => "archimed_reference.md",
         ],
         "API Reference" => "api.md",

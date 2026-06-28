@@ -1,7 +1,16 @@
+function _zero_float_node_dict(node_ids)
+    out = Dict{Int,Float64}()
+    sizehint!(out, length(node_ids))
+    for nid in node_ids
+        out[nid] = 0.0
+    end
+    return out
+end
+
 function _zero_spectral_node_values(node_ids)
     SpectralNodeValues(
-        Dict{Int,Float64}(nid => 0.0 for nid in node_ids),
-        Dict{Int,Float64}(nid => 0.0 for nid in node_ids),
+        _zero_float_node_dict(node_ids),
+        _zero_float_node_dict(node_ids),
     )
 end
 
@@ -91,13 +100,47 @@ function integrate_light(
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
 )
     dt_seconds = step_duration_seconds === nothing ? _step_duration_seconds_local(meteo_row) : Float64(step_duration_seconds)
-    node_ids = collect(keys(first.projected_area_per_node))
-    budget = _zero_budget_components(node_ids)
     area_map = component_area_per_node === nothing ? _interception_area_per_node_local(scene, models, options) : component_area_per_node
     abs_par_map = absorption_par_per_node === nothing ? _node_absorptance_per_band(scene, models, options, "PAR") : absorption_par_per_node
     abs_nir_map = absorption_nir_per_node === nothing ? _node_absorptance_per_band(scene, models, options, "NIR") : absorption_nir_per_node
     default_abs_par = clamp(1.0 - options.scattering_coeff_par, 0.0, 1.0)
     default_abs_nir = clamp(1.0 - options.scattering_coeff_nir, 0.0, 1.0)
+
+    dense_first = first.dense
+    dense_scat = scat === nothing ? nothing : scat.dense
+    if dense_first !== nothing &&
+       (dense_scat === nothing || dense_scat.node_ids == dense_first.node_ids)
+        node_ids = dense_first.node_ids
+        budget = _zero_budget_components(node_ids)
+        pa0 = dense_first.projected_area_per_node
+        par0 = dense_first.incident_power.par
+        nir0 = dense_first.incident_power.nir
+        scat_par = dense_scat === nothing ? nothing : dense_scat.added_power.par
+        scat_nir = dense_scat === nothing ? nothing : dense_scat.added_power.nir
+
+        @inbounds for i in eachindex(node_ids)
+            nid = node_ids[i]
+            pa = get(area_map, nid, pa0[i])
+            pa = max(pa, eps(Float64))
+            ps = scat_par === nothing ? 0.0 : scat_par[i]
+            ns = scat_nir === nothing ? 0.0 : scat_nir[i]
+            abs_par = clamp(get(abs_par_map, nid, default_abs_par), 0.0, 1.0)
+            abs_nir = clamp(get(abs_nir_map, nid, default_abs_nir), 0.0, 1.0)
+            _store_node_budget!(budget, nid, pa, par0[i], nir0[i], ps, ns, abs_par, abs_nir, dt_seconds)
+        end
+
+        return LightBudget(
+            budget.incident_flux,
+            budget.incident_energy,
+            budget.absorbed_flux,
+            budget.absorbed_energy,
+            _scale_extra_band_energy(extra_initial_energy_per_band, dt_seconds),
+            _scale_extra_band_energy(extra_energy_per_band, dt_seconds),
+        )
+    end
+
+    node_ids = collect(keys(first.projected_area_per_node))
+    budget = _zero_budget_components(node_ids)
     for nid in node_ids
         pa = get(area_map, nid, get(first.projected_area_per_node, nid, 0.0))
         pa = max(pa, eps(Float64))
@@ -496,13 +539,12 @@ function _combine_sector_responses(
         incident_power_nir[idx] += emitter_nir[idx]
     end
 
-    return FirstOrderResult(
-        _all_dense_float_node_map(node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(node_ids, incident_power_par),
-            _all_dense_float_node_map(node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(node_ids, hits_per_node),
+    return _first_order_result_from_dense(
+        node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
 end
 
@@ -609,13 +651,12 @@ function _stream_first_order_with_scattering_topology(
         end
     end
 
-    first = FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    first = _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
     topology = _build_scattering_topology_cache(
         scene,
@@ -746,13 +787,12 @@ function _stream_first_order_with_raycore_scattering_topology(
         end
     end
 
-    first = FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    first = _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
     topology = _build_scattering_topology_cache(
         scene,
@@ -864,11 +904,7 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
         (par_flux == 0.0 && nir_flux == 0.0) && continue
 
         if options.area_ratio
-            projected_mesh_area = _raycore_projected_mesh_area_by_node(geometry, sector.direction)
-            @inbounds for idx in eachindex(sector_area_ratio)
-                pixels_area = projected_pixels_area[idx]
-                sector_area_ratio[idx] = pixels_area > 0.0 ? projected_mesh_area[idx] / pixels_area : 1.0
-            end
+            sector_area_ratio = _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
         else
             fill!(sector_area_ratio, 1.0)
         end
@@ -900,13 +936,12 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
         end
     end
 
-    first = FirstOrderResult(
-        _all_dense_float_node_map(geometry.node_ids, projected_area_per_node),
-        SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, incident_power_par),
-            _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
-        ),
-        _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+    first = _first_order_result_from_dense(
+        geometry.node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
     )
     topology = _build_scattering_topology_cache(
         scene,
@@ -1280,7 +1315,20 @@ function _compute_scattering_with_flags(
                 default_coeff=options.scattering_coeff_par,
             )
         end
-    return ScatteringResult(SpectralNodeValues(par_only.added_power_per_node, Dict{Int,Float64}()), par_only.iterations, par_only.converged)
+    dense =
+        if hasproperty(par_only, :node_ids) && hasproperty(par_only, :dense_added_power_per_node)
+            dense_par = par_only.dense_added_power_per_node
+            dense_nir = zeros(Float64, length(dense_par))
+            DenseScatteringResult(par_only.node_ids, DenseSpectralNodeValues(dense_par, dense_nir))
+        else
+            nothing
+        end
+    return ScatteringResult(
+        SpectralNodeValues(par_only.added_power_per_node, Dict{Int,Float64}()),
+        par_only.iterations,
+        par_only.converged,
+        dense,
+    )
 end
 
 function _interception_area_per_node_local(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
@@ -2129,7 +2177,14 @@ function _ensure_sector_band_cache!(
             backend=cache.scattering_backend,
             band=band_u,
         )
-    dense = _dense_vector_from_node_values(result.added_power_per_node, geometry)
+    dense =
+        if hasproperty(result, :node_ids) &&
+           hasproperty(result, :dense_added_power_per_node) &&
+           result.node_ids == geometry.node_ids
+            result.dense_added_power_per_node
+        else
+            _dense_vector_from_node_values(result.added_power_per_node, geometry)
+        end
     target[sector_idx] = dense
     iterations[sector_idx] = result.iterations
     converged[sector_idx] = result.converged
@@ -2169,11 +2224,7 @@ function _assemble_cached_scattering(
             end
         end
     end
-    return ScatteringResult(
-        SpectralNodeValues(_float_dict_from_dense(node_ids, added_par), _float_dict_from_dense(node_ids, added_nir)),
-        iterations,
-        converged,
-    )
+    return _scattering_result_from_dense(node_ids, added_par, added_nir, iterations, converged)
 end
 
 function _compute_extra_band_light_cached(

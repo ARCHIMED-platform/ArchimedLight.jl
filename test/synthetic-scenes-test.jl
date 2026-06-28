@@ -215,9 +215,86 @@ end
     graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sb)
     dense_graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=dense_sb)
     sparse_graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sparse_sb)
+    sparse_data = ArchimedLight._prepare_raycore_interception_data(
+        scene,
+        models,
+        options,
+        ArchimedLight.RaycoreInterceptionBackend(edge_accumulation=:sparse_host_reduce),
+    )
+    sparse_sector_idx = findfirst(
+        sector -> sector.source != :sun && Float32(sector.direction[3]) > 0.0f0,
+        turtle.sectors,
+    )
+    @test sparse_sector_idx !== nothing
+    sparse_traced = ArchimedLight._raycore_trace_direction_stack_nodes_device(
+        sparse_data,
+        turtle.sectors[sparse_sector_idx].direction,
+        options,
+    )
+    @test !any(sparse_traced.overflow)
+    sparse_edge_keys1 = ArchimedLight._raycore_scattering_edge_keys_from_device_traced_stacks(sparse_data, sparse_traced)
+    sparse_edge_keys2 = ArchimedLight._raycore_scattering_edge_keys_from_device_traced_stacks(sparse_data, sparse_traced)
+    @test sparse_edge_keys1.keys === sparse_data.edge_keys_host
+    @test sparse_edge_keys1.counts === sparse_data.edge_key_counts_host
+    @test sparse_edge_keys2.keys === sparse_edge_keys1.keys
+    @test sparse_edge_keys2.counts === sparse_edge_keys1.counts
+    @test sparse_edge_keys1.max_edges == 2 * (sparse_data.max_hits_per_pixel - 1)
+    sparse_edge_counts = Dict{UInt64,Int}()
+    compact_scratch = sparse_data.edge_compact_host
+    ArchimedLight._merge_counted_packed_edge_keys!(
+        sparse_edge_counts,
+        sparse_edge_keys1.keys,
+        sparse_edge_keys1.counts,
+        sparse_edge_keys1.max_edges,
+        sparse_data.edge_compact_host,
+    )
+    @test !isempty(sparse_edge_counts)
+    @test sparse_data.edge_compact_host === compact_scratch
+    dense_data = ArchimedLight._prepare_raycore_interception_data(
+        scene,
+        models,
+        options,
+        ArchimedLight.RaycoreInterceptionBackend(edge_accumulation=:dense_atomic),
+    )
+    dense_traced = ArchimedLight._raycore_trace_direction_stack_nodes_device(
+        dense_data,
+        turtle.sectors[sparse_sector_idx].direction,
+        options,
+    )
+    @test !any(dense_traced.overflow)
+    dense_counts1 = ArchimedLight._raycore_scattering_dense_counts_from_device_traced_stacks(dense_data, dense_traced)
+    dense_counts2 = ArchimedLight._raycore_scattering_dense_counts_from_device_traced_stacks(dense_data, dense_traced)
+    @test dense_data.dense_edge_counts_dev !== nothing
+    @test dense_counts1 isa Vector{Int32}
+    @test dense_counts2 == dense_counts1
+    @test any(!iszero, dense_counts1)
+    @test graph.dense[] === nothing
+    dense_initial_par = ArchimedLight._dense_initial_scattering_power(graph, first, nothing, "PAR")
+    @test dense_initial_par === first.dense.incident_power.par
+    dense_initial_nir32 = ArchimedLight._dense_initial_scattering_power(graph, first, nothing, "NIR", Float32)
+    @test dense_initial_nir32 isa Vector{Float32}
+    @test dense_initial_nir32 ≈ Float32.(first.dense.incident_power.nir)
+    dense_initial_copy_check, _ = ArchimedLight._dense_scattering_band_arrays(
+        graph,
+        dense_initial_nir32,
+        graph.coeff_nir_by_node,
+        graph.default_coeff_nir,
+        Float32,
+    )
+    @test dense_initial_copy_check === dense_initial_nir32
+    override_initial = Dict(graph.node_ids[1] => 1.25)
+    dense_override = ArchimedLight._dense_initial_scattering_power(graph, first, override_initial, "PAR", Float32)
+    @test dense_override[1] == Float32(1.25)
+    @test all(iszero, dense_override[2:end])
     cpu_scat = ArchimedLight.compute_scattering(cpu_graph, first, options; backend=ArchimedLight.RaycastScatteringBackend())
     scat = ArchimedLight.compute_scattering(graph, first, options; backend=sb)
+    dense_cache = graph.dense[]
+    @test dense_cache !== nothing
+    @test cpu_scat.dense !== nothing
+    @test cpu_scat.dense.node_ids == cpu_graph.node_ids
+    @test cpu_scat.dense.added_power.par == [get(cpu_scat.added_power.par, nid, 0.0) for nid in cpu_scat.dense.node_ids]
     scat32 = ArchimedLight.compute_scattering(graph, first, options; backend=float32_sb)
+    @test graph.dense[] === dense_cache
 
     @test length(graph.pair_counts) > 0
     @test graph.pair_counts.to_nodes == cpu_graph.pair_counts.to_nodes
@@ -297,6 +374,9 @@ end
     graph = ArchimedLight.build_scattering_transfer_graph(scene, models, turtle, first, options; backend=sb)
     scat = ArchimedLight.compute_scattering(graph, first, options; backend=sb)
     budget = ArchimedLight.integrate_light(scene, models, first, scat, options; meteo_row=row)
+    first_public_only = ArchimedLight.FirstOrderResult(first.projected_area_per_node, first.incident_power, first.hits_per_node)
+    scat_public_only = ArchimedLight.ScatteringResult(scat.added_power, scat.iterations, scat.converged)
+    budget_public_only = ArchimedLight.integrate_light(scene, models, first_public_only, scat_public_only, options; meteo_row=row)
 
     step = ArchimedLight.run_light_step(
         scene,
@@ -306,10 +386,30 @@ end
         interception_backend=ib,
         scattering_backend=sb,
     )
+    par_only_step = ArchimedLight.run_light_step(
+        scene,
+        models,
+        row,
+        ArchimedLight.LightOptions(options; nir_scattering=false);
+        interception_backend=ib,
+        scattering_backend=sb,
+    )
 
     @test step.first_order.projected_area_per_node == first.projected_area_per_node
     @test step.scattering.added_power.par == scat.added_power.par
     @test step.budget.incident_energy.total.par == budget.incident_energy.total.par
+    @test first.dense !== nothing
+    @test scat.dense !== nothing
+    @test first.dense.node_ids == scat.dense.node_ids
+    @test first.dense.incident_power.par == [get(first.incident_power.par, nid, 0.0) for nid in first.dense.node_ids]
+    @test scat.dense.added_power.par == [get(scat.added_power.par, nid, 0.0) for nid in scat.dense.node_ids]
+    @test HelperModule._budgets_close(budget, budget_public_only; atol=1e-10, rtol=1e-10)
+    @test par_only_step.scattering.added_power.nir == Dict{Int,Float64}()
+    @test par_only_step.scattering.dense !== nothing
+    @test par_only_step.scattering.dense.node_ids == par_only_step.first_order.dense.node_ids
+    @test par_only_step.scattering.dense.added_power.par ==
+          [get(par_only_step.scattering.added_power.par, nid, 0.0) for nid in par_only_step.scattering.dense.node_ids]
+    @test all(iszero, par_only_step.scattering.dense.added_power.nir)
 end
 
 @testitem "Synthetic case Raycore series response cache" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
@@ -345,6 +445,47 @@ end
     scatter_uncached_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false, toricity=false)
     sb = ArchimedLight.RaycoreScatteringBackend(ib)
     scatter_cache = ArchimedLight.prepare_light_cache(stacked, models, scatter_options; interception_backend=ib, scattering_backend=sb)
+    scatter_sky = ArchimedLight.compute_sky(rows[1], scatter_options)
+    scatter_turtle = ArchimedLight.build_turtle(scatter_options, scatter_sky)
+    mesh_area_cache = scatter_cache.raycore_data.projected_mesh_area_cache
+    area_ratio_cache = scatter_cache.raycore_data.area_ratio_cache
+    mesh_area_keys = Set(ArchimedLight._raycore_direction_key(sector.direction) for sector in scatter_turtle.sectors)
+    @test isempty(mesh_area_cache)
+    @test isempty(area_ratio_cache)
+    up_sector_idx = findfirst(sector -> Float32(sector.direction[3]) > 0.0f0, scatter_turtle.sectors)
+    @test up_sector_idx !== nothing
+    up_direction = scatter_turtle.sectors[up_sector_idx].direction
+    top_projection = ArchimedLight._raycore_direction_projection_top_hit(scatter_cache.raycore_data, up_direction, scatter_options)
+    top_ratio1 = ArchimedLight._raycore_area_ratio_by_node(scatter_cache.raycore_data, :top_hit, up_direction, top_projection.projected_pixels_area)
+    top_ratio2 = ArchimedLight._raycore_area_ratio_by_node(scatter_cache.raycore_data, :top_hit, up_direction, top_projection.projected_pixels_area)
+    full_projection = ArchimedLight._raycore_direction_projection_full_stack(scatter_cache.raycore_data, up_direction, scatter_options)
+    full_ratio1 = ArchimedLight._raycore_area_ratio_by_node(scatter_cache.raycore_data, :full_stack, up_direction, full_projection.projected_pixels_area)
+    full_ratio2 = ArchimedLight._raycore_area_ratio_by_node(scatter_cache.raycore_data, :full_stack, up_direction, full_projection.projected_pixels_area)
+    @test top_ratio1 === top_ratio2
+    @test full_ratio1 === full_ratio2
+    @test top_ratio1 !== full_ratio1
+    @test length(area_ratio_cache) == 2
+    scatter_entry = ArchimedLight._get_turtle_cache_entry!(scatter_cache, scatter_turtle)
+    @test Set(keys(mesh_area_cache)) == mesh_area_keys
+    cached_mesh_area_count = length(mesh_area_cache)
+    @test ArchimedLight._get_turtle_cache_entry!(scatter_cache, scatter_turtle) === scatter_entry
+    @test length(mesh_area_cache) == cached_mesh_area_count
+    topology = scatter_entry.responses_cache.scattering_topology
+    @test topology !== nothing
+    @test topology.dense_static[] === nothing
+    unit_first = ArchimedLight._combine_sector_responses(
+        scatter_entry.responses_cache,
+        ArchimedLight._unit_directional_fluxes(scatter_entry.turtle, 1; par=1.0),
+    )
+    graph1 = ArchimedLight.build_scattering_transfer_graph(topology, unit_first, scatter_options, sb)
+    @test topology.dense_static[] !== nothing
+    graph2 = ArchimedLight.build_scattering_transfer_graph(topology, unit_first, scatter_options, sb)
+    @test graph1.dense_static === topology.dense_static[]
+    @test graph2.dense_static === topology.dense_static[]
+    @test isempty(graph1.dense_static.device_cache)
+    dev_static1 = ArchimedLight._scattering_static_edge_device_arrays(graph1.dense_static, sb.config.backend)
+    dev_static2 = ArchimedLight._scattering_static_edge_device_arrays(graph2.dense_static, sb.config.backend)
+    @test dev_static1 === dev_static2
     scatter_uncached = ArchimedLight.run_light_series(stacked, models, meteo, scatter_uncached_options; interception_backend=ib, scattering_backend=sb)
     scatter_cached = ArchimedLight.run_light_series(stacked, models, meteo, scatter_options; interception_backend=ib, scattering_backend=sb)
 
