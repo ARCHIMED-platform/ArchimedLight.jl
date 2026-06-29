@@ -126,9 +126,15 @@ end
     @test ArchimedLight._raycore_default_workgroupsize(ArchimedLight.KernelAbstractions.CPU()) == 256
     @test ib.config.max_hits_per_pixel == 32
     @test ib.config.hit_epsilon == Float32(1.0f-4)
+    raw_stack_config = ArchimedLight.RaycoreBackendConfig(hit_epsilon=-1.0f0)
+    @test raw_stack_config.hit_epsilon == -1.0f0
     @test ib.config.edge_accumulation == :auto
     @test ib.config.dense_edge_limit_bytes == 512 * 1024^2
+    @test ib.config.propagation_backend == :auto
+    @test ib.config.max_prechunk_instances == ArchimedLight._raycore_default_max_prechunk_instances()
     @test ib.config.scattering_eltype == Float64
+    no_cap_config = ArchimedLight.RaycoreBackendConfig(max_prechunk_instances=0)
+    @test no_cap_config.max_prechunk_instances == typemax(Int)
 
     resolved = ArchimedLight._resolve_interception_backend(:raycore_cpu)
     @test resolved isa ArchimedLight.RaycoreInterceptionBackend
@@ -146,8 +152,17 @@ end
     @test sb isa ArchimedLight.ScatteringBackend
     @test sb.config.backend == ib.config.backend
     @test sb.config.edge_accumulation == :sparse_host_reduce
+    @test sb.config.propagation_backend == :auto
+    @test sb.config.max_prechunk_instances == ib.config.max_prechunk_instances
     @test sb.config.scattering_eltype == Float64
     @test ArchimedLight._resolve_scattering_backend(:raycast, sb) === sb
+
+    forced_cpu_sb = ArchimedLight.RaycoreScatteringBackend(ib; propagation_backend=:cpu)
+    @test forced_cpu_sb.config.propagation_backend == :cpu
+    capped_sb = ArchimedLight.RaycoreScatteringBackend(ib; max_prechunk_instances=17)
+    @test capped_sb.config.max_prechunk_instances == 17
+    forced_device_sb = ArchimedLight.RaycoreScatteringBackend(propagation_backend=:device)
+    @test forced_device_sb.config.propagation_backend == :device
 
     ib32 = ArchimedLight.RaycoreInterceptionBackend(scattering_eltype=Float32)
     sb32 = ArchimedLight.RaycoreScatteringBackend(ib32)
@@ -156,6 +171,7 @@ end
 
     @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(workgroupsize=0)
     @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(edge_accumulation=:unsupported)
+    @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(propagation_backend=:unsupported)
 end
 
 @testitem "Raycore optional device smoke" tags=[:core, :raycore_backend] begin

@@ -168,7 +168,7 @@ function _sky_fraction_per_node(scene, models, turtle, options, node_ids)
     for (i, sector) in enumerate(turtle.sectors)
         sector.source == :sun && continue
         sky_count += 1
-        for (nid, area) in responses.projected_area_per_sector[i]
+        for (nid, area) in ArchimedLight._sector_projected_area_pairs(responses, i)
             visible_sum[nid] = get(visible_sum, nid, 0.0) + area
         end
     end

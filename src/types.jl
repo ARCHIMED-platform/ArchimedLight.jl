@@ -16,13 +16,22 @@ struct RasterCPUBackend <: InterceptionBackend end
     RaycoreBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=nothing,
         max_hits_per_pixel=32, hit_epsilon=1.0f-4,
         edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
+        propagation_backend=:auto, max_prechunk_instances=nothing,
         scattering_eltype=nothing)
 
 Shared configuration for Raycore-based interception and scattering backends.
 When `workgroupsize` is omitted, ArchimedLight uses a default of `256`. The
 `backend` field is a
 KernelAbstractions backend, not a CUDA/Metal package object; GPU packages are
-loaded by users or tests outside ArchimedLight core.
+loaded by users or tests outside ArchimedLight core. `hit_epsilon` is forwarded
+to `Raycore.all_hits!` for stack deduplication; negative values request raw
+hit stacks when the loaded Raycore version supports that sentinel.
+`propagation_backend=:auto` uses the shared CPU dense solver for
+KernelAbstractions CPU and for large GPU graphs; small GPU graphs use device
+propagation. Use `:device` or `:cpu` to force either path.
+`max_prechunk_instances` limits how many BLAS instances non-CPU validation
+prechunking can create before falling back to the normal CPU backend; pass `0`
+or a negative value to disable the cap.
 """
 struct RaycoreBackendConfig{B}
     backend::B
@@ -31,6 +40,8 @@ struct RaycoreBackendConfig{B}
     hit_epsilon::Float32
     edge_accumulation::Symbol
     dense_edge_limit_bytes::Int
+    propagation_backend::Symbol
+    max_prechunk_instances::Int
     scattering_eltype::DataType
 
     function RaycoreBackendConfig(
@@ -40,16 +51,21 @@ struct RaycoreBackendConfig{B}
         hit_epsilon::Real,
         edge_accumulation::Symbol,
         dense_edge_limit_bytes::Integer,
+        propagation_backend::Symbol,
+        max_prechunk_instances::Integer,
         scattering_eltype::Type{<:AbstractFloat},
     ) where {B}
         workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
         max_hits_per_pixel > 0 || error("RaycoreBackendConfig max_hits_per_pixel must be positive.")
-        hit_epsilon > 0 || error("RaycoreBackendConfig hit_epsilon must be positive.")
+        isfinite(hit_epsilon) || error("RaycoreBackendConfig hit_epsilon must be finite.")
         dense_edge_limit_bytes > 0 || error("RaycoreBackendConfig dense_edge_limit_bytes must be positive.")
         edge_accumulation in (:auto, :sparse_host_reduce, :dense_atomic) ||
             error("Unsupported Raycore edge_accumulation: $edge_accumulation (supported: :auto, :sparse_host_reduce, :dense_atomic)")
+        propagation_backend in (:auto, :device, :cpu) ||
+            error("Unsupported Raycore propagation_backend: $propagation_backend (supported: :auto, :device, :cpu)")
         scattering_eltype in (Float32, Float64) ||
             error("RaycoreBackendConfig scattering_eltype must be Float32 or Float64.")
+        max_prechunk_instances_value = Int(max_prechunk_instances)
         return new{B}(
             backend,
             Int(workgroupsize),
@@ -57,9 +73,18 @@ struct RaycoreBackendConfig{B}
             Float32(hit_epsilon),
             edge_accumulation,
             Int(dense_edge_limit_bytes),
+            propagation_backend,
+            max_prechunk_instances_value <= 0 ? typemax(Int) : max_prechunk_instances_value,
             scattering_eltype,
         )
     end
+end
+
+function _raycore_default_max_prechunk_instances()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_MAX_PRECHUNK_INSTANCES", "")
+    isempty(strip(raw)) && return 4096
+    value = parse(Int, raw)
+    return value <= 0 ? typemax(Int) : value
 end
 
 _raycore_default_scattering_eltype(backend) = backend isa KernelAbstractions.CPU ? Float64 : Float32
@@ -74,6 +99,8 @@ function RaycoreBackendConfig(;
     hit_epsilon::Real=1.0f-4,
     edge_accumulation::Symbol=:auto,
     dense_edge_limit_bytes::Integer=512 * 1024^2,
+    propagation_backend::Symbol=:auto,
+    max_prechunk_instances::Union{Nothing,Integer}=nothing,
     scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
 )
     return RaycoreBackendConfig(
@@ -83,6 +110,8 @@ function RaycoreBackendConfig(;
         hit_epsilon,
         edge_accumulation,
         dense_edge_limit_bytes,
+        propagation_backend,
+        max_prechunk_instances === nothing ? _raycore_default_max_prechunk_instances() : max_prechunk_instances,
         scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
     )
 end
@@ -107,6 +136,8 @@ function _raycore_config_with(
     hit_epsilon=config.hit_epsilon,
     edge_accumulation=config.edge_accumulation,
     dense_edge_limit_bytes=config.dense_edge_limit_bytes,
+    propagation_backend=config.propagation_backend,
+    max_prechunk_instances=config.max_prechunk_instances,
     scattering_eltype=config.scattering_eltype,
 )
     return RaycoreBackendConfig(
@@ -116,6 +147,8 @@ function _raycore_config_with(
         hit_epsilon,
         edge_accumulation,
         dense_edge_limit_bytes,
+        propagation_backend,
+        max_prechunk_instances,
         scattering_eltype,
     )
 end
@@ -158,12 +191,16 @@ function RaycoreScatteringBackend(
     interception_backend::RaycoreInterceptionBackend;
     edge_accumulation::Symbol=interception_backend.config.edge_accumulation,
     dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
+    propagation_backend::Symbol=interception_backend.config.propagation_backend,
+    max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
 )
     return RaycoreScatteringBackend(
         _raycore_config_with(
             interception_backend.config;
             edge_accumulation=edge_accumulation,
             dense_edge_limit_bytes=dense_edge_limit_bytes,
+            propagation_backend=propagation_backend,
+            max_prechunk_instances=max_prechunk_instances,
         ),
     )
 end

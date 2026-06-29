@@ -202,14 +202,74 @@ function _dense_node_map(values::Vector{T}, geometry::InterceptionSceneData) whe
     return DenseNodeMap(geometry.node_ids, values)
 end
 
+struct DenseSectorResponseStorage
+    projected_area_by_sector::Matrix{Float64}
+    projected_area_active_by_sector::Vector{Vector{Int}}
+    hits_all_sectors::Vector{Int}
+    emitter_incident_power_par::Vector{Float64}
+    emitter_incident_power_par_active::Vector{Int}
+    emitter_incident_power_nir::Vector{Float64}
+    emitter_incident_power_nir_active::Vector{Int}
+    device_cache::IdDict{Any,Any}
+end
+
 struct SectorResponsesCache
     prepared::PreparedInterceptionData
-    projected_area_per_sector::Vector{DenseNodeMap{Float64}}
-    hits_per_sector::Vector{DenseNodeMap{Int}}
+    dense::DenseSectorResponseStorage
     node_ids::Vector{Int}
-    emitter_incident_power_par::DenseNodeMap{Float64}
-    emitter_incident_power_nir::DenseNodeMap{Float64}
     scattering_topology::Union{Nothing,ScatteringTopologyCache}
+end
+
+function _dense_sector_response_storage(
+    projected_area_by_sector::Matrix{Float64},
+    projected_area_active_by_sector::Vector{Vector{Int}},
+    hits_all_sectors::Vector{Int},
+    emitter_incident_power_par::DenseNodeMap{Float64},
+    emitter_incident_power_nir::DenseNodeMap{Float64},
+)
+    return DenseSectorResponseStorage(
+        projected_area_by_sector,
+        projected_area_active_by_sector,
+        hits_all_sectors,
+        emitter_incident_power_par.values,
+        _active_indices(emitter_incident_power_par),
+        emitter_incident_power_nir.values,
+        _active_indices(emitter_incident_power_nir),
+        IdDict{Any,Any}(),
+    )
+end
+
+@inline _sector_count(responses::SectorResponsesCache) = size(responses.dense.projected_area_by_sector, 2)
+@inline _sector_area_value(responses::SectorResponsesCache, sector_idx::Int, node_idx::Int) =
+    responses.dense.projected_area_by_sector[node_idx, sector_idx]
+@inline _sector_active_indices(responses::SectorResponsesCache, sector_idx::Int) =
+    responses.dense.projected_area_active_by_sector[sector_idx]
+@inline _hits_all_sectors(responses::SectorResponsesCache) = responses.dense.hits_all_sectors
+@inline _emitter_incident_power_par(responses::SectorResponsesCache) = responses.dense.emitter_incident_power_par
+@inline _emitter_incident_power_nir(responses::SectorResponsesCache) = responses.dense.emitter_incident_power_nir
+@inline _emitter_incident_power_par_active(responses::SectorResponsesCache) =
+    responses.dense.emitter_incident_power_par_active
+@inline _emitter_incident_power_nir_active(responses::SectorResponsesCache) =
+    responses.dense.emitter_incident_power_nir_active
+
+function _sector_projected_area_pairs(responses::SectorResponsesCache, sector_idx::Int)
+    node_ids = responses.node_ids
+    active = _sector_active_indices(responses, sector_idx)
+    values = responses.dense.projected_area_by_sector
+    return ((node_ids[j], values[j, sector_idx]) for j in active)
+end
+
+function _sector_responses_host_bytes(responses::SectorResponsesCache)
+    dense = responses.dense
+    active_bytes = sum(length, dense.projected_area_active_by_sector) * sizeof(Int)
+    return sizeof(responses.node_ids) +
+           sizeof(dense.projected_area_by_sector) +
+           active_bytes +
+           sizeof(dense.hits_all_sectors) +
+           sizeof(dense.emitter_incident_power_par) +
+           sizeof(dense.emitter_incident_power_par_active) +
+           sizeof(dense.emitter_incident_power_nir) +
+           sizeof(dense.emitter_incident_power_nir_active)
 end
 
 function _dense_sector_float(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
@@ -270,30 +330,36 @@ function _build_sector_responses(
 )
     n = length(turtle.sectors)
     geometry = prepared.geometry
-    pa_by_sector = Vector{DenseNodeMap{Float64}}(undef, n)
-    hits_by_sector = Vector{DenseNodeMap{Int}}(undef, n)
+    projected_area_by_sector = zeros(Float64, length(geometry.node_ids), n)
+    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    hits_all_sectors = zeros(Int, length(geometry.node_ids))
+    sector_hits = zeros(Int, length(geometry.node_ids))
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
     scattering_edge_counts = options.scattering ? Dict{UInt64,Int}() : nothing
     scattering_sun_hits = options.scattering ? Dict{Int,Int}() : nothing
     scattering_scratch = options.scattering ? ScatteringStackScratch() : nothing
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for i in 1:n
         sector = turtle.sectors[i]
         projection = _prepared_direction_projection(prepared, sector.direction, options)
-        pa_by_sector[i] =
-            _dense_node_map(
-                _visible_area_from_projection_dense(
-                    projection,
-                    options,
-                    geometry.plotbox,
-                    prepared.virtual_node_mask,
-                    prepared.node_transparency_by_index,
-                    geometry,
-                ),
-                geometry,
-            )
-        hits_by_sector[i] = _dense_node_map(copy(_dense_projection_hits(projection, geometry)), geometry)
+        sector_area = _visible_area_from_projection_dense(
+            projection,
+            options,
+            geometry.plotbox,
+            prepared.virtual_node_mask,
+            prepared.node_transparency_by_index,
+            geometry,
+        )
+        @views projected_area_by_sector[:, i] .= sector_area
+        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
+        _copy_projection_hits!(sector_hits, projection, geometry)
+        @inbounds for j in eachindex(sector_hits)
+            h = sector_hits[j]
+            h == 0 && continue
+            hits_all_sectors[j] += h
+        end
         if emitter_edge_counts !== nothing
             if projection isa DenseDirectionProjectionResult
                 _accumulate_emitter_transfer_counts!(
@@ -326,6 +392,7 @@ function _build_sector_responses(
                     scattering_scratch;
                     node_ids=geometry.node_ids,
                     stacks_sorted=true,
+                    no_virtual_nodes=no_virtual_nodes,
                 )
             else
                 _accumulate_scattering_counts!(
@@ -358,11 +425,14 @@ function _build_sector_responses(
         end
     return SectorResponsesCache(
         prepared,
-        pa_by_sector,
-        hits_by_sector,
+        _dense_sector_response_storage(
+            projected_area_by_sector,
+            projected_area_active_by_sector,
+            hits_all_sectors,
+            emitter_incident_power_par,
+            emitter_incident_power_nir,
+        ),
         geometry.node_ids,
-        emitter_incident_power_par,
-        emitter_incident_power_nir,
         scattering_topology,
     )
 end
@@ -375,33 +445,45 @@ function _build_sector_responses(
     options::LightOptions,
 )
     prepared = data.prepared
-    n = length(turtle.sectors)
     geometry = prepared.geometry
-    pa_by_sector = Vector{DenseNodeMap{Float64}}(undef, n)
-    hits_by_sector = Vector{DenseNodeMap{Int}}(undef, n)
+    if options.scattering &&
+       isempty(prepared.emitter_nodes) &&
+       !_raycore_use_raster_compat_projection(data) &&
+       geometry.plotbox.nx * geometry.plotbox.ny >= _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS
+        return _build_sector_responses_raycore_flat(data, scene, models, turtle, options)
+    end
+    n = length(turtle.sectors)
+    projected_area_by_sector = zeros(Float64, length(geometry.node_ids), n)
+    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    hits_all_sectors = zeros(Int, length(geometry.node_ids))
+    sector_hits = zeros(Int, length(geometry.node_ids))
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
     scattering_edge_counts = options.scattering ? Dict{UInt64,Int}() : nothing
     scattering_sun_hits = options.scattering ? Dict{Int,Int}() : nothing
     scattering_scratch = options.scattering ? ScatteringStackScratch() : nothing
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for i in 1:n
         sector = turtle.sectors[i]
         projection = _raycore_direction_projection(data, sector.direction, options)
-        pa_by_sector[i] =
-            _dense_node_map(
-                _visible_area_from_projection_dense(
-                    projection,
-                    options,
-                    geometry.plotbox,
-                    prepared.virtual_node_mask,
-                    prepared.node_transparency_by_index,
-                    geometry,
-                    true,
-                ),
-                geometry,
-            )
-        hits_by_sector[i] = _dense_node_map(copy(_dense_projection_hits(projection, geometry)), geometry)
+        sector_area = _visible_area_from_projection_dense(
+            projection,
+            options,
+            geometry.plotbox,
+            prepared.virtual_node_mask,
+            prepared.node_transparency_by_index,
+            geometry,
+            true,
+        )
+        @views projected_area_by_sector[:, i] .= sector_area
+        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
+        _copy_projection_hits!(sector_hits, projection, geometry)
+        @inbounds for j in eachindex(sector_hits)
+            h = sector_hits[j]
+            h == 0 && continue
+            hits_all_sectors[j] += h
+        end
         if emitter_edge_counts !== nothing
             _accumulate_emitter_transfer_counts!(
                 emitter_edge_counts,
@@ -423,6 +505,7 @@ function _build_sector_responses(
                 scattering_scratch;
                 node_ids=geometry.node_ids,
                 stacks_sorted=true,
+                no_virtual_nodes=no_virtual_nodes,
             )
         end
     end
@@ -442,11 +525,196 @@ function _build_sector_responses(
         end
     return SectorResponsesCache(
         prepared,
-        pa_by_sector,
-        hits_by_sector,
+        _dense_sector_response_storage(
+            projected_area_by_sector,
+            projected_area_active_by_sector,
+            hits_all_sectors,
+            emitter_incident_power_par,
+            emitter_incident_power_nir,
+        ),
         geometry.node_ids,
-        emitter_incident_power_par,
-        emitter_incident_power_nir,
+        scattering_topology,
+    )
+end
+
+function _build_sector_responses_raycore_flat(
+    data::RaycoreSceneData,
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    turtle::TurtleGrid,
+    options::LightOptions,
+)
+    prepared = data.prepared
+    geometry = prepared.geometry
+    n = length(turtle.sectors)
+    n_nodes = length(geometry.node_ids)
+    pixel_area = geometry.plotbox.pixel_area
+    projected_area_by_sector = zeros(Float64, n_nodes, n)
+    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    hits_all_sectors = zeros(Int, n_nodes)
+    sector_sun_hits = zeros(Int, n_nodes)
+    projected_pixels_area = zeros(Float64, n_nodes)
+    sector_area = zeros(Float64, n_nodes)
+    sector_area_ratio = ones(Float64, n_nodes)
+    scattering_edge_counts = Dict{UInt64,Int}()
+    scattering_sun_hits = Dict{Int,Int}()
+    scattering_scratch = ScatteringStackScratch()
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
+
+    for i in 1:n
+        sector = turtle.sectors[i]
+        sector.source == :sun && fill!(sector_sun_hits, 0)
+        fill!(projected_pixels_area, 0.0)
+        fill!(sector_area, 0.0)
+
+        if _raycore_use_raster_compat_projection(data, sector.direction, options)
+            projection = _raycore_raster_compat_projection(data, sector.direction, options)
+            if projection isa DenseDirectionProjectionResult
+                _fill_dense_projection_area_hits_and_scattering!(
+                    sector_area,
+                    hits_all_sectors,
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared,
+                    options,
+                    scattering_scratch;
+                    stacks_sorted=true,
+                )
+            else
+                _visible_area_from_projection_dense!(
+                    sector_area,
+                    projection,
+                    options,
+                    geometry.plotbox,
+                    prepared.virtual_node_mask,
+                    prepared.node_transparency_by_index,
+                    geometry,
+                    true,
+                )
+                _accumulate_projection_hits!(hits_all_sectors, projection, geometry)
+                _accumulate_scattering_counts!(
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared.virtual_node_mask,
+                    geometry.pavement_node_mask,
+                    scattering_scratch;
+                    node_ids=geometry.node_ids,
+                    stacks_sorted=true,
+                    no_virtual_nodes=no_virtual_nodes,
+                )
+            end
+        elseif Float32(sector.direction[3]) > 0.0f0
+            traced = _raycore_trace_direction_stack_nodes(data, sector.direction, options)
+            overflow_pixel = findfirst(traced.overflow)
+            overflow_pixel === nothing || error(
+                "Raycore max_hits_per_pixel=$(traced.max_hits) exceeded for pixel $overflow_pixel. " *
+                "Increase RaycoreBackendConfig(max_hits_per_pixel=...).",
+            )
+
+            counts = traced.counts
+            nodes = traced.nodes
+            max_hits = traced.max_hits
+            accumulate_edges = sector.source != :sun
+            accumulate_sun_hits = sector.source == :sun
+            @inbounds for pixel_idx in eachindex(counts)
+                n_hits = Int(counts[pixel_idx])
+                n_hits == 0 && continue
+                stack_base = (pixel_idx - 1) * max_hits
+                for h in 1:n_hits
+                    node_idx = Int(nodes[stack_base+h])
+                    hits_all_sectors[node_idx] += 1
+                    if accumulate_sun_hits
+                        sector_sun_hits[node_idx] += 1
+                    end
+                    projected_pixels_area[node_idx] += pixel_area
+                end
+
+                if accumulate_edges && n_hits > 1
+                    if no_virtual_nodes
+                        _accumulate_scattering_counts_dense_from_nodes_no_virtual!(
+                            scattering_edge_counts,
+                            nodes,
+                            stack_base,
+                            n_hits,
+                            geometry.pavement_node_mask,
+                            geometry.node_ids,
+                        )
+                    else
+                        _accumulate_scattering_counts_dense_from_nodes!(
+                            scattering_edge_counts,
+                            nodes,
+                            stack_base,
+                            n_hits,
+                            prepared.virtual_node_mask,
+                            geometry.pavement_node_mask,
+                            scattering_scratch,
+                            geometry.node_ids,
+                        )
+                    end
+                end
+
+                for h in 1:n_hits
+                    node_idx = Int(nodes[stack_base+h])
+                    if prepared.virtual_node_mask[node_idx]
+                        sector_area[node_idx] += pixel_area
+                        continue
+                    end
+
+                    transparency = prepared.node_transparency_by_index[node_idx]
+                    intercepted_fraction = 1.0 - transparency
+                    if intercepted_fraction > 0.0
+                        sector_area[node_idx] += pixel_area * intercepted_fraction
+                    end
+                    transparency > 0.0 || break
+                end
+            end
+
+            if accumulate_sun_hits
+                @inbounds for idx in eachindex(sector_sun_hits)
+                    h = sector_sun_hits[idx]
+                    h == 0 && continue
+                    nid = geometry.node_ids[idx]
+                    scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
+                end
+            end
+
+            if options.area_ratio
+                sector_area_ratio = _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
+                @inbounds for idx in eachindex(sector_area)
+                    sector_area[idx] *= sector_area_ratio[idx]
+                end
+            else
+                fill!(sector_area_ratio, 1.0)
+            end
+        end
+
+        @views projected_area_by_sector[:, i] .= sector_area
+        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
+    end
+
+    emitter_incident_power_par, emitter_incident_power_nir =
+        _dense_emitter_incident_power(nothing, nothing, prepared)
+    scattering_topology = _build_scattering_topology_cache(
+        scene,
+        models,
+        prepared,
+        _edge_counts_from_packed(scattering_edge_counts),
+        scattering_sun_hits,
+    )
+    return SectorResponsesCache(
+        prepared,
+        _dense_sector_response_storage(
+            projected_area_by_sector,
+            projected_area_active_by_sector,
+            hits_all_sectors,
+            emitter_incident_power_par,
+            emitter_incident_power_nir,
+        ),
+        geometry.node_ids,
         scattering_topology,
     )
 end
@@ -466,9 +734,8 @@ function _sky_fraction_from_sector_responses(
     for (i, sector) in enumerate(turtle.sectors)
         sector.source == :sun && continue
         sky_count += 1
-        sector_area = responses.projected_area_per_sector[i].values
-        @inbounds for j in _active_indices(responses.projected_area_per_sector[i])
-            visible_sum[j] += sector_area[j]
+        @inbounds for j in _sector_active_indices(responses, i)
+            visible_sum[j] += _sector_area_value(responses, i, j)
         end
     end
 
@@ -509,34 +776,29 @@ function _combine_sector_responses(
     projected_area_per_node = zeros(Float64, length(node_ids))
     incident_power_par = zeros(Float64, length(node_ids))
     incident_power_nir = zeros(Float64, length(node_ids))
-    hits_per_node = zeros(Int, length(node_ids))
+    hits_per_node = copy(_hits_all_sectors(responses))
 
-    for i in eachindex(responses.projected_area_per_sector)
+    for i in 1:_sector_count(responses)
         pf = fluxes.par[i]
         nf = fluxes.nir[i]
         active_flux = (pf != 0.0) || (nf != 0.0)
 
-        sector_area = responses.projected_area_per_sector[i].values
         if active_flux
-            @inbounds for j in _active_indices(responses.projected_area_per_sector[i])
-                pa = sector_area[j]
+            @inbounds for j in _sector_active_indices(responses, i)
+                pa = _sector_area_value(responses, i, j)
                 projected_area_per_node[j] += pa
                 pf != 0.0 && (incident_power_par[j] += pf * pa)
                 nf != 0.0 && (incident_power_nir[j] += nf * pa)
             end
         end
-        sector_hits = responses.hits_per_sector[i].values
-        @inbounds for j in _active_indices(responses.hits_per_sector[i])
-            hits_per_node[j] += sector_hits[j]
-        end
     end
 
-    emitter_par = responses.emitter_incident_power_par.values
-    @inbounds for idx in _active_indices(responses.emitter_incident_power_par)
+    emitter_par = _emitter_incident_power_par(responses)
+    @inbounds for idx in _emitter_incident_power_par_active(responses)
         incident_power_par[idx] += emitter_par[idx]
     end
-    emitter_nir = responses.emitter_incident_power_nir.values
-    @inbounds for idx in _active_indices(responses.emitter_incident_power_nir)
+    emitter_nir = _emitter_incident_power_nir(responses)
+    @inbounds for idx in _emitter_incident_power_nir_active(responses)
         incident_power_nir[idx] += emitter_nir[idx]
     end
 
@@ -548,6 +810,219 @@ function _combine_sector_responses(
         hits_per_node,
         materialize_public,
     )
+end
+
+function _combine_single_sector_response(
+    responses::SectorResponsesCache,
+    sector_idx::Int,
+    band::String,
+    materialize_public::Bool=false,
+)
+    node_ids = responses.node_ids
+    projected_area_per_node = zeros(Float64, length(node_ids))
+    incident_power_par = zeros(Float64, length(node_ids))
+    incident_power_nir = zeros(Float64, length(node_ids))
+    hits_per_node = copy(_hits_all_sectors(responses))
+
+    target_power = uppercase(band) == "NIR" ? incident_power_nir : incident_power_par
+    @inbounds for j in _sector_active_indices(responses, sector_idx)
+        pa = _sector_area_value(responses, sector_idx, j)
+        projected_area_per_node[j] = pa
+        target_power[j] = pa
+    end
+
+    emitter_par = _emitter_incident_power_par(responses)
+    @inbounds for idx in _emitter_incident_power_par_active(responses)
+        incident_power_par[idx] += emitter_par[idx]
+    end
+    emitter_nir = _emitter_incident_power_nir(responses)
+    @inbounds for idx in _emitter_incident_power_nir_active(responses)
+        incident_power_nir[idx] += emitter_nir[idx]
+    end
+
+    return _first_order_result_from_dense(
+        node_ids,
+        projected_area_per_node,
+        incident_power_par,
+        incident_power_nir,
+        hits_per_node,
+        materialize_public,
+    )
+end
+
+@inline function _accumulate_visible_stack_into!(
+    projected_area_per_node::Vector{Float64},
+    incident_power_par::Vector{Float64},
+    incident_power_nir::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
+    stack,
+    options::LightOptions,
+    pixel_area::Float64,
+    virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
+    par_flux::Float64,
+    nir_flux::Float64,
+)
+    @inbounds for hit in stack
+        node_idx = _hit_node(hit)
+        if virtual_node_mask[node_idx]
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            pa = pixel_area * ratio
+            projected_area_per_node[node_idx] += pa
+            par_flux != 0.0 && (incident_power_par[node_idx] += par_flux * pa)
+            nir_flux != 0.0 && (incident_power_nir[node_idx] += nir_flux * pa)
+            continue
+        end
+
+        transparency = node_transparency_by_index[node_idx]
+        intercepted_fraction = 1.0 - transparency
+        if intercepted_fraction > 0.0
+            ratio = _projection_area_ratio(projection, options, node_idx)
+            pa = pixel_area * intercepted_fraction * ratio
+            projected_area_per_node[node_idx] += pa
+            par_flux != 0.0 && (incident_power_par[node_idx] += par_flux * pa)
+            nir_flux != 0.0 && (incident_power_nir[node_idx] += nir_flux * pa)
+        end
+        transparency > 0.0 || break
+    end
+    return nothing
+end
+
+function _accumulate_dense_projection_first_order_and_scattering!(
+    projected_area_per_node::Vector{Float64},
+    incident_power_par::Vector{Float64},
+    incident_power_nir::Vector{Float64},
+    hits_per_node::Vector{Int},
+    scattering_edge_counts::Dict{UInt64,Int},
+    scattering_sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DenseDirectionProjectionResult,
+    prepared::PreparedInterceptionData,
+    options::LightOptions,
+    par_flux::Float64,
+    nir_flux::Float64,
+    scratch::ScatteringStackScratch,
+    stacks_sorted::Bool=false,
+)
+    geometry = prepared.geometry
+    @inbounds for i in eachindex(projection.node_hits)
+        hits_per_node[i] += projection.node_hits[i]
+    end
+
+    if sector.source == :sun
+        _accumulate_sun_hits!(scattering_sun_hits, projection, geometry.node_ids)
+    end
+
+    active_flux = par_flux != 0.0 || nir_flux != 0.0
+    pixel_area = geometry.plotbox.pixel_area
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
+    @inbounds for stack in values(projection.pixel_hits)
+        n_hits = length(stack)
+        n_hits == 0 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        if active_flux
+            _accumulate_visible_stack_into!(
+                projected_area_per_node,
+                incident_power_par,
+                incident_power_nir,
+                projection,
+                stack,
+                options,
+                pixel_area,
+                prepared.virtual_node_mask,
+                prepared.node_transparency_by_index,
+                par_flux,
+                nir_flux,
+            )
+        end
+        if sector.source != :sun && n_hits > 1
+            if no_virtual_nodes
+                _accumulate_scattering_counts_dense_no_virtual!(
+                    scattering_edge_counts,
+                    stack,
+                    geometry.pavement_node_mask,
+                    geometry.node_ids,
+                )
+            else
+                _accumulate_scattering_counts_dense!(
+                    scattering_edge_counts,
+                    stack,
+                    prepared.virtual_node_mask,
+                    geometry.pavement_node_mask,
+                    scratch,
+                    geometry.node_ids,
+                )
+            end
+        end
+    end
+    return nothing
+end
+
+function _fill_dense_projection_area_hits_and_scattering!(
+    sector_area::Vector{Float64},
+    hits_all_sectors::Vector{Int},
+    scattering_edge_counts::Dict{UInt64,Int},
+    scattering_sun_hits::Dict{Int,Int},
+    sector::TurtleSector,
+    projection::DenseDirectionProjectionResult,
+    prepared::PreparedInterceptionData,
+    options::LightOptions,
+    scratch::ScatteringStackScratch;
+    stacks_sorted::Bool=false,
+)
+    geometry = prepared.geometry
+    if sector.source == :sun
+        @inbounds for i in eachindex(projection.node_hits)
+            h = projection.node_hits[i]
+            h == 0 && continue
+            hits_all_sectors[i] += h
+            nid = geometry.node_ids[i]
+            scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
+        end
+    else
+        @inbounds for i in eachindex(projection.node_hits)
+            h = projection.node_hits[i]
+            h == 0 && continue
+            hits_all_sectors[i] += h
+        end
+    end
+
+    pixel_area = geometry.plotbox.pixel_area
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
+    @inbounds for stack in values(projection.pixel_hits)
+        n_hits = length(stack)
+        n_hits == 0 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        _accumulate_visible_area_dense!(
+            sector_area,
+            projection,
+            stack,
+            options,
+            pixel_area,
+            prepared.virtual_node_mask,
+            prepared.node_transparency_by_index,
+        )
+        if sector.source != :sun && n_hits > 1
+            if no_virtual_nodes
+                _accumulate_scattering_counts_dense_no_virtual!(
+                    scattering_edge_counts,
+                    stack,
+                    geometry.pavement_node_mask,
+                    geometry.node_ids,
+                )
+            else
+                _accumulate_scattering_counts_dense!(
+                    scattering_edge_counts,
+                    stack,
+                    prepared.virtual_node_mask,
+                    geometry.pavement_node_mask,
+                    scratch,
+                    geometry.node_ids,
+                )
+            end
+        end
+    end
+    return nothing
 end
 
 function _stream_first_order_with_scattering_topology(
@@ -626,6 +1101,7 @@ function _stream_first_order_with_scattering_topology(
                 scattering_scratch;
                 node_ids=geometry.node_ids,
                 stacks_sorted=true,
+                no_virtual_nodes=no_virtual_nodes,
             )
         else
             _accumulate_scattering_counts!(
@@ -702,6 +1178,7 @@ function _stream_first_order_with_raycore_scattering_topology(
     scattering_scratch = ScatteringStackScratch()
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for (k, sector) in enumerate(turtle.sectors)
         projection = _raycore_direction_projection(data, sector.direction, options)
@@ -738,7 +1215,7 @@ function _stream_first_order_with_raycore_scattering_topology(
                     projection,
                     prepared.emitter_node_mask,
                     geometry.node_ids;
-                    stacks_sorted=false,
+                    stacks_sorted=true,
                 )
             else
                 _accumulate_emitter_transfer_counts!(
@@ -746,7 +1223,7 @@ function _stream_first_order_with_raycore_scattering_topology(
                     emitter_total_from,
                     projection,
                     prepared.emitter_nodes;
-                    stacks_sorted=false,
+                    stacks_sorted=true,
                 )
             end
         end
@@ -761,7 +1238,8 @@ function _stream_first_order_with_raycore_scattering_topology(
                 geometry.pavement_node_mask,
                 scattering_scratch;
                 node_ids=geometry.node_ids,
-                stacks_sorted=false,
+                stacks_sorted=true,
+                no_virtual_nodes=no_virtual_nodes,
             )
         else
             _accumulate_scattering_counts!(
@@ -773,7 +1251,7 @@ function _stream_first_order_with_raycore_scattering_topology(
                 geometry.node_group,
                 scattering_scratch;
                 node_ids=geometry.node_ids,
-                stacks_sorted=false,
+                stacks_sorted=true,
             )
         end
     end
@@ -822,15 +1300,74 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
     incident_power_par = zeros(Float64, n_nodes)
     incident_power_nir = zeros(Float64, n_nodes)
     hits_per_node = zeros(Int, n_nodes)
-    sector_hits = zeros(Int, n_nodes)
+    sector_sun_hits = zeros(Int, n_nodes)
     projected_pixels_area = zeros(Float64, n_nodes)
     sector_area_ratio = ones(Float64, n_nodes)
     scattering_edge_counts = Dict{UInt64,Int}()
     scattering_sun_hits = Dict{Int,Int}()
+    scattering_scratch = ScatteringStackScratch()
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for (k, sector) in enumerate(turtle.sectors)
-        fill!(sector_hits, 0)
+        sector.source == :sun && fill!(sector_sun_hits, 0)
         fill!(projected_pixels_area, 0.0)
+        if _raycore_use_raster_compat_projection(data, sector.direction, options)
+            projection = _raycore_raster_compat_projection(data, sector.direction, options)
+            par_flux = fluxes.par[k]
+            nir_flux = fluxes.nir[k]
+            if projection isa DenseDirectionProjectionResult
+                _accumulate_dense_projection_first_order_and_scattering!(
+                    projected_area_per_node,
+                    incident_power_par,
+                    incident_power_nir,
+                    hits_per_node,
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared,
+                    options,
+                    par_flux,
+                    nir_flux,
+                    scattering_scratch,
+                    true,
+                )
+            else
+                visible_area =
+                    _visible_area_from_projection_dense(
+                        projection,
+                        options,
+                        geometry.plotbox,
+                        prepared.virtual_node_mask,
+                        prepared.node_transparency_by_index,
+                        geometry,
+                    )
+
+                _accumulate_projection_hits!(hits_per_node, projection, geometry)
+
+                if par_flux != 0.0 || nir_flux != 0.0
+                    @inbounds for idx in eachindex(visible_area)
+                        pa = visible_area[idx]
+                        pa <= 0.0 && continue
+                        projected_area_per_node[idx] += pa
+                        par_flux != 0.0 && (incident_power_par[idx] += par_flux * pa)
+                        nir_flux != 0.0 && (incident_power_nir[idx] += nir_flux * pa)
+                    end
+                end
+                _accumulate_scattering_counts!(
+                    scattering_edge_counts,
+                    scattering_sun_hits,
+                    sector,
+                    projection,
+                    prepared.virtual_nodes,
+                    geometry.node_group,
+                    scattering_scratch;
+                    node_ids=geometry.node_ids,
+                    stacks_sorted=true,
+                )
+            end
+            continue
+        end
         traced = _raycore_trace_direction_stack_nodes(data, sector.direction, options)
         overflow_pixel = findfirst(traced.overflow)
         overflow_pixel === nothing || error(
@@ -842,60 +1379,49 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
         nodes = traced.nodes
         max_hits = traced.max_hits
         accumulate_edges = sector.source != :sun
+        accumulate_sun_hits = sector.source == :sun
         @inbounds for pixel_idx in eachindex(counts)
             n_hits = Int(counts[pixel_idx])
             n_hits == 0 && continue
             stack_base = (pixel_idx - 1) * max_hits
             for h in 1:n_hits
                 node_idx = Int(nodes[stack_base+h])
-                sector_hits[node_idx] += 1
+                hits_per_node[node_idx] += 1
+                if accumulate_sun_hits
+                    sector_sun_hits[node_idx] += 1
+                end
                 projected_pixels_area[node_idx] += pixel_area
             end
 
             if accumulate_edges && n_hits > 1
-                nearest_above_idx = 0
-                for h in 1:(n_hits - 1)
-                    current_idx = Int(nodes[stack_base+h])
-                    if !prepared.virtual_node_mask[current_idx]
-                        nearest_above_idx = current_idx
-                    end
-
-                    from_below_idx = 0
-                    for kk in (h + 1):n_hits
-                        candidate_idx = Int(nodes[stack_base+kk])
-                        if !prepared.virtual_node_mask[candidate_idx]
-                            from_below_idx = candidate_idx
-                            break
-                        end
-                    end
-
-                    if from_below_idx != 0 &&
-                       !(geometry.pavement_node_mask[current_idx] && geometry.pavement_node_mask[from_below_idx])
-                        _add_packed_edge_count!(
-                            scattering_edge_counts,
-                            geometry.node_ids[current_idx],
-                            geometry.node_ids[from_below_idx],
-                        )
-                    end
-
-                    next_idx = Int(nodes[stack_base+h+1])
-                    if nearest_above_idx != 0 &&
-                       !(geometry.pavement_node_mask[next_idx] && geometry.pavement_node_mask[nearest_above_idx])
-                        _add_packed_edge_count!(
-                            scattering_edge_counts,
-                            geometry.node_ids[next_idx],
-                            geometry.node_ids[nearest_above_idx],
-                        )
-                    end
+                if no_virtual_nodes
+                    _accumulate_scattering_counts_dense_from_nodes_no_virtual!(
+                        scattering_edge_counts,
+                        nodes,
+                        stack_base,
+                        n_hits,
+                        geometry.pavement_node_mask,
+                        geometry.node_ids,
+                    )
+                else
+                    _accumulate_scattering_counts_dense_from_nodes!(
+                        scattering_edge_counts,
+                        nodes,
+                        stack_base,
+                        n_hits,
+                        prepared.virtual_node_mask,
+                        geometry.pavement_node_mask,
+                        scattering_scratch,
+                        geometry.node_ids,
+                    )
                 end
             end
         end
 
-        @inbounds for idx in eachindex(sector_hits)
-            h = sector_hits[idx]
-            h == 0 && continue
-            hits_per_node[idx] += h
-            if sector.source == :sun
+        if accumulate_sun_hits
+            @inbounds for idx in eachindex(sector_sun_hits)
+                h = sector_sun_hits[idx]
+                h == 0 && continue
                 nid = geometry.node_ids[idx]
                 scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
             end
@@ -1468,6 +1994,7 @@ mutable struct TurtleLightCacheEntry
     nir_converged_per_sector::Vector{Bool}
     extra_iterations_per_sector::Dict{String,Vector{Int}}
     extra_converged_per_sector::Dict{String,Vector{Bool}}
+    scattering_graph::Union{Nothing,ScatteringTransferGraph}
     resident_bytes::Int
     last_used_tick::Int
 end
@@ -1478,6 +2005,7 @@ mutable struct LightSimulationCache
     options::LightOptions
     interception_backend::Any
     resolved_interception_backend::InterceptionBackend
+    fallback_reason::Symbol
     scattering_mode::Symbol
     scattering_backend::Union{Nothing,ScatteringBackend}
     prepared::Union{Nothing,PreparedInterceptionData}
@@ -1505,9 +2033,10 @@ end
 function _estimate_light_cache_entry_bytes(prepared::PreparedInterceptionData, options::LightOptions)
     n_nodes = length(prepared.geometry.node_ids)
     n_sectors = max(options.turtle_sectors + (options.all_in_turtle ? 0 : 1), 1)
-    base_sector_bytes = n_nodes * (sizeof(Float64) + sizeof(Int))
+    base_sector_bytes = n_nodes * sizeof(Float64)
+    all_sector_hits_bytes = n_nodes * sizeof(Int)
     scatter_sector_bytes = options.scattering ? n_nodes * 2 * sizeof(Float64) : 0
-    return n_sectors * (base_sector_bytes + scatter_sector_bytes)
+    return all_sector_hits_bytes + n_sectors * (base_sector_bytes + scatter_sector_bytes)
 end
 
 @inline function _dense_vector_from_node_values(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
@@ -1580,7 +2109,13 @@ function prepare_light_cache(
     ib = _resolve_interception_backend(interception_backend)
     prepared =
         if ib isa RasterCPUBackend || ib isa RaycoreInterceptionBackend
-            _prepare_interception_data(scene, models, options; include_budget_maps=true)
+            _prepare_interception_data(
+                scene,
+                models,
+                options;
+                include_budget_maps=true,
+                include_raycore_instancing=ib isa RaycoreInterceptionBackend,
+            )
         else
             nothing
         end
@@ -1593,17 +2128,53 @@ function prepare_light_cache(
     limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
     limit = max(limit, 1)
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
+    raycore_data = nothing
+    raycore_data_was_chunked = false
+    fallback_reason = :none
+    if ib isa RaycoreInterceptionBackend && prepared !== nothing
+        prechunk_status =
+            _raycore_prechunk_instance_limit_status(prepared, ib.config; toricity=options.toricity)
+        if prechunk_status.exceeded
+            @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU light backend for this simulation cache."
+            ib = RasterCPUBackend()
+            fallback_reason = :raycore_prechunk_instance_cap
+            scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
+        else
+            raycore_data, raycore_data_was_chunked =
+                _raycore_initial_scene_data(prepared, ib.config, options; toricity=options.toricity)
+        end
+    end
+    if raycore_data !== nothing
+        validation = _raycore_vertical_trace_validation(raycore_data, options)
+        if !validation.ok
+            chunked_data, chunked_validation = _raycore_retry_chunked_scene_data(
+                prepared,
+                ib.config,
+                options,
+                validation;
+                toricity=options.toricity,
+                skip_face_chunk_limit=raycore_data_was_chunked ? _raycore_face_chunk_limit() : nothing,
+            )
+            if chunked_data !== nothing
+                raycore_data = chunked_data
+            else
+                validation = chunked_validation
+                @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU light backend for this simulation cache."
+                ib = RasterCPUBackend()
+                raycore_data = nothing
+                fallback_reason = :raycore_trace_validation
+                scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
+            end
+        end
+    end
     mode = _cache_mode_for(prepared, options, ib, limit)
-    raycore_data =
-        ib isa RaycoreInterceptionBackend && prepared !== nothing ?
-        _raycore_scene_data(prepared, ib.config; toricity=options.toricity) :
-        nothing
     return LightSimulationCache(
         scene,
         models,
         options,
         interception_backend,
         ib,
+        fallback_reason,
         scattering_mode,
         scattering_backend,
         prepared,
@@ -1630,6 +2201,7 @@ function cache_summary(cache::LightSimulationCache)
         )
     return (
         mode=cache.mode,
+        fallback_reason=cache.fallback_reason,
         estimated_entry_bytes=cache.estimated_entry_bytes,
         resident_bytes=cache.resident_bytes,
         cached_turtle_count=length(cache.entries),
@@ -1753,6 +2325,7 @@ function cache_summary(sim::LightSimulation)
         cached_sector_count=0,
         cached_full_response_sector_count=0,
         memory_limit_bytes=sim.memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(sim.memory_limit_bytes),
+        fallback_reason=:none,
         full_response_enabled=false,
     )
     return cache_summary(sim.cache)
@@ -2091,8 +2664,7 @@ function _build_turtle_cache_entry!(
             _build_sector_responses(prepared, cache.scene, cache.models, turtle, cache.options)
         end
     n = length(turtle.sectors)
-    base_bytes =
-        length(prepared.geometry.node_ids) * n * (sizeof(Float64) + sizeof(Int))
+    base_bytes = _sector_responses_host_bytes(responses)
     cache.mode == :partial && _evict_cache_entries!(cache, base_bytes)
     entry = TurtleLightCacheEntry(
         key,
@@ -2107,6 +2679,7 @@ function _build_turtle_cache_entry!(
         fill(true, n),
         Dict{String,Vector{Int}}(),
         Dict{String,Vector{Bool}}(),
+        nothing,
         base_bytes,
         0,
     )
@@ -2126,24 +2699,31 @@ function _get_turtle_cache_entry!(
     return _build_turtle_cache_entry!(cache, key, turtle)
 end
 
-function _ensure_sector_band_cache!(
+function _cached_scattering_graph!(
     cache::LightSimulationCache,
     entry::TurtleLightCacheEntry,
-    sector_idx::Int,
-    band::String,
 )
-    options = cache.options
-    geometry = entry.responses_cache.prepared.geometry
-    n_nodes = length(geometry.node_ids)
-    band_u = uppercase(band)
+    graph = entry.scattering_graph
+    graph !== nothing && return graph
+    topology = entry.responses_cache.scattering_topology
+    topology === nothing && error("Cached sector scattering requires a scattering topology.")
+    # The transfer graph depends on all-sector hit counts and static topology,
+    # not on which unit sector provides the initial power.
+    first = _combine_single_sector_response(entry.responses_cache, 1, "PAR", false)
+    backend = _resolve_scattering_backend(cache.scattering_mode, cache.scattering_backend)
+    graph = build_scattering_transfer_graph(topology, first, cache.options, backend)
+    entry.scattering_graph = graph
+    return graph
+end
+
+function _sector_band_cache_vectors!(
+    entry::TurtleLightCacheEntry,
+    band_u::String,
+)
     if band_u == "PAR"
-        target = entry.par_added_per_sector
-        iterations = entry.par_iterations_per_sector
-        converged = entry.par_converged_per_sector
+        return entry.par_added_per_sector, entry.par_iterations_per_sector, entry.par_converged_per_sector
     elseif band_u == "NIR"
-        target = entry.nir_added_per_sector
-        iterations = entry.nir_iterations_per_sector
-        converged = entry.nir_converged_per_sector
+        return entry.nir_added_per_sector, entry.nir_iterations_per_sector, entry.nir_converged_per_sector
     else
         target = get!(entry.extra_added_per_sector, band_u) do
             fill(nothing, length(entry.turtle.sectors))
@@ -2154,25 +2734,124 @@ function _ensure_sector_band_cache!(
         converged = get!(entry.extra_converged_per_sector, band_u) do
             fill(true, length(entry.turtle.sectors))
         end
+        return target, iterations, converged
     end
+end
+
+function _cached_sector_band_uses_cpu_dense(
+    graph::ScatteringTransferGraph,
+    backend::ScatteringBackend,
+)
+    backend isa RaycastScatteringBackend && return true
+    backend isa LinksScatteringBackend && return true
+    backend isa RaycoreScatteringBackend && return _raycore_use_cpu_scattering_propagation(graph, backend)
+    return false
+end
+
+function _fill_sector_band_initial_matrix!(
+    initial_power_by_sector::Matrix{Float64},
+    responses::SectorResponsesCache,
+    sector_indices::Vector{Int},
+    band_u::String,
+)
+    emitter =
+        band_u == "NIR" ? _emitter_incident_power_nir(responses) : _emitter_incident_power_par(responses)
+    emitter_active =
+        band_u == "NIR" ? _emitter_incident_power_nir_active(responses) :
+        _emitter_incident_power_par_active(responses)
+    @inbounds for row in axes(initial_power_by_sector, 1)
+        for j in emitter_active
+            initial_power_by_sector[row, j] = emitter[j]
+        end
+        sector_idx = sector_indices[row]
+        for j in _sector_active_indices(responses, sector_idx)
+            initial_power_by_sector[row, j] += _sector_area_value(responses, sector_idx, j)
+        end
+    end
+    return initial_power_by_sector
+end
+
+function _ensure_sector_band_caches_batch!(
+    cache::LightSimulationCache,
+    entry::TurtleLightCacheEntry,
+    sector_indices::Vector{Int},
+    band::String,
+)
+    isempty(sector_indices) && return nothing
+    band_u = uppercase(band)
+    if band_u != "PAR" && band_u != "NIR"
+        for sector_idx in sector_indices
+            _ensure_sector_band_cache!(cache, entry, sector_idx, band_u)
+        end
+        return nothing
+    end
+
+    target, iterations, converged = _sector_band_cache_vectors!(entry, band_u)
+    missing = Int[]
+    for sector_idx in sector_indices
+        target[sector_idx] === nothing && push!(missing, sector_idx)
+    end
+    isempty(missing) && return nothing
+
+    graph = _cached_scattering_graph!(cache, entry)
+    backend = _resolve_scattering_backend(cache.scattering_mode, cache.scattering_backend)
+    if !_cached_sector_band_uses_cpu_dense(graph, backend)
+        for sector_idx in missing
+            _ensure_sector_band_cache!(cache, entry, sector_idx, band_u)
+        end
+        return nothing
+    end
+
+    n_nodes = length(entry.responses_cache.node_ids)
+    required_bytes = length(missing) * n_nodes * sizeof(Float64)
+    cache.mode == :partial && _evict_cache_entries!(cache, required_bytes; protect_key=entry.key)
+
+    initial = zeros(Float64, length(missing), n_nodes)
+    _fill_sector_band_initial_matrix!(initial, entry.responses_cache, missing, band_u)
+    coeff_by_node = band_u == "NIR" ? graph.coeff_nir_by_node : graph.coeff_par_by_node
+    default_coeff = band_u == "NIR" ? graph.default_coeff_nir : graph.default_coeff_par
+    added, batch_iterations, batch_converged = _propagate_scattering_band_matrix_dense(
+        initial,
+        graph,
+        coeff_by_node,
+        cache.options,
+        default_coeff,
+    )
+
+    for (row, sector_idx) in pairs(missing)
+        target[sector_idx] = collect(@view added[row, :])
+        iterations[sector_idx] = batch_iterations[row]
+        converged[sector_idx] = batch_converged[row]
+    end
+    entry.resident_bytes += required_bytes
+    cache.resident_bytes += required_bytes
+    return nothing
+end
+
+function _ensure_sector_band_cache!(
+    cache::LightSimulationCache,
+    entry::TurtleLightCacheEntry,
+    sector_idx::Int,
+    band::String,
+)
+    options = cache.options
+    geometry = entry.responses_cache.prepared.geometry
+    n_nodes = length(geometry.node_ids)
+    band_u = uppercase(band)
+    target, iterations, converged = _sector_band_cache_vectors!(entry, band_u)
     existing = target[sector_idx]
     existing !== nothing && return existing, iterations[sector_idx], converged[sector_idx]
 
     cache.mode == :partial && _evict_cache_entries!(cache, n_nodes * sizeof(Float64); protect_key=entry.key)
-    unit_fluxes =
-        if band_u == "NIR"
-            _unit_directional_fluxes(entry.turtle, sector_idx; nir=1.0)
-        else
-            _unit_directional_fluxes(entry.turtle, sector_idx; par=1.0)
-        end
-    first = _combine_sector_responses(entry.responses_cache, unit_fluxes, false)
+    first = _combine_single_sector_response(entry.responses_cache, sector_idx, band_u, false)
+    graph = _cached_scattering_graph!(cache, entry)
+    backend = _resolve_scattering_backend(cache.scattering_mode, cache.scattering_backend)
     result =
         compute_scattering_band(
-            entry.responses_cache.scattering_topology,
+            graph,
             first,
             options;
-            mode=cache.scattering_mode,
-            backend=cache.scattering_backend,
+            backend=backend,
             band=band_u,
         )
     dense =
@@ -2204,6 +2883,17 @@ function _assemble_cached_scattering(
     added_nir = zeros(Float64, length(node_ids))
     iterations = 0
     converged = true
+    par_sector_indices = Int[]
+    nir_sector_indices = Int[]
+    for i in eachindex(entry.turtle.sectors)
+        pf = fluxes.par[i]
+        pf != 0.0 && push!(par_sector_indices, i)
+        if nir_scattering && fluxes.nir[i] != 0.0
+            push!(nir_sector_indices, i)
+        end
+    end
+    _ensure_sector_band_caches_batch!(cache, entry, par_sector_indices, "PAR")
+    nir_scattering && _ensure_sector_band_caches_batch!(cache, entry, nir_sector_indices, "NIR")
     for i in eachindex(entry.turtle.sectors)
         pf = fluxes.par[i]
         if pf != 0.0
@@ -2242,31 +2932,29 @@ function _compute_extra_band_light_cached(
     n = length(ids)
     for (band, total_irr) in extras_irr
         flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, cache.options)
-        first_band = _combine_sector_responses(entry.responses_cache, DirectionalFluxes(ids, flux_band, zeros(Float64, n)))
-        order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_power.par)
-        added =
+        first_band = _combine_sector_responses(
+            entry.responses_cache,
+            DirectionalFluxes(ids, flux_band, zeros(Float64, n)),
+            false,
+        )
+        dense_first = first_band.dense
+        dense_first === nothing && error("Cached extra-band first-order response requires dense first-order data.")
+        order0_dense = dense_first.incident_power.par
+        total_dense =
             if cache.options.scattering
-                dense = zeros(Float64, length(node_ids))
-                iterations = 0
-                converged = true
+                dense = copy(order0_dense)
                 for i in eachindex(flux_band)
                     f = flux_band[i]
                     f == 0.0 && continue
-                    unit_dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, band)
+                    unit_dense, _it, _conv = _ensure_sector_band_cache!(cache, entry, i, band)
                     _accumulate_scaled!(dense, unit_dense, f)
-                    iterations = max(iterations, it)
-                    converged &= conv
                 end
-                _float_dict_from_dense(node_ids, dense)
+                dense
             else
-                Dict{Int,Float64}()
+                order0_dense
             end
-        total = Dict{Int,Float64}()
-        for nid in union(keys(order0), keys(added))
-            total[nid] = get(order0, nid, 0.0) + get(added, nid, 0.0)
-        end
-        extra_0_q[band] = order0
-        extra_q[band] = total
+        extra_0_q[band] = _all_dense_float_node_map(node_ids, order0_dense)
+        extra_q[band] = _all_dense_float_node_map(node_ids, total_dense)
     end
     return extra_0_q, extra_q, extras_irr
 end
@@ -2310,7 +2998,13 @@ function _run_light_step_cached(
             responses_cache = _build_sector_responses(prepared, scene, models, turtle, options)
             first = _combine_sector_responses(responses_cache, fluxes)
         elseif ib isa RaycoreInterceptionBackend
-            prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
+            prepared === nothing && (prepared = _prepare_interception_data(
+                scene,
+                models,
+                options;
+                include_budget_maps=true,
+                include_raycore_instancing=true,
+            ))
             raycore_data = cache.raycore_data === nothing ?
                            _raycore_scene_data(prepared, ib.config; toricity=options.toricity) :
                            cache.raycore_data
@@ -2415,7 +3109,13 @@ function _run_light_sky_cached(
             first, scattering_topology =
                 _stream_first_order_with_scattering_topology(prepared, scene, models, turtle, fluxes, options)
         elseif ib isa RaycoreInterceptionBackend
-            prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
+            prepared === nothing && (prepared = _prepare_interception_data(
+                scene,
+                models,
+                options;
+                include_budget_maps=true,
+                include_raycore_instancing=true,
+            ))
             raycore_data = cache.raycore_data === nothing ?
                            _raycore_scene_data(prepared, ib.config; toricity=options.toricity) :
                            cache.raycore_data

@@ -40,6 +40,9 @@ const BENCH_WORKLOAD = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_WORKLOAD", "smoke
 const BENCH_PLOT_PAVING = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_PLOT_PAVING", "2500"))
 const BENCH_BACKENDS = split(lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_BACKENDS", "all")), ',')
 const BENCH_MAX_HITS = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_MAX_HITS", "32"))
+const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES") ?
+                                     parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
+                                     nothing
 const BENCH_WORKGROUPSIZE = haskey(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE") ?
                             parse(Int, ENV["ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE"]) :
                             nothing
@@ -55,6 +58,8 @@ const BENCH_PLOT_PAVING_VALUES =
     something(_split_env_values("ARCHIMEDLIGHT_BENCH_PLOT_PAVING_SWEEP", x -> parse(Int, x)), [BENCH_PLOT_PAVING])
 const BENCH_MAX_HIT_VALUES =
     something(_split_env_values("ARCHIMEDLIGHT_BENCH_MAX_HITS_SWEEP", x -> parse(Int, x)), [BENCH_MAX_HITS])
+const BENCH_MAX_PRECHUNK_INSTANCE_VALUES =
+    something(_split_env_values("ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES_SWEEP", x -> parse(Int, x)), [BENCH_MAX_PRECHUNK_INSTANCES])
 const BENCH_WORKGROUPSIZE_VALUES =
     something(_split_env_values("ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE_SWEEP", x -> parse(Int, x)), [BENCH_WORKGROUPSIZE])
 const BENCH_EDGE_ACCUMULATION_VALUES =
@@ -64,6 +69,8 @@ const BENCH_HAS_PIXEL_SIZE_OVERRIDE = haskey(ENV, "ARCHIMEDLIGHT_BENCH_PIXEL_SIZ
 
 _workgroupsize_label(workgroupsize) = workgroupsize === nothing ? "default" : string(workgroupsize)
 _workgroupsize_values_label(values) = join((_workgroupsize_label(value) for value in values), ',')
+_max_prechunk_instances_label(value) = value === nothing ? "default" : string(value <= 0 ? "disabled" : value)
+_max_prechunk_instances_values_label(values) = join((_max_prechunk_instances_label(value) for value in values), ',')
 
 function _validate_edge_accumulation_values(values)
     allowed = Set([:auto, :sparse_host_reduce, :dense_atomic])
@@ -164,23 +171,26 @@ _optional_cuda_backend() = _optional_array_backend(:CUDA, :CuArray, "ARCHIMEDLIG
 _optional_oneapi_backend() = _optional_array_backend(:oneAPI, :oneArray, "ARCHIMEDLIGHT_BENCH_ONEAPI", _BENCH_WANTS_ONEAPI)
 _optional_amdgpu_backend() = _optional_array_backend(:AMDGPU, :ROCArray, "ARCHIMEDLIGHT_BENCH_AMDGPU", _BENCH_WANTS_AMDGPU)
 
-function _raycore_interception_backend(backend; max_hits::Int, workgroupsize, edge_accumulation::Symbol)
-    if workgroupsize === nothing
-        return ArchimedLight.RaycoreInterceptionBackend(
-            backend=backend,
-            max_hits_per_pixel=max_hits,
-            edge_accumulation=edge_accumulation,
-        )
-    end
-    return ArchimedLight.RaycoreInterceptionBackend(
+function _raycore_interception_backend(backend; max_hits::Int, workgroupsize, edge_accumulation::Symbol, max_prechunk_instances)
+    kwargs = (
         backend=backend,
         max_hits_per_pixel=max_hits,
-        workgroupsize=workgroupsize,
         edge_accumulation=edge_accumulation,
     )
+    max_prechunk_instances !== nothing && (kwargs = merge(kwargs, (; max_prechunk_instances=max_prechunk_instances)))
+    if workgroupsize === nothing
+        return ArchimedLight.RaycoreInterceptionBackend(; kwargs...)
+    end
+    kwargs = merge(kwargs, (; workgroupsize=workgroupsize))
+    return ArchimedLight.RaycoreInterceptionBackend(; kwargs...)
 end
 
-function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORKGROUPSIZE, edge_accumulation::Symbol=BENCH_EDGE_ACCUMULATION)
+function _backend_cases(;
+    max_hits::Int=BENCH_MAX_HITS,
+    workgroupsize=BENCH_WORKGROUPSIZE,
+    edge_accumulation::Symbol=BENCH_EDGE_ACCUMULATION,
+    max_prechunk_instances=BENCH_MAX_PRECHUNK_INSTANCES,
+)
     cases = [
         (
             name="normal_cpu",
@@ -196,6 +206,7 @@ function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORK
                 max_hits=max_hits,
                 workgroupsize=workgroupsize,
                 edge_accumulation=edge_accumulation,
+                max_prechunk_instances=max_prechunk_instances,
             ),
             scattering_backend=nothing,
         ),
@@ -204,7 +215,13 @@ function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORK
 
     metal_backend = _optional_metal_backend()
     if metal_backend !== nothing
-        ib = _raycore_interception_backend(metal_backend; max_hits=max_hits, workgroupsize=workgroupsize, edge_accumulation=edge_accumulation)
+        ib = _raycore_interception_backend(
+            metal_backend;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+            max_prechunk_instances=max_prechunk_instances,
+        )
         push!(
             cases,
             (
@@ -217,7 +234,13 @@ function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORK
     end
     cuda_backend = _optional_cuda_backend()
     if cuda_backend !== nothing
-        ib = _raycore_interception_backend(cuda_backend; max_hits=max_hits, workgroupsize=workgroupsize, edge_accumulation=edge_accumulation)
+        ib = _raycore_interception_backend(
+            cuda_backend;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+            max_prechunk_instances=max_prechunk_instances,
+        )
         push!(
             cases,
             (
@@ -230,7 +253,13 @@ function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORK
     end
     oneapi_backend = _optional_oneapi_backend()
     if oneapi_backend !== nothing
-        ib = _raycore_interception_backend(oneapi_backend; max_hits=max_hits, workgroupsize=workgroupsize, edge_accumulation=edge_accumulation)
+        ib = _raycore_interception_backend(
+            oneapi_backend;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+            max_prechunk_instances=max_prechunk_instances,
+        )
         push!(
             cases,
             (
@@ -243,7 +272,13 @@ function _backend_cases(; max_hits::Int=BENCH_MAX_HITS, workgroupsize=BENCH_WORK
     end
     amdgpu_backend = _optional_amdgpu_backend()
     if amdgpu_backend !== nothing
-        ib = _raycore_interception_backend(amdgpu_backend; max_hits=max_hits, workgroupsize=workgroupsize, edge_accumulation=edge_accumulation)
+        ib = _raycore_interception_backend(
+            amdgpu_backend;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+            max_prechunk_instances=max_prechunk_instances,
+        )
         push!(
             cases,
             (
@@ -396,12 +431,28 @@ function _cached_call(scene, models, meteo_row, options, case; scattering_mode::
                 scattering_backend=case.scattering_backend,
             )
         end
-    return () -> ArchimedLight.run_light(sim, meteo_row)
+    cache = ArchimedLight._ensure_light_cache!(sim)
+    backend_info = (
+        resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
+        fallback_reason=cache.fallback_reason,
+    )
+    return () -> ArchimedLight.run_light(sim, meteo_row), backend_info
 end
+
+function _backend_result_label(case, backend_info)
+    backend_info === nothing && return case.name
+    resolved_backend = backend_info.resolved_backend
+    expected = case.name == "normal_cpu" ? "RasterCPUBackend" : "RaycoreInterceptionBackend"
+    resolved_backend == expected && return case.name
+    return "$(case.name)->$(resolved_backend)"
+end
+
+_fallback_result_label(backend_info) =
+    backend_info === nothing ? "" : string(backend_info.fallback_reason)
 
 function _first_order_benchmark_call(scene, models, meteo_row, options, case)
     if BENCH_EXECUTION == "oneshot"
-        return () -> _first_order_call(scene, models, meteo_row, options, case)
+        return () -> _first_order_call(scene, models, meteo_row, options, case), nothing
     elseif BENCH_EXECUTION == "cached"
         return _cached_call(scene, models, meteo_row, options, case)
     end
@@ -410,7 +461,7 @@ end
 
 function _scattering_benchmark_call(scene, models, meteo_row, options, case)
     if BENCH_EXECUTION == "oneshot"
-        return () -> _scattering_call(scene, models, meteo_row, options, case)
+        return () -> _scattering_call(scene, models, meteo_row, options, case), nothing
     elseif BENCH_EXECUTION == "cached"
         return _cached_call(scene, models, meteo_row, options, case; scattering_mode=:raycast)
     end
@@ -424,32 +475,44 @@ function _sky_turtle_fluxes(meteo_row, options)
     return sky, turtle, fluxes
 end
 
-function _prepared_topology_state(scene, models, meteo_row, options, case)
-    _sky, turtle, fluxes = _sky_turtle_fluxes(meteo_row, options)
+function _component_cache(scene, models, options, case)
     if case.name == "normal_cpu"
-        prepared = ArchimedLight._prepare_interception_data(scene, models, options; include_budget_maps=true)
-        return (
-            turtle=turtle,
-            fluxes=fluxes,
-            prepared=prepared,
-            raycore_data=nothing,
-            backend=nothing,
+        return ArchimedLight.prepare_light_cache(
+            scene,
+            models,
+            options;
+            interception_backend=:raster_cpu,
         )
     end
+    return ArchimedLight.prepare_light_cache(
+        scene,
+        models,
+        options;
+        interception_backend=case.interception_backend,
+        scattering_backend=case.scattering_backend,
+    )
+end
 
-    prepared = ArchimedLight._prepare_interception_data(scene, models, options; include_budget_maps=true)
-    raycore_data = ArchimedLight._raycore_scene_data(prepared, case.interception_backend.config; toricity=options.toricity)
+function _prepared_topology_state(scene, models, meteo_row, options, case)
+    _sky, turtle, fluxes = _sky_turtle_fluxes(meteo_row, options)
+    cache = _component_cache(scene, models, options, case)
+    backend =
+        cache.raycore_data !== nothing && cache.scattering_backend isa ArchimedLight.RaycoreScatteringBackend ?
+        cache.scattering_backend :
+        nothing
     return (
         turtle=turtle,
         fluxes=fluxes,
-        prepared=prepared,
-        raycore_data=raycore_data,
-        backend=case.scattering_backend,
+        prepared=cache.prepared,
+        raycore_data=cache.raycore_data,
+        backend=backend,
+        resolved_interception_backend=cache.resolved_interception_backend,
+        fallback_reason=cache.fallback_reason,
     )
 end
 
 function _build_first_topology(scene, models, options, state, case)
-    if case.name == "normal_cpu"
+    if state.raycore_data === nothing
         return ArchimedLight._stream_first_order_with_scattering_topology(
             state.prepared,
             scene,
@@ -474,10 +537,14 @@ function _topology_benchmark_call(scene, models, meteo_row, options, case)
         return function ()
             state = _prepared_topology_state(scene, models, meteo_row, options, case)
             return _build_first_topology(scene, models, options, state, case)
-        end
+        end, nothing
     elseif BENCH_EXECUTION == "cached"
         state = _prepared_topology_state(scene, models, meteo_row, options, case)
-        return () -> _build_first_topology(scene, models, options, state, case)
+        backend_info = (
+            resolved_backend=string(nameof(typeof(state.resolved_interception_backend))),
+            fallback_reason=state.fallback_reason,
+        )
+        return () -> _build_first_topology(scene, models, options, state, case), backend_info
     end
     error("Unsupported ARCHIMEDLIGHT_BENCH_EXECUTION=$BENCH_EXECUTION. Use oneshot or cached.")
 end
@@ -489,12 +556,16 @@ function _propagation_benchmark_call(scene, models, meteo_row, options, case)
             first, topology = _build_first_topology(scene, models, options, state, case)
             backend = case.name == "normal_cpu" ? nothing : state.backend
             return ArchimedLight.compute_scattering(topology, first, options; backend=backend)
-        end
+        end, nothing
     elseif BENCH_EXECUTION == "cached"
         state = _prepared_topology_state(scene, models, meteo_row, options, case)
         first, topology = _build_first_topology(scene, models, options, state, case)
         backend = case.name == "normal_cpu" ? nothing : state.backend
-        return () -> ArchimedLight.compute_scattering(topology, first, options; backend=backend)
+        backend_info = (
+            resolved_backend=string(nameof(typeof(state.resolved_interception_backend))),
+            fallback_reason=state.fallback_reason,
+        )
+        return () -> ArchimedLight.compute_scattering(topology, first, options; backend=backend), backend_info
     end
     error("Unsupported ARCHIMEDLIGHT_BENCH_EXECUTION=$BENCH_EXECUTION. Use oneshot or cached.")
 end
@@ -518,13 +589,17 @@ function _integration_benchmark_call(scene, models, meteo_row, options, case)
             backend = case.name == "normal_cpu" ? nothing : state.backend
             scat = ArchimedLight.compute_scattering(topology, first, options; backend=backend)
             return integrate_from_state(first, scat, state)
-        end
+        end, nothing
     elseif BENCH_EXECUTION == "cached"
         state = _prepared_topology_state(scene, models, meteo_row, options, case)
         first, topology = _build_first_topology(scene, models, options, state, case)
         backend = case.name == "normal_cpu" ? nothing : state.backend
         scat = ArchimedLight.compute_scattering(topology, first, options; backend=backend)
-        return () -> integrate_from_state(first, scat, state)
+        backend_info = (
+            resolved_backend=string(nameof(typeof(state.resolved_interception_backend))),
+            fallback_reason=state.fallback_reason,
+        )
+        return () -> integrate_from_state(first, scat, state), backend_info
     end
     error("Unsupported ARCHIMEDLIGHT_BENCH_EXECUTION=$BENCH_EXECUTION. Use oneshot or cached.")
 end
@@ -532,14 +607,19 @@ end
 function _stack_trace_state(scene, models, meteo_row, options, case)
     case.name == "normal_cpu" && return nothing
     _sky, turtle, _fluxes = _sky_turtle_fluxes(meteo_row, options)
-    prepared = ArchimedLight._prepare_interception_data(scene, models, options; include_budget_maps=true)
-    raycore_data = ArchimedLight._raycore_scene_data(prepared, case.interception_backend.config; toricity=options.toricity)
+    cache = _component_cache(scene, models, options, case)
     directions = [sector.direction for sector in turtle.sectors if Float32(sector.direction[3]) > 0.0f0]
-    return (raycore_data=raycore_data, directions=directions)
+    return (
+        raycore_data=cache.raycore_data,
+        directions=directions,
+        resolved_interception_backend=cache.resolved_interception_backend,
+        fallback_reason=cache.fallback_reason,
+    )
 end
 
 function _stack_trace_summary(state, options)
     state === nothing && return ""
+    state.raycore_data === nothing && return ",resolved=$(nameof(typeof(state.resolved_interception_backend))),fallback=$(state.fallback_reason),stack_trace=skipped"
     total_pixels = 0
     occupied_pixels = 0
     total_hits = 0
@@ -578,8 +658,10 @@ function _stack_trace_benchmark_call(scene, models, meteo_row, options, case)
     if BENCH_EXECUTION == "oneshot"
         state = _stack_trace_state(scene, models, meteo_row, options, case)
         summary = _stack_trace_summary(state, options)
+        state.raycore_data === nothing && return nothing, summary
         return function ()
             local_state = _stack_trace_state(scene, models, meteo_row, options, case)
+            local_state.raycore_data === nothing && return nothing
             for direction in local_state.directions
                 ArchimedLight._raycore_trace_direction_stack_nodes_device(
                     local_state.raycore_data,
@@ -592,6 +674,7 @@ function _stack_trace_benchmark_call(scene, models, meteo_row, options, case)
     elseif BENCH_EXECUTION == "cached"
         state = _stack_trace_state(scene, models, meteo_row, options, case)
         summary = _stack_trace_summary(state, options)
+        state.raycore_data === nothing && return nothing, summary
         return function ()
             for direction in state.directions
                 ArchimedLight._raycore_trace_direction_stack_nodes_device(
@@ -607,13 +690,15 @@ function _stack_trace_benchmark_call(scene, models, meteo_row, options, case)
 end
 
 function _print_markdown_table(results)
-    println("| workload | backend | median ms | min ms | max ms | median alloc MiB |")
-    println("|---|---:|---:|---:|---:|---:|")
+    println("| workload | backend | fallback | median ms | min ms | max ms | median alloc MiB |")
+    println("|---|---:|---:|---:|---:|---:|---:|")
     for row in results
+        fallback = hasproperty(row, :fallback_reason) ? string(row.fallback_reason) : ""
         @printf(
-            "| %s | %s | %.3f | %.3f | %.3f | %.3f |\n",
+            "| %s | %s | %s | %.3f | %.3f | %.3f | %.3f |\n",
             row.workload,
             row.backend,
+            fallback,
             row.median_ms,
             row.min_ms,
             row.max_ms,
@@ -628,6 +713,7 @@ function _variant_label(
     first_order_options,
     plot_paving::Int,
     max_hits::Int,
+    max_prechunk_instances,
     workgroupsize,
     edge_accumulation::Symbol;
     extra::AbstractString="",
@@ -639,6 +725,7 @@ function _variant_label(
         ",pixel=", first_order_options.pixel_size,
         ",paving=", BENCH_WORKLOAD == "smoke" ? "n/a" : string(plot_paving),
         ",max_hits=", max_hits,
+        ",max_prechunk=", _max_prechunk_instances_label(max_prechunk_instances),
         ",wg=", _workgroupsize_label(workgroupsize),
         ",edge=", edge_accumulation,
         extra,
@@ -650,7 +737,17 @@ function _configured_or_values(values, has_override::Bool)
     return (BENCH_WORKLOAD == "smoke" || has_override) ? join(values, ',') : "config"
 end
 
-function _append_variant_results!(results, components, fixture, cases, plot_paving::Int, max_hits::Int, workgroupsize, edge_accumulation::Symbol)
+function _append_variant_results!(
+    results,
+    components,
+    fixture,
+    cases,
+    plot_paving::Int,
+    max_hits::Int,
+    max_prechunk_instances,
+    workgroupsize,
+    edge_accumulation::Symbol,
+)
     scene = fixture.scene
     models = fixture.models
     meteo_row = fixture.meteo_row
@@ -658,47 +755,77 @@ function _append_variant_results!(results, components, fixture, cases, plot_pavi
     scattering_options = fixture.scattering_options
     for case in cases
         if "first_order" in components
+            call, backend_info =
+                _first_order_benchmark_call(scene, models, meteo_row, first_order_options, case)
             push!(
                 results,
                 merge(
-                    _measure("first_order", _first_order_benchmark_call(scene, models, meteo_row, first_order_options, case)),
-                    (; workload=_variant_label("first_order", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation), backend=case.name),
+                    _measure("first_order", call),
+                    (;
+                        workload=_variant_label("first_order", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
+                        backend=_backend_result_label(case, backend_info),
+                        fallback_reason=_fallback_result_label(backend_info),
+                    ),
                 ),
             )
         end
         if "scattering" in components
+            call, backend_info =
+                _scattering_benchmark_call(scene, models, meteo_row, scattering_options, case)
             push!(
                 results,
                 merge(
-                    _measure("scattering", _scattering_benchmark_call(scene, models, meteo_row, scattering_options, case)),
-                    (; workload=_variant_label("scattering", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation), backend=case.name),
+                    _measure("scattering", call),
+                    (;
+                        workload=_variant_label("scattering", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
+                        backend=_backend_result_label(case, backend_info),
+                        fallback_reason=_fallback_result_label(backend_info),
+                    ),
                 ),
             )
         end
         if "topology" in components
+            call, backend_info =
+                _topology_benchmark_call(scene, models, meteo_row, scattering_options, case)
             push!(
                 results,
                 merge(
-                    _measure("topology", _topology_benchmark_call(scene, models, meteo_row, scattering_options, case)),
-                    (; workload=_variant_label("topology", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation), backend=case.name),
+                    _measure("topology", call),
+                    (;
+                        workload=_variant_label("topology", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
+                        backend=_backend_result_label(case, backend_info),
+                        fallback_reason=_fallback_result_label(backend_info),
+                    ),
                 ),
             )
         end
         if "propagation" in components
+            call, backend_info =
+                _propagation_benchmark_call(scene, models, meteo_row, scattering_options, case)
             push!(
                 results,
                 merge(
-                    _measure("propagation", _propagation_benchmark_call(scene, models, meteo_row, scattering_options, case)),
-                    (; workload=_variant_label("propagation", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation), backend=case.name),
+                    _measure("propagation", call),
+                    (;
+                        workload=_variant_label("propagation", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
+                        backend=_backend_result_label(case, backend_info),
+                        fallback_reason=_fallback_result_label(backend_info),
+                    ),
                 ),
             )
         end
         if "integration" in components
+            call, backend_info =
+                _integration_benchmark_call(scene, models, meteo_row, scattering_options, case)
             push!(
                 results,
                 merge(
-                    _measure("integration", _integration_benchmark_call(scene, models, meteo_row, scattering_options, case)),
-                    (; workload=_variant_label("integration", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation), backend=case.name),
+                    _measure("integration", call),
+                    (;
+                        workload=_variant_label("integration", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
+                        backend=_backend_result_label(case, backend_info),
+                        fallback_reason=_fallback_result_label(backend_info),
+                    ),
                 ),
             )
         end
@@ -709,7 +836,11 @@ function _append_variant_results!(results, components, fixture, cases, plot_pavi
                     results,
                     merge(
                         _measure("stack_trace", trace_call),
-                        (; workload=_variant_label("stack_trace", fixture, first_order_options, plot_paving, max_hits, workgroupsize, edge_accumulation; extra=trace_summary), backend=case.name),
+                        (;
+                            workload=_variant_label("stack_trace", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation; extra=trace_summary),
+                            backend=case.name,
+                            fallback_reason="",
+                        ),
                     ),
                 )
             end
@@ -742,13 +873,29 @@ function main()
         sectors in BENCH_SECTOR_VALUES,
         pixel_size in BENCH_PIXEL_SIZE_VALUES,
         max_hits in BENCH_MAX_HIT_VALUES,
+        max_prechunk_instances in BENCH_MAX_PRECHUNK_INSTANCE_VALUES,
         workgroupsize in BENCH_WORKGROUPSIZE_VALUES,
         edge_accumulation in BENCH_EDGE_ACCUMULATION_VALUES
 
         fixture = _benchmark_fixture(; sectors=sectors, pixel_size=pixel_size, plot_paving=plot_paving)
-        cases = _backend_cases(; max_hits=max_hits, workgroupsize=workgroupsize, edge_accumulation=edge_accumulation)
+        cases = _backend_cases(;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+            max_prechunk_instances=max_prechunk_instances,
+        )
         _run_raycore_smokes(cases)
-        _append_variant_results!(results, components, fixture, cases, plot_paving, max_hits, workgroupsize, edge_accumulation)
+        _append_variant_results!(
+            results,
+            components,
+            fixture,
+            cases,
+            plot_paving,
+            max_hits,
+            max_prechunk_instances,
+            workgroupsize,
+            edge_accumulation,
+        )
     end
 
     println()
@@ -758,7 +905,9 @@ function main()
         "sector_values=$(_configured_or_values(BENCH_SECTOR_VALUES, BENCH_HAS_SECTOR_OVERRIDE)), " *
         "pixel_size_values=$(_configured_or_values(BENCH_PIXEL_SIZE_VALUES, BENCH_HAS_PIXEL_SIZE_OVERRIDE)), " *
         "plot_paving_values=$(BENCH_WORKLOAD == "smoke" ? "n/a" : join(BENCH_PLOT_PAVING_VALUES, ',')), " *
-        "max_hit_values=$(join(BENCH_MAX_HIT_VALUES, ',')), workgroupsize_values=$(_workgroupsize_values_label(BENCH_WORKGROUPSIZE_VALUES)), " *
+        "max_hit_values=$(join(BENCH_MAX_HIT_VALUES, ',')), " *
+        "max_prechunk_instance_values=$(_max_prechunk_instances_values_label(BENCH_MAX_PRECHUNK_INSTANCE_VALUES)), " *
+        "workgroupsize_values=$(_workgroupsize_values_label(BENCH_WORKGROUPSIZE_VALUES)), " *
         "edge_accumulation_values=$(join(string.(BENCH_EDGE_ACCUMULATION_VALUES), ',')), " *
         "execution=$(BENCH_EXECUTION), " *
         "components=$(join(sort!(collect(components)), ','))",

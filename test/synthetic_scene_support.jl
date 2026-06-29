@@ -193,6 +193,51 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     )
 end
 
+function _shared_reference_mesh_scene(;
+    offsets=((0.0, 0.0, 1.0), (1.5, 0.0, 1.0)),
+    domain=(0.0, 0.0, 2.5, 1.0),
+    taper::Bool=false,
+)
+    ref_mesh = GeometryBasics.Mesh(
+        GeometryBasics.Point{3,Float32}[
+            GeometryBasics.Point{3,Float32}(0.0, 0.0, 0.0),
+            GeometryBasics.Point{3,Float32}(1.0, 0.0, 0.0),
+            GeometryBasics.Point{3,Float32}(1.0, 1.0, 0.0),
+            GeometryBasics.Point{3,Float32}(0.0, 1.0, 0.0),
+        ],
+        GeometryBasics.TriangleFace{Int}[(1, 2, 3), (1, 3, 4)],
+    )
+    base_ref = PlantGeom.RefMesh("shared_plate", ref_mesh)
+    ref =
+        taper ?
+        PlantGeom.RefMesh(
+            base_ref.name,
+            base_ref.mesh,
+            base_ref.normals,
+            base_ref.texture_coords,
+            base_ref.material,
+            true,
+        ) :
+        base_ref
+    mtg = MultiScaleTreeGraph.Node(MultiScaleTreeGraph.NodeMTG(:/, :Scene, 1, 1))
+    for (i, offset) in enumerate(offsets)
+        node = MultiScaleTreeGraph.Node(
+            mtg,
+            MultiScaleTreeGraph.NodeMTG(:+, :Plate, i, 2),
+        )
+        node[:geometry] = PlantGeom.Geometry(
+            ref_mesh=ref,
+            transformation=PlantGeom.Translation(offset[1], offset[2], offset[3]),
+        )
+        node[:group] = "plate"
+        node[:functional_group] = "plate"
+        node[:type] = "plate"
+        node[:object_id] = i
+        node[:source_topology_id] = i
+    end
+    return PlantGeom.prepare_scene(mtg; source_path="shared_reference_mesh_scene", domain=domain)
+end
+
 function _synthetic_meteo_row(;
     date::Dates.Date=Dates.Date(2020, 6, 21),
     start_time::Dates.Time=Dates.Time(12),

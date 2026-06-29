@@ -115,6 +115,22 @@ struct InterceptionSceneData
     pavement_node_mask::Vector{Bool}
     node_type::Dict{Int,String}
     node_type_by_index::Vector{String}
+    raycore_instanced_geometry::Any
+end
+
+struct RaycorePrototypeInstances
+    mesh
+    transforms::Vector{GeometryBasics.Mat4f}
+    node_indices::Vector{UInt32}
+end
+
+struct RaycoreInstancedSceneGeometry
+    prototypes::Vector{RaycorePrototypeInstances}
+    fallback_mesh
+    metadata_stride::Int
+    prototype_face_count::Int
+    prototype_node_count::Int
+    fallback_face_count::Int
 end
 
 struct PreparedInterceptionData
@@ -136,7 +152,71 @@ struct PreparedInterceptionData
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
 end
 
-struct RaycoreSceneData{P,T,K,B,N,C,S,H,O,E,F,D,V,M,I,R}
+struct RaycoreHitDecoder{D}
+    node_index_by_instance_metadata::Vector{UInt32}
+    node_index_by_instance_metadata_dev::D
+    metadata_stride::Int
+    instance_count::Int
+end
+
+function _raycore_hit_decoder(
+    node_index_by_instance_metadata::Vector{UInt32},
+    metadata_stride::Int,
+    instance_count::Int,
+    backend,
+)
+    node_index_by_instance_metadata_dev =
+        KernelAbstractions.allocate(backend, UInt32, length(node_index_by_instance_metadata))
+    KernelAbstractions.copyto!(backend, node_index_by_instance_metadata_dev, node_index_by_instance_metadata)
+    return RaycoreHitDecoder(
+        node_index_by_instance_metadata,
+        node_index_by_instance_metadata_dev,
+        metadata_stride,
+        instance_count,
+    )
+end
+
+function _raycore_identity_hit_decoder(
+    prepared::PreparedInterceptionData,
+    backend,
+    instance_count::Int,
+)
+    metadata_stride = length(prepared.geometry.node_ids) + 1
+    table = zeros(UInt32, max(instance_count, 0) * metadata_stride)
+    @inbounds for instance_idx in 1:instance_count
+        base = (instance_idx - 1) * metadata_stride
+        for node_idx in 1:(metadata_stride - 1)
+            table[base+node_idx+1] = UInt32(node_idx)
+        end
+    end
+    return _raycore_hit_decoder(table, metadata_stride, instance_count, backend)
+end
+
+@inline function _raycore_decode_node_index(
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
+    metadata::UInt32,
+    instance_idx::UInt32,
+)
+    (metadata == 0x00000000 || instance_idx == 0x00000000) && return UInt32(0)
+    table_idx = (Int(instance_idx) - 1) * metadata_stride + Int(metadata) + 1
+    @inbounds return node_index_by_instance_metadata[table_idx]
+end
+
+@inline function _raycore_decode_node_index(
+    decoder::RaycoreHitDecoder,
+    metadata::UInt32,
+    instance_idx::UInt32,
+)
+    return _raycore_decode_node_index(
+        decoder.node_index_by_instance_metadata,
+        decoder.metadata_stride,
+        metadata,
+        instance_idx,
+    )
+end
+
+struct RaycoreSceneData{P,T,K,B,N,C,S,J,H,O,E,F,D,V,M,I,U,R}
     prepared::P
     tlas::T
     kernel_tlas::K
@@ -145,6 +225,7 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,H,O,E,F,D,V,M,I,R}
     top_nodes_host::Vector{UInt32}
     stack_counts_dev::C
     stack_nodes_dev::S
+    stack_instance_indices_dev::J
     stack_heights_dev::H
     stack_overflow_dev::O
     edge_keys_dev::E
@@ -155,6 +236,7 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,H,O,E,F,D,V,M,I,R}
     node_ids_dev::I
     stack_counts_host::Vector{Int32}
     stack_nodes_host::Vector{UInt32}
+    stack_instance_indices_host::Vector{UInt32}
     stack_heights_host::Vector{Float32}
     stack_overflow_host::Vector{Bool}
     edge_keys_host::Vector{UInt64}
@@ -162,12 +244,17 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,H,O,E,F,D,V,M,I,R}
     edge_compact_host::Vector{UInt64}
     projection_far_cache::Dict{Tuple{Float64,Float64,Float64,Bool},Float32}
     projected_mesh_area_cache::Dict{Tuple{Float64,Float64,Float64},Vector{Float64}}
+    raster_compat_projection_cache::Dict{Tuple{Float64,Float64,Float64,Bool},Any}
+    hit_decoder::U
     area_ratio_cache::R
     workgroupsize::Int
     max_hits_per_pixel::Int
     hit_epsilon::Float32
     edge_accumulation::Symbol
     dense_edge_limit_bytes::Int
+    vertical_span::Float64
+    chunked_tlas::Bool
+    geometry_mode::Symbol
 end
 
 Base.IndexStyle(::Type{<:SmallHitStack}) = IndexLinear()
@@ -376,6 +463,15 @@ end
 
 @inline _sort_hit_stack!(stack) = sort!(stack, by=_hit_height, rev=true, alg=Base.Sort.MergeSort)
 @inline _sort_hit_stack!(stack::UpperHitStack) = stack
+
+function _sort_projection_pixel_stacks!(projection)
+    for stack in values(projection.pixel_hits)
+        length(stack) <= 1 && continue
+        _sort_hit_stack!(stack)
+    end
+    return projection
+end
+
 @inline _stack_hit_height(stack, i::Int) = _hit_height(_stack_hit(stack, i))
 @inline _stack_hit_node(stack, i::Int) = _hit_node(_stack_hit(stack, i))
 @inline function _stack_hit_height(stack::UpperHitStack, i::Int)
@@ -1969,6 +2065,27 @@ function _dense_projection_hits(projection::DenseDirectionProjectionResult, geom
     return projection.node_hits
 end
 
+function _copy_projection_hits!(
+    hits_per_node::Vector{Int},
+    projection::DirectionProjectionResult,
+    geometry::InterceptionSceneData,
+)
+    fill!(hits_per_node, 0)
+    for (nid, h) in projection.node_hits
+        hits_per_node[geometry.node_index[nid]] = h
+    end
+    return hits_per_node
+end
+
+function _copy_projection_hits!(
+    hits_per_node::Vector{Int},
+    projection::DenseDirectionProjectionResult,
+    geometry::InterceptionSceneData,
+)
+    copyto!(hits_per_node, projection.node_hits)
+    return hits_per_node
+end
+
 function _accumulate_projection_hits!(hits_per_node::Vector{Int}, projection::DirectionProjectionResult, geometry::InterceptionSceneData)
     for (nid, h) in projection.node_hits
         hits_per_node[geometry.node_index[nid]] += h
@@ -2073,6 +2190,29 @@ function _visible_area_from_projection_dense(
     stacks_sorted::Bool=false,
 )
     visible_area = zeros(Float64, length(geometry.node_ids))
+    return _visible_area_from_projection_dense!(
+        visible_area,
+        projection,
+        options,
+        plotbox,
+        virtual_node_mask,
+        node_transparency_by_index,
+        geometry,
+        stacks_sorted,
+    )
+end
+
+function _visible_area_from_projection_dense!(
+    visible_area::Vector{Float64},
+    projection::DirectionProjectionResult,
+    options::LightOptions,
+    plotbox,
+    virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
+    geometry::InterceptionSceneData,
+    stacks_sorted::Bool=false,
+)
+    fill!(visible_area, 0.0)
     pixel_area = plotbox.pixel_area
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
@@ -2148,6 +2288,29 @@ function _visible_area_from_projection_dense(
     stacks_sorted::Bool=false,
 )
     visible_area = zeros(Float64, length(geometry.node_ids))
+    return _visible_area_from_projection_dense!(
+        visible_area,
+        projection,
+        options,
+        plotbox,
+        virtual_node_mask,
+        node_transparency_by_index,
+        geometry,
+        stacks_sorted,
+    )
+end
+
+function _visible_area_from_projection_dense!(
+    visible_area::Vector{Float64},
+    projection::DenseDirectionProjectionResult,
+    options::LightOptions,
+    plotbox,
+    virtual_node_mask::Vector{Bool},
+    node_transparency_by_index::Vector{Float64},
+    geometry::InterceptionSceneData,
+    stacks_sorted::Bool=false,
+)
+    fill!(visible_area, 0.0)
     pixel_area = plotbox.pixel_area
     for stack in values(projection.pixel_hits)
         isempty(stack) && continue
@@ -2608,7 +2771,12 @@ function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
     return vertices, faces, face2node, node_area
 end
 
-function _scene_geometry_for_interception(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
+function _scene_geometry_for_interception(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    options::LightOptions;
+    include_raycore_instancing::Bool=false,
+)
     raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, scene.merged_mesh)
     vertices = [StaticArrays.SVector{3,Float64}(v[1], v[2], v[3]) for v in raw_vertices]
     all_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, scene.merged_mesh))
@@ -2636,6 +2804,19 @@ function _scene_geometry_for_interception(scene::PlantGeom.SceneGeometry, models
     pavement_node_mask = [group == "pavement" for group in node_group_by_index]
     node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
     node_type_by_index = [get(node_type, nid, "") for nid in node_ids]
+    raycore_instanced_geometry =
+        include_raycore_instancing ?
+        _raycore_instanced_geometry_from_scene(
+            scene,
+            vertices,
+            node_ids,
+            node_index,
+            faces,
+            face2node,
+            face2node_index;
+            toricity=options.toricity,
+        ) :
+        nothing
 
     return InterceptionSceneData(
         vertices,
@@ -2650,6 +2831,257 @@ function _scene_geometry_for_interception(scene::PlantGeom.SceneGeometry, models
         pavement_node_mask,
         node_type,
         node_type_by_index,
+        raycore_instanced_geometry,
+    )
+end
+
+function _raycore_reference_instancing_enabled()
+    raw = lowercase(strip(get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCING", "1")))
+    return !(raw in ("0", "false", "no", "off"))
+end
+
+function _raycore_reference_instance_limit()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCE_LIMIT", "")
+    isempty(strip(raw)) && return 4096
+    value = parse(Int, raw)
+    return value <= 0 ? typemax(Int) : value
+end
+
+function _raycore_reference_min_face_savings_ratio()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_MIN_FACE_SAVINGS_RATIO", "")
+    isempty(strip(raw)) && return 0.20
+    return clamp(parse(Float64, raw), 0.0, 1.0)
+end
+
+function _raycore_mat4f_from_matrix(mat::AbstractMatrix)
+    size(mat) == (4, 4) || return nothing
+    all(isfinite, mat) || return nothing
+    return GeometryBasics.Mat4f((Float32(mat[i]) for i in eachindex(mat))...)
+end
+
+function _raycore_transform_matrix4(transformation)
+    mat = try
+        PlantGeom.transformation_matrix4(transformation)
+    catch
+        return nothing
+    end
+    return _raycore_mat4f_from_matrix(mat)
+end
+
+function _raycore_reference_mesh_identity_key(ref_mesh)
+    return (String(ref_mesh.name), hash(ref_mesh.mesh), ref_mesh.taper)
+end
+
+function _raycore_geometry_node_candidate_for_instancing(node)
+    PlantGeom.has_geometry(node) || return false
+    geom = node[:geometry]
+    geom isa PlantGeom.Geometry || return false
+    geom.ref_mesh.taper && return false
+    return true
+end
+
+function _raycore_geometry_node_supported_for_instancing(node)
+    _raycore_geometry_node_candidate_for_instancing(node) || return false
+    geom = node[:geometry]
+    _raycore_transform_matrix4(geom.transformation) === nothing && return false
+    return true
+end
+
+function _raycore_mesh_from_reference_mesh(ref_mesh)
+    raw_vertices = GeometryBasics.decompose(GeometryBasics.Point3, ref_mesh.mesh)
+    raw_faces = collect(GeometryBasics.decompose(PlantGeom.Face3, ref_mesh.mesh))
+    (isempty(raw_vertices) || isempty(raw_faces)) && return nothing
+    points = Vector{GeometryBasics.Point3f}(undef, length(raw_vertices))
+    faces = Vector{GeometryBasics.TriangleFace{Int}}(undef, length(raw_faces))
+    face_meta = Vector{UInt32}(undef, length(raw_faces))
+    @inbounds for (i, p) in pairs(raw_vertices)
+        points[i] = GeometryBasics.Point3f(Float32(p[1]), Float32(p[2]), Float32(p[3]))
+    end
+    @inbounds for (i, f) in pairs(raw_faces)
+        faces[i] = GeometryBasics.TriangleFace{Int}(f[1], f[2], f[3])
+        # The prototype-local metadata is intentionally independent of the
+        # final Archimed node. All instances decode this local surface id
+        # through the per-instance table.
+        face_meta[i] = UInt32(1)
+    end
+    return GeometryBasics.Mesh(points, faces; face_meta=GeometryBasics.per_face(face_meta, faces))
+end
+
+function _raycore_fallback_mesh_from_geometry(
+    vertices,
+    faces::Vector{PlantGeom.Face3},
+    face2node_index::Vector{Int},
+    fallback_node_ids::Set{Int},
+    face2node::Vector{Int},
+)
+    fallback_faces = Int[]
+    @inbounds for i in eachindex(faces)
+        face2node[i] in fallback_node_ids || continue
+        push!(fallback_faces, i)
+    end
+    isempty(fallback_faces) && return nothing
+
+    points = Vector{GeometryBasics.Point3f}(undef, length(vertices))
+    out_faces = Vector{GeometryBasics.TriangleFace{Int}}(undef, length(fallback_faces))
+    face_meta = Vector{UInt32}(undef, length(fallback_faces))
+    @inbounds for (i, p) in pairs(vertices)
+        points[i] = GeometryBasics.Point3f(Float32(p[1]), Float32(p[2]), Float32(p[3]))
+    end
+    @inbounds for (out_i, src_i) in pairs(fallback_faces)
+        f = faces[src_i]
+        out_faces[out_i] = GeometryBasics.TriangleFace{Int}(f[1], f[2], f[3])
+        face_meta[out_i] = UInt32(face2node_index[src_i])
+    end
+    return GeometryBasics.Mesh(points, out_faces; face_meta=GeometryBasics.per_face(face_meta, out_faces))
+end
+
+function _raycore_reference_instancing_stats_from_counts(;
+    expanded_face_count::Int,
+    prototype_face_count::Int,
+    fallback_face_count::Int,
+    prototype_node_count::Int,
+    fallback_present::Bool,
+    metadata_stride::Int,
+    toricity::Bool=false,
+    prototype_count::Int=0,
+)
+    toric_copies = _raycore_toric_copy_count(toricity)
+    fallback_instance_count = fallback_present ? 1 : 0
+    instance_count = (prototype_node_count + fallback_instance_count) * toric_copies
+    compact_face_count = prototype_face_count + fallback_face_count
+    saved_faces = max(expanded_face_count - compact_face_count, 0)
+    savings_ratio = expanded_face_count == 0 ? 0.0 : saved_faces / expanded_face_count
+    decoder_entries = instance_count * metadata_stride
+    return (
+        instance_count=instance_count,
+        prototype_count=prototype_count,
+        prototype_face_count=prototype_face_count,
+        prototype_node_count=prototype_node_count,
+        fallback_face_count=fallback_face_count,
+        compact_face_count=compact_face_count,
+        expanded_face_count=expanded_face_count,
+        saved_faces=saved_faces,
+        savings_ratio=savings_ratio,
+        decoder_entries=decoder_entries,
+    )
+end
+
+function _raycore_reference_instancing_stats_pass(stats)
+    stats.saved_faces > 0 || return false
+    stats.savings_ratio >= _raycore_reference_min_face_savings_ratio() || return false
+    stats.instance_count <= _raycore_reference_instance_limit() || return false
+    return true
+end
+
+function _raycore_instanced_geometry_from_scene(
+    scene::PlantGeom.SceneGeometry,
+    vertices,
+    node_ids::Vector{Int},
+    node_index::Dict{Int,Int},
+    faces::Vector{PlantGeom.Face3},
+    face2node::Vector{Int},
+    face2node_index::Vector{Int},
+    ;
+    toricity::Bool=false,
+)
+    _raycore_reference_instancing_enabled() || return nothing
+    scene.mtg === nothing && return nothing
+
+    nodes = Any[]
+    seen_node_ids = Set{Int}()
+    MultiScaleTreeGraph.traverse!(scene.mtg) do node
+        PlantGeom.has_geometry(node) || return nothing
+        haskey(node, :scene_dimensions) && return nothing
+        nid = MultiScaleTreeGraph.node_id(node)
+        haskey(node_index, nid) || return nothing
+        nid in seen_node_ids && return nothing
+        push!(seen_node_ids, nid)
+        push!(nodes, node)
+        return nothing
+    end
+    isempty(nodes) && return nothing
+
+    ref_counts = Dict{Any,Int}()
+    supported = Dict{Int,Bool}()
+    ref_face_counts = Dict{Any,Int}()
+    for node in nodes
+        nid = MultiScaleTreeGraph.node_id(node)
+        ok = _raycore_geometry_node_candidate_for_instancing(node)
+        supported[nid] = ok
+        ok || continue
+        ref_mesh = node[:geometry].ref_mesh
+        key = _raycore_reference_mesh_identity_key(ref_mesh)
+        ref_counts[key] = get(ref_counts, key, 0) + 1
+        if !haskey(ref_face_counts, key)
+            ref_face_counts[key] = length(GeometryBasics.decompose(PlantGeom.Face3, ref_mesh.mesh))
+        end
+    end
+
+    reusable_nodes = Set{Int}()
+    reusable_keys = Set{Any}()
+    for node in nodes
+        nid = MultiScaleTreeGraph.node_id(node)
+        get(supported, nid, false) || continue
+        key = _raycore_reference_mesh_identity_key(node[:geometry].ref_mesh)
+        get(ref_counts, key, 0) >= 2 || continue
+        push!(reusable_nodes, nid)
+        push!(reusable_keys, key)
+    end
+    isempty(reusable_nodes) && return nothing
+
+    prototype_face_count = sum(ref_face_counts[key] for key in reusable_keys; init=0)
+    fallback_node_ids = Set{Int}(nid for nid in node_ids if !(nid in reusable_nodes))
+    fallback_face_count = count(nid -> nid in fallback_node_ids, face2node)
+    metadata_stride = max(length(node_ids) + 1, 2)
+    early_stats = _raycore_reference_instancing_stats_from_counts(;
+        expanded_face_count=length(faces),
+        prototype_face_count=prototype_face_count,
+        fallback_face_count=fallback_face_count,
+        prototype_node_count=length(reusable_nodes),
+        fallback_present=!isempty(fallback_node_ids),
+        metadata_stride=metadata_stride,
+        toricity=toricity,
+        prototype_count=length(reusable_keys),
+    )
+    _raycore_reference_instancing_stats_pass(early_stats) || return nothing
+
+    prototype_index = Dict{Any,Int}()
+    prototype_ref_meshes = Any[]
+    prototype_transforms = Vector{Vector{GeometryBasics.Mat4f}}()
+    prototype_node_indices = Vector{Vector{UInt32}}()
+    for node in nodes
+        nid = MultiScaleTreeGraph.node_id(node)
+        nid in reusable_nodes || continue
+        geom = node[:geometry]
+        key = _raycore_reference_mesh_identity_key(geom.ref_mesh)
+        proto_idx = get!(prototype_index, key) do
+            push!(prototype_ref_meshes, geom.ref_mesh)
+            push!(prototype_transforms, GeometryBasics.Mat4f[])
+            push!(prototype_node_indices, UInt32[])
+            length(prototype_ref_meshes)
+        end
+        transform = _raycore_transform_matrix4(geom.transformation)
+        transform === nothing && return nothing
+        push!(prototype_transforms[proto_idx], transform)
+        push!(prototype_node_indices[proto_idx], UInt32(node_index[nid]))
+    end
+
+    prototypes = RaycorePrototypeInstances[]
+    for i in eachindex(prototype_ref_meshes)
+        mesh = _raycore_mesh_from_reference_mesh(prototype_ref_meshes[i])
+        mesh === nothing && return nothing
+        push!(prototypes, RaycorePrototypeInstances(mesh, prototype_transforms[i], prototype_node_indices[i]))
+    end
+
+    fallback_mesh = _raycore_fallback_mesh_from_geometry(vertices, faces, face2node_index, fallback_node_ids, face2node)
+    prototype_node_count = sum(length(proto.node_indices) for proto in prototypes)
+    return RaycoreInstancedSceneGeometry(
+        prototypes,
+        fallback_mesh,
+        metadata_stride,
+        prototype_face_count,
+        prototype_node_count,
+        fallback_face_count,
     )
 end
 
@@ -2718,8 +3150,14 @@ function _prepare_interception_data(
     models::LightModels,
     options::LightOptions;
     include_budget_maps::Bool=false,
+    include_raycore_instancing::Bool=false,
 )
-    geometry = _scene_geometry_for_interception(scene, models, options)
+    geometry = _scene_geometry_for_interception(
+        scene,
+        models,
+        options;
+        include_raycore_instancing=include_raycore_instancing,
+    )
     node_interception_by_index = _resolved_node_interception_models(geometry, models)
     virtual_nodes = _virtual_sensor_node_ids(geometry, node_interception_by_index)
     virtual_node_mask = [nid in virtual_nodes for nid in geometry.node_ids]
@@ -2774,71 +3212,412 @@ function _raycore_vec3f(v)
     return GeometryBasics.Vec3f(Float32(v[1]), Float32(v[2]), Float32(v[3]))
 end
 
-function _raycore_mesh_from_geometry(geometry::InterceptionSceneData; toricity::Bool=false)
-    shifts =
-        if toricity
-            pb = geometry.plotbox
-            ((Float64(ix) * pb.xdim, Float64(iy) * pb.ydim, 0.0) for ix in -1:1 for iy in -1:1)
-        else
-            ((0.0, 0.0, 0.0),)
-        end
+function _raycore_toric_shifts(geometry::InterceptionSceneData; toricity::Bool=false)
+    if toricity
+        pb = geometry.plotbox
+        return [(Float64(ix) * pb.xdim, Float64(iy) * pb.ydim, 0.0) for ix in -1:1 for iy in -1:1]
+    end
+    return [(0.0, 0.0, 0.0)]
+end
 
+function _raycore_translation_matrix(shift)
+    sx, sy, sz = shift
+    return GeometryBasics.Mat4f(
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        Float32(sx), Float32(sy), Float32(sz), 1,
+    )
+end
+
+function _raycore_toric_transforms(geometry::InterceptionSceneData; toricity::Bool=false)
+    return [_raycore_translation_matrix(shift) for shift in _raycore_toric_shifts(geometry; toricity=toricity)]
+end
+
+function _raycore_matrix_from_mat4f(mat::GeometryBasics.Mat4f)
+    out = Matrix{Float64}(undef, 4, 4)
+    @inbounds for i in 1:4, j in 1:4
+        out[i, j] = Float64(mat[i, j])
+    end
+    return out
+end
+
+function _raycore_shifted_transform(transform::GeometryBasics.Mat4f, shift)
+    sx, sy, sz = shift
+    shift_mat = zeros(Float64, 4, 4)
+    @inbounds for i in 1:4
+        shift_mat[i, i] = 1.0
+    end
+    shift_mat[1, 4] = Float64(sx)
+    shift_mat[2, 4] = Float64(sy)
+    shift_mat[3, 4] = Float64(sz)
+    return _raycore_mat4f_from_matrix(shift_mat * _raycore_matrix_from_mat4f(transform))
+end
+
+function _raycore_mesh_from_geometry(geometry::InterceptionSceneData)
     n_vertices = length(geometry.vertices)
     n_faces = length(geometry.faces)
-    n_copies = toricity ? 9 : 1
-    points = Vector{GeometryBasics.Point3f}(undef, n_vertices * n_copies)
-    faces = Vector{GeometryBasics.TriangleFace{Int}}(undef, n_faces * n_copies)
-    face_node_indices = Vector{UInt32}(undef, n_faces * n_copies)
+    points = Vector{GeometryBasics.Point3f}(undef, n_vertices)
+    faces = Vector{GeometryBasics.TriangleFace{Int}}(undef, n_faces)
+    face_node_indices = Vector{UInt32}(undef, n_faces)
 
-    copy_idx = 0
-    @inbounds for shift in shifts
-        point_offset = copy_idx * n_vertices
-        face_offset = copy_idx * n_faces
-        sx, sy, sz = shift
-        for (i, p) in pairs(geometry.vertices)
-            points[point_offset+i] =
-                GeometryBasics.Point3f(Float32(p[1] + sx), Float32(p[2] + sy), Float32(p[3] + sz))
-        end
-        for (i, f) in pairs(geometry.faces)
-            faces[face_offset+i] = GeometryBasics.TriangleFace{Int}(
-                point_offset + f[1],
-                point_offset + f[2],
-                point_offset + f[3],
-            )
-            face_node_indices[face_offset+i] = UInt32(geometry.face2node_index[i])
-        end
-        copy_idx += 1
+    @inbounds for (i, p) in pairs(geometry.vertices)
+        points[i] = GeometryBasics.Point3f(Float32(p[1]), Float32(p[2]), Float32(p[3]))
+    end
+    @inbounds for (i, f) in pairs(geometry.faces)
+        faces[i] = GeometryBasics.TriangleFace{Int}(f[1], f[2], f[3])
+        face_node_indices[i] = UInt32(geometry.face2node_index[i])
     end
 
     face_meta = GeometryBasics.per_face(face_node_indices, faces)
     return GeometryBasics.Mesh(points, faces; face_meta=face_meta)
 end
 
-function _raycore_scene_data(prepared::PreparedInterceptionData, config::RaycoreBackendConfig; toricity::Bool=false)
-    mesh = _raycore_mesh_from_geometry(prepared.geometry; toricity=toricity)
+function _raycore_push_geometry!(tlas, geometry::InterceptionSceneData; toricity::Bool=false)
+    mesh = _raycore_mesh_from_geometry(geometry)
+    if toricity
+        push!(tlas, mesh, _raycore_toric_transforms(geometry; toricity=true))
+    else
+        push!(tlas, mesh)
+    end
+    return toricity ? 9 : 1
+end
+
+function _raycore_decoder_row!(table::Vector{UInt32}, instance_idx::Int, metadata_stride::Int)
+    offset = (instance_idx - 1) * metadata_stride
+    length(table) >= offset + metadata_stride || resize!(table, offset + metadata_stride)
+    @inbounds for i in 1:metadata_stride
+        table[offset+i] = UInt32(0)
+    end
+    return offset
+end
+
+function _raycore_push_instanced_geometry!(
+    tlas,
+    instanced::RaycoreInstancedSceneGeometry,
+    geometry::InterceptionSceneData;
+    toricity::Bool=false,
+)
+    shifts = _raycore_toric_shifts(geometry; toricity=toricity)
+    decoder_table = UInt32[]
+    instance_idx = 0
+    metadata_stride = instanced.metadata_stride
+
+    for prototype in instanced.prototypes
+        transforms = GeometryBasics.Mat4f[]
+        node_indices = UInt32[]
+        for (base_transform, node_idx) in zip(prototype.transforms, prototype.node_indices)
+            for shift in shifts
+                transform = _raycore_shifted_transform(base_transform, shift)
+                transform === nothing && return nothing
+                push!(transforms, transform)
+                push!(node_indices, node_idx)
+            end
+        end
+        isempty(transforms) && continue
+        push!(tlas, prototype.mesh, transforms)
+        for node_idx in node_indices
+            instance_idx += 1
+            offset = _raycore_decoder_row!(decoder_table, instance_idx, metadata_stride)
+            decoder_table[offset+2] = node_idx
+        end
+    end
+
+    if instanced.fallback_mesh !== nothing
+        fallback_transforms = _raycore_toric_transforms(geometry; toricity=toricity)
+        push!(tlas, instanced.fallback_mesh, fallback_transforms)
+        for _ in fallback_transforms
+            instance_idx += 1
+            offset = _raycore_decoder_row!(decoder_table, instance_idx, metadata_stride)
+            @inbounds for node_idx in eachindex(geometry.node_ids)
+                decoder_table[offset+node_idx+1] = UInt32(node_idx)
+            end
+        end
+    end
+
+    instance_idx == 0 && return nothing
+    return (instance_count=instance_idx, metadata_stride=metadata_stride, decoder_table=decoder_table)
+end
+
+function _raycore_reference_instancing_stats(
+    instanced::RaycoreInstancedSceneGeometry,
+    geometry::InterceptionSceneData;
+    toricity::Bool=false,
+)
+    return _raycore_reference_instancing_stats_from_counts(;
+        expanded_face_count=length(geometry.faces),
+        prototype_face_count=instanced.prototype_face_count,
+        fallback_face_count=instanced.fallback_face_count,
+        prototype_node_count=instanced.prototype_node_count,
+        fallback_present=instanced.fallback_mesh !== nothing,
+        metadata_stride=instanced.metadata_stride,
+        toricity=toricity,
+        prototype_count=length(instanced.prototypes),
+    )
+end
+
+function _raycore_should_use_reference_instancing(
+    instanced::RaycoreInstancedSceneGeometry,
+    geometry::InterceptionSceneData;
+    toricity::Bool=false,
+)
+    stats = _raycore_reference_instancing_stats(instanced, geometry; toricity=toricity)
+    return _raycore_reference_instancing_stats_pass(stats)
+end
+
+function _raycore_face_chunk_limit()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_FACE_CHUNK_LIMIT", "")
+    isempty(strip(raw)) && return 1536
+    value = parse(Int, raw)
+    return value <= 0 ? typemax(Int) : value
+end
+
+function _raycore_prechunk_face_threshold()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_PRECHUNK_FACE_THRESHOLD", "")
+    isempty(strip(raw)) && return 500_000
+    value = parse(Int, raw)
+    return value <= 0 ? typemax(Int) : value
+end
+
+_raycore_toric_copy_count(toricity::Bool) = toricity ? 9 : 1
+
+function _raycore_effective_face_count(prepared::PreparedInterceptionData; toricity::Bool=false)
+    return length(prepared.geometry.faces) * _raycore_toric_copy_count(toricity)
+end
+
+function _raycore_estimated_prechunk_instances(
+    prepared::PreparedInterceptionData;
+    toricity::Bool=false,
+    face_chunk_limit::Int=_raycore_face_chunk_limit(),
+)
+    effective_faces = _raycore_effective_face_count(prepared; toricity=toricity)
+    face_chunk_limit == typemax(Int) && return effective_faces == 0 ? 0 : 1
+    return cld(effective_faces, max(face_chunk_limit, 1))
+end
+
+function _raycore_should_prechunk_scene(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig;
+    toricity::Bool=false,
+)
+    config.backend isa KernelAbstractions.CPU && return false
+    if prepared.geometry.raycore_instanced_geometry !== nothing &&
+       _raycore_should_use_reference_instancing(
+           prepared.geometry.raycore_instanced_geometry,
+           prepared.geometry;
+           toricity=toricity,
+       )
+        return false
+    end
+    _raycore_face_chunk_limit() == typemax(Int) && return false
+    threshold = _raycore_prechunk_face_threshold()
+    threshold == typemax(Int) && return false
+    return _raycore_effective_face_count(prepared; toricity=toricity) > threshold
+end
+
+function _raycore_prechunk_instance_limit_status(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig;
+    toricity::Bool=false,
+)
+    face_chunk_limit = _raycore_face_chunk_limit()
+    max_instances = config.max_prechunk_instances
+    estimated_instances =
+        _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=face_chunk_limit)
+    should_prechunk = _raycore_should_prechunk_scene(prepared, config; toricity=toricity)
+    exceeded =
+        should_prechunk &&
+        max_instances != typemax(Int) &&
+        estimated_instances > max_instances
+    return (
+        exceeded=exceeded,
+        should_prechunk=should_prechunk,
+        estimated_instances=estimated_instances,
+        max_instances=max_instances,
+        face_chunk_limit=face_chunk_limit,
+        effective_faces=_raycore_effective_face_count(prepared; toricity=toricity),
+    )
+end
+
+function _raycore_prechunk_instance_limit_message(status)
+    return "Raycore backend would require about $(status.estimated_instances) prechunked BLAS instances " *
+           "for $(status.effective_faces) effective faces with face_chunk_limit=$(status.face_chunk_limit), " *
+           "exceeding max_prechunk_instances=$(status.max_instances)."
+end
+
+function _raycore_is_valid_face(geometry::InterceptionSceneData, face)
+    p1 = geometry.vertices[face[1]]
+    p2 = geometry.vertices[face[2]]
+    p3 = geometry.vertices[face[3]]
+    return _triangle_area3d(p1, p2, p3) > 0.0
+end
+
+function _raycore_foreach_mesh_chunk_from_geometry(
+    emit::F,
+    geometry::InterceptionSceneData;
+    toricity::Bool=false,
+    face_chunk_limit::Int=_raycore_face_chunk_limit(),
+) where {F}
+    if face_chunk_limit <= 0
+        emit(_raycore_mesh_from_geometry(geometry))
+        return 1
+    end
+
+    source_faces = geometry.faces
+    vertex_map = Dict{Int,Int}()
+    points = GeometryBasics.Point3f[]
+    faces = GeometryBasics.TriangleFace{Int}[]
+    face_node_indices = UInt32[]
+    chunk_count = 0
+
+    function flush_chunk!()
+        isempty(faces) && return nothing
+        face_meta = GeometryBasics.per_face(copy(face_node_indices), copy(faces))
+        emit(GeometryBasics.Mesh(copy(points), copy(faces); face_meta=face_meta))
+        chunk_count += 1
+        empty!(vertex_map)
+        empty!(points)
+        empty!(faces)
+        empty!(face_node_indices)
+        return nothing
+    end
+
+    @inbounds for (face_idx, face) in pairs(source_faces)
+        _raycore_is_valid_face(geometry, face) || continue
+        if length(faces) >= face_chunk_limit
+            flush_chunk!()
+        end
+        local_vertices = ntuple(j -> begin
+            vertex_idx = face[j]
+            get!(vertex_map, vertex_idx) do
+                p = geometry.vertices[vertex_idx]
+                push!(points, GeometryBasics.Point3f(Float32(p[1]), Float32(p[2]), Float32(p[3])))
+                length(points)
+            end
+        end, Val(3))
+        push!(faces, GeometryBasics.TriangleFace{Int}(local_vertices...))
+        push!(face_node_indices, UInt32(geometry.face2node_index[face_idx]))
+    end
+    flush_chunk!()
+    return toricity ? 9 * chunk_count : chunk_count
+end
+
+function _raycore_mesh_chunks_from_geometry(
+    geometry::InterceptionSceneData;
+    toricity::Bool=false,
+    face_chunk_limit::Int=_raycore_face_chunk_limit(),
+)
+    chunks = GeometryBasics.Mesh[]
+    _raycore_foreach_mesh_chunk_from_geometry(
+        mesh -> push!(chunks, mesh),
+        geometry;
+        toricity=toricity,
+        face_chunk_limit=face_chunk_limit,
+    )
+    return chunks
+end
+
+function _raycore_initial_scene_data(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig,
+    options::LightOptions;
+    toricity::Bool=options.toricity,
+)
+    if _raycore_should_prechunk_scene(prepared, config; toricity=toricity)
+        face_chunk_limit = _raycore_face_chunk_limit()
+        data = _raycore_scene_data(prepared, config; toricity=toricity, face_chunk_limit=face_chunk_limit)
+        @info "Raycore backend prechunked BLAS geometry before validation." face_chunk_limit effective_faces=_raycore_effective_face_count(prepared; toricity=toricity)
+        return data, true
+    end
+    return _raycore_scene_data(prepared, config; toricity=toricity), false
+end
+
+function _raycore_scene_data(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig;
+    toricity::Bool=false,
+    face_chunk_limit::Union{Nothing,Int}=nothing,
+)
     tlas = Raycore.TLAS(config.backend)
-    push!(tlas, mesh)
+    chunked_tlas = face_chunk_limit !== nothing
+    geometry_mode = :merged_mesh
+    instanced_build =
+        if face_chunk_limit === nothing &&
+           prepared.geometry.raycore_instanced_geometry !== nothing &&
+           _raycore_should_use_reference_instancing(
+               prepared.geometry.raycore_instanced_geometry,
+               prepared.geometry;
+               toricity=toricity,
+           )
+            _raycore_push_instanced_geometry!(
+                tlas,
+                prepared.geometry.raycore_instanced_geometry,
+                prepared.geometry;
+                toricity=toricity,
+            )
+        else
+            nothing
+        end
+    instance_count, metadata_stride, decoder_table =
+        if instanced_build !== nothing
+            geometry_mode = :reference_instances
+            instanced_build.instance_count, instanced_build.metadata_stride, instanced_build.decoder_table
+        elseif face_chunk_limit === nothing
+            _raycore_push_geometry!(tlas, prepared.geometry; toricity=toricity),
+            length(prepared.geometry.node_ids) + 1,
+            UInt32[]
+        else
+            geometry_mode = :chunked_merged_mesh
+            transforms = _raycore_toric_transforms(prepared.geometry; toricity=toricity)
+            count = _raycore_foreach_mesh_chunk_from_geometry(
+                mesh -> (toricity ? push!(tlas, mesh, transforms) : push!(tlas, mesh)),
+                prepared.geometry;
+                toricity=toricity,
+                face_chunk_limit=face_chunk_limit,
+            )
+            count, length(prepared.geometry.node_ids) + 1, UInt32[]
+        end
+    actual_instance_count = length(tlas.instances)
+    if isempty(decoder_table)
+        instance_count = actual_instance_count
+    elseif actual_instance_count != instance_count
+        error(
+            "Raycore TLAS instance count mismatch: decoder has $instance_count rows but TLAS has $actual_instance_count instances.",
+        )
+    end
     Raycore.sync!(tlas)
     kernel_tlas = Adapt.adapt(config.backend, tlas)
+    hit_decoder =
+        isempty(decoder_table) ?
+        _raycore_identity_hit_decoder(prepared, config.backend, instance_count) :
+        _raycore_hit_decoder(decoder_table, metadata_stride, instance_count, config.backend)
     n_pixels = prepared.geometry.plotbox.nx * prepared.geometry.plotbox.ny
     stack_len = n_pixels * config.max_hits_per_pixel
     top_nodes_dev = KernelAbstractions.allocate(config.backend, UInt32, n_pixels)
-    top_nodes_host = Vector{UInt32}(undef, n_pixels)
     stack_counts_dev = KernelAbstractions.allocate(config.backend, Int32, n_pixels)
     stack_nodes_dev = KernelAbstractions.allocate(config.backend, UInt32, stack_len)
+    stack_instance_indices_dev = KernelAbstractions.allocate(config.backend, UInt32, stack_len)
     stack_heights_dev = KernelAbstractions.allocate(config.backend, Float32, stack_len)
     stack_overflow_dev = KernelAbstractions.allocate(config.backend, Bool, n_pixels)
     edge_key_capacity = n_pixels * max(0, 2 * (config.max_hits_per_pixel - 1))
-    edge_keys_dev = KernelAbstractions.allocate(config.backend, UInt64, edge_key_capacity)
-    edge_key_counts_dev = KernelAbstractions.allocate(config.backend, Int32, n_pixels)
     n_nodes = length(prepared.geometry.node_ids)
     dense_pairs_i128 = Int128(n_nodes) * Int128(n_nodes)
     dense_bytes_i128 = dense_pairs_i128 * Int128(sizeof(Int32))
-    dense_scratch_enabled =
-        config.edge_accumulation != :sparse_host_reduce &&
+    dense_matrix_available =
         dense_pairs_i128 <= typemax(Int) &&
         dense_bytes_i128 <= config.dense_edge_limit_bytes &&
         KernelAbstractions.supports_atomics(config.backend)
+    auto_dense_enabled = config.edge_accumulation == :auto && !chunked_tlas && dense_matrix_available
+    sparse_scratch_enabled =
+        config.edge_accumulation == :sparse_host_reduce ||
+        (config.edge_accumulation == :auto && !auto_dense_enabled)
+    edge_keys_dev =
+        sparse_scratch_enabled ? KernelAbstractions.allocate(config.backend, UInt64, edge_key_capacity) : nothing
+    edge_key_counts_dev =
+        sparse_scratch_enabled ? KernelAbstractions.allocate(config.backend, Int32, n_pixels) : nothing
+    dense_scratch_enabled =
+        (config.edge_accumulation == :dense_atomic || auto_dense_enabled) &&
+        dense_matrix_available
     dense_edge_counts_dev =
         dense_scratch_enabled ? KernelAbstractions.allocate(config.backend, Int32, Int(dense_pairs_i128)) : nothing
     virtual_node_mask_dev = KernelAbstractions.allocate(config.backend, Bool, length(prepared.virtual_node_mask))
@@ -2847,13 +3626,16 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
     KernelAbstractions.copyto!(config.backend, virtual_node_mask_dev, prepared.virtual_node_mask)
     KernelAbstractions.copyto!(config.backend, pavement_node_mask_dev, prepared.geometry.pavement_node_mask)
     KernelAbstractions.copyto!(config.backend, node_ids_dev, prepared.geometry.node_ids)
-    stack_counts_host = Vector{Int32}(undef, n_pixels)
-    stack_nodes_host = Vector{UInt32}(undef, stack_len)
-    stack_heights_host = Vector{Float32}(undef, stack_len)
-    stack_overflow_host = Vector{Bool}(undef, n_pixels)
-    edge_keys_host = Vector{UInt64}(undef, edge_key_capacity)
-    edge_key_counts_host = Vector{Int32}(undef, n_pixels)
+    top_nodes_host = UInt32[]
+    stack_counts_host = Int32[]
+    stack_nodes_host = UInt32[]
+    stack_instance_indices_host = UInt32[]
+    stack_heights_host = Float32[]
+    stack_overflow_host = Bool[]
+    edge_keys_host = UInt64[]
+    edge_key_counts_host = Int32[]
     edge_compact_host = UInt64[]
+    vertical_span = _raycore_geometry_vertical_span(prepared.geometry)
     return RaycoreSceneData(
         prepared,
         tlas,
@@ -2863,6 +3645,7 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
         top_nodes_host,
         stack_counts_dev,
         stack_nodes_dev,
+        stack_instance_indices_dev,
         stack_heights_dev,
         stack_overflow_dev,
         edge_keys_dev,
@@ -2873,6 +3656,7 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
         node_ids_dev,
         stack_counts_host,
         stack_nodes_host,
+        stack_instance_indices_host,
         stack_heights_host,
         stack_overflow_host,
         edge_keys_host,
@@ -2880,12 +3664,17 @@ function _raycore_scene_data(prepared::PreparedInterceptionData, config::Raycore
         edge_compact_host,
         Dict{Tuple{Float64,Float64,Float64,Bool},Float32}(),
         Dict{Tuple{Float64,Float64,Float64},Vector{Float64}}(),
+        Dict{Tuple{Float64,Float64,Float64,Bool},Any}(),
+        hit_decoder,
         Dict{Tuple{Symbol,Float64,Float64,Float64},Vector{Float64}}(),
         config.workgroupsize,
         config.max_hits_per_pixel,
         config.hit_epsilon,
         config.edge_accumulation,
         config.dense_edge_limit_bytes,
+        vertical_span,
+        chunked_tlas,
+        geometry_mode,
     )
 end
 
@@ -2896,8 +3685,15 @@ function _prepare_raycore_interception_data(
     backend::RaycoreInterceptionBackend;
     include_budget_maps::Bool=false,
 )
-    prepared = _prepare_interception_data(scene, models, options; include_budget_maps=include_budget_maps)
-    return _raycore_scene_data(prepared, backend.config; toricity=options.toricity)
+    prepared = _prepare_interception_data(
+        scene,
+        models,
+        options;
+        include_budget_maps=include_budget_maps,
+        include_raycore_instancing=true,
+    )
+    data, _chunked = _raycore_initial_scene_data(prepared, backend.config, options; toricity=options.toricity)
+    return data
 end
 
 function _raycore_static_tlas(data::RaycoreSceneData)
@@ -2906,16 +3702,31 @@ end
 
 @inline _raycore_kernel_tlas(data::RaycoreSceneData) = data.kernel_tlas
 
+function _raycore_all_hits_available()
+    return isdefined(Raycore, Symbol("all_hits!"))
+end
+
+function _raycore_require_all_hits!(context::AbstractString)
+    _raycore_all_hits_available() && return nothing
+    error(
+        "$context requires Raycore.all_hits!, which is not available in the loaded Raycore version. " *
+        "Use the Raycore branch or release that includes the all_hits! TLAS traversal API.",
+    )
+end
+
 function _raycore_closest_hit_node_index(data::RaycoreSceneData, origin, direction)
     ray = Raycore.Ray(; o=_raycore_point3f(origin), d=_raycore_vec3f(direction))
-    hit, tri, _distance, _bary, _instance_idx = Raycore.closest_hit(_raycore_static_tlas(data), ray)
-    return hit ? Int(tri.metadata) : 0
+    hit, tri, _distance, _bary, instance_idx = Raycore.closest_hit(_raycore_static_tlas(data), ray)
+    return hit ? Int(_raycore_decode_node_index(data.hit_decoder, UInt32(tri.metadata), UInt32(instance_idx))) : 0
 end
 
 KernelAbstractions.@kernel function _raycore_trace_top_hits_kernel!(
     nodes,
     heights,
     distances,
+    instance_indices,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origins,
     directions,
@@ -2930,14 +3741,21 @@ KernelAbstractions.@kernel function _raycore_trace_top_hits_kernel!(
             t_min=t_mins[i],
             t_max=t_maxs[i],
         )
-        hit, tri, distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
+        hit, tri, distance, _bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
         if hit
-            nodes[i] = tri.metadata
+            instance_indices[i] = UInt32(instance_idx)
+            nodes[i] = _raycore_decode_node_index(
+                node_index_by_instance_metadata,
+                metadata_stride,
+                UInt32(tri.metadata),
+                UInt32(instance_idx),
+            )
             hit_point = ray.o + ray.d * distance
             heights[i] = hit_point[3]
             distances[i] = distance
         else
             nodes[i] = UInt32(0)
+            instance_indices[i] = UInt32(0)
             heights[i] = -Inf32
             distances[i] = Inf32
         end
@@ -2948,6 +3766,9 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_hits_kernel!(
     nodes,
     heights,
     distances,
+    instance_indices,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origin_x::Float32,
     origin_y::Float32,
@@ -2976,14 +3797,21 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_hits_kernel!(
             t_min=0.0f0,
             t_max=2.0f0 * far,
         )
-        hit, tri, distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
+        hit, tri, distance, _bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
         if hit
-            nodes[pixel_idx] = tri.metadata
+            instance_indices[pixel_idx] = UInt32(instance_idx)
+            nodes[pixel_idx] = _raycore_decode_node_index(
+                node_index_by_instance_metadata,
+                metadata_stride,
+                UInt32(tri.metadata),
+                UInt32(instance_idx),
+            )
             hit_point = ray.o + ray.d * distance
             heights[pixel_idx] = hit_point[3]
             distances[pixel_idx] = distance
         else
             nodes[pixel_idx] = UInt32(0)
+            instance_indices[pixel_idx] = UInt32(0)
             heights[pixel_idx] = -Inf32
             distances[pixel_idx] = Inf32
         end
@@ -2992,6 +3820,8 @@ end
 
 KernelAbstractions.@kernel function _raycore_trace_direction_top_nodes_kernel!(
     nodes,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origin_x::Float32,
     origin_y::Float32,
@@ -3020,8 +3850,13 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_nodes_kernel!(
             t_min=0.0f0,
             t_max=2.0f0 * far,
         )
-        hit, tri, _distance, _bary, _instance_idx = Raycore.closest_hit(static_tlas, ray)
-        nodes[pixel_idx] = hit ? tri.metadata : UInt32(0)
+        hit, tri, _distance, _bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+        nodes[pixel_idx] = hit ? _raycore_decode_node_index(
+            node_index_by_instance_metadata,
+            metadata_stride,
+            UInt32(tri.metadata),
+            UInt32(instance_idx),
+        ) : UInt32(0)
     end
 end
 
@@ -3054,6 +3889,7 @@ function _raycore_trace_top_hits(
     nodes_dev = KernelAbstractions.allocate(backend, UInt32, n)
     heights_dev = KernelAbstractions.allocate(backend, Float32, n)
     distances_dev = KernelAbstractions.allocate(backend, Float32, n)
+    instance_indices_dev = KernelAbstractions.allocate(backend, UInt32, n)
 
     KernelAbstractions.copyto!(backend, origins_dev, origins_host)
     KernelAbstractions.copyto!(backend, directions_dev, directions_host)
@@ -3061,13 +3897,27 @@ function _raycore_trace_top_hits(
     KernelAbstractions.copyto!(backend, t_maxs_dev, t_maxs_host)
 
     kernel = _raycore_trace_top_hits_kernel!(backend, data.workgroupsize)
-    kernel(nodes_dev, heights_dev, distances_dev, static_tlas, origins_dev, directions_dev, t_mins_dev, t_maxs_dev; ndrange=n)
+    kernel(
+        nodes_dev,
+        heights_dev,
+        distances_dev,
+        instance_indices_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
+        static_tlas,
+        origins_dev,
+        directions_dev,
+        t_mins_dev,
+        t_maxs_dev;
+        ndrange=n,
+    )
     KernelAbstractions.synchronize(backend)
 
     return (
         nodes=Array(nodes_dev),
         heights=Array(heights_dev),
         distances=Array(distances_dev),
+        instance_indices=Array(instance_indices_dev),
     )
 end
 
@@ -3088,12 +3938,16 @@ function _raycore_trace_direction_top_hits_direct(
     nodes_dev = KernelAbstractions.allocate(backend, UInt32, n_pixels)
     heights_dev = KernelAbstractions.allocate(backend, Float32, n_pixels)
     distances_dev = KernelAbstractions.allocate(backend, Float32, n_pixels)
+    instance_indices_dev = KernelAbstractions.allocate(backend, UInt32, n_pixels)
 
     kernel = _raycore_trace_direction_top_hits_kernel!(backend, data.workgroupsize)
     kernel(
         nodes_dev,
         heights_dev,
         distances_dev,
+        instance_indices_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         Float32(plotbox.origin_x),
         Float32(plotbox.origin_y),
@@ -3112,6 +3966,7 @@ function _raycore_trace_direction_top_hits_direct(
         nodes=Array(nodes_dev),
         heights=Array(heights_dev),
         distances=Array(distances_dev),
+        instance_indices=Array(instance_indices_dev),
     )
 end
 
@@ -3133,6 +3988,8 @@ function _raycore_trace_direction_top_nodes_direct(
     kernel = _raycore_trace_direction_top_nodes_kernel!(backend, data.workgroupsize)
     kernel(
         nodes_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         Float32(plotbox.origin_x),
         Float32(plotbox.origin_y),
@@ -3146,15 +4003,142 @@ function _raycore_trace_direction_top_nodes_direct(
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
+    length(data.top_nodes_host) == n_pixels || resize!(data.top_nodes_host, n_pixels)
     copyto!(data.top_nodes_host, nodes_dev)
     return data.top_nodes_host
+end
+
+function _raycore_backend_requires_trace_validation(data::RaycoreSceneData)
+    return !(data.backend isa KernelAbstractions.CPU)
+end
+
+function _raycore_reference_top_pixel_count(
+    prepared::PreparedInterceptionData,
+    direction,
+    options::LightOptions,
+)
+    geometry = prepared.geometry
+    projection = _direction_projection_cached(
+        geometry,
+        direction,
+        options,
+        prepared.cache_ctx;
+        upper_hit=true,
+        strict_java_float=_strict_java_float(options),
+    )
+    return count(_ -> true, values(projection.pixel_hits))
+end
+
+function _raycore_vertical_trace_validation(
+    data::RaycoreSceneData,
+    options::LightOptions;
+    min_reference_pixels::Int=1024,
+    min_reference_fraction::Float64=0.05,
+    min_ratio::Float64=0.95,
+)
+    _raycore_backend_requires_trace_validation(data) || return (
+        ok=true,
+        required=false,
+        reference_pixels=0,
+        raycore_pixels=0,
+        ratio=1.0,
+        n_pixels=data.prepared.geometry.plotbox.nx * data.prepared.geometry.plotbox.ny,
+    )
+
+    direction = (0.0, 0.0, 1.0)
+    geometry = data.prepared.geometry
+    plotbox = geometry.plotbox
+    n_pixels = plotbox.nx * plotbox.ny
+    pixel_area = plotbox.pixel_area
+    pixel_area > 0.0 || return (
+        ok=true,
+        required=true,
+        reference_pixels=0,
+        raycore_pixels=0,
+        ratio=1.0,
+        n_pixels=n_pixels,
+    )
+
+    reference_pixels = _raycore_reference_top_pixel_count(data.prepared, direction, options)
+    required_reference = max(min_reference_pixels, ceil(Int, min_reference_fraction * n_pixels))
+    if reference_pixels < required_reference
+        return (
+            ok=true,
+            required=true,
+            reference_pixels=reference_pixels,
+            raycore_pixels=0,
+            ratio=1.0,
+            n_pixels=n_pixels,
+        )
+    end
+
+    raycore_nodes = _raycore_trace_direction_top_nodes_direct(data, direction, options)
+    raycore_pixels = count(!=(0), raycore_nodes)
+    ratio = raycore_pixels / max(reference_pixels, 1)
+    return (
+        ok=ratio >= min_ratio,
+        required=true,
+        reference_pixels=reference_pixels,
+        raycore_pixels=raycore_pixels,
+        ratio=ratio,
+        n_pixels=n_pixels,
+    )
+end
+
+function _raycore_trace_validation_message(validation)
+    return "Raycore backend failed vertical trace validation " *
+           "(raycore_pixels=$(validation.raycore_pixels), " *
+           "reference_pixels=$(validation.reference_pixels), " *
+           "ratio=$(round(validation.ratio; digits=4)), " *
+           "n_pixels=$(validation.n_pixels))."
+end
+
+function _raycore_retry_chunked_scene_data(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig,
+    options::LightOptions,
+    validation;
+    toricity::Bool=options.toricity,
+    skip_face_chunk_limit::Union{Nothing,Int}=nothing,
+)
+    config.backend isa KernelAbstractions.CPU && return nothing, validation
+    face_chunk_limit = _raycore_face_chunk_limit()
+    face_chunk_limit == typemax(Int) && return nothing, validation
+
+    candidate_limits = Int[]
+    for limit in (face_chunk_limit, min(face_chunk_limit, 1024), min(face_chunk_limit, 768), min(face_chunk_limit, 512))
+        limit > 0 || continue
+        limit == skip_face_chunk_limit && continue
+        limit in candidate_limits && continue
+        push!(candidate_limits, limit)
+    end
+
+    last_validation = validation
+    for limit in candidate_limits
+        estimated_instances = _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=limit)
+        if config.max_prechunk_instances != typemax(Int) && estimated_instances > config.max_prechunk_instances
+            @info "Skipping Raycore validation retry because the chunk limit would exceed max_prechunk_instances." face_chunk_limit=limit estimated_instances max_prechunk_instances=config.max_prechunk_instances
+            continue
+        end
+        chunked = _raycore_scene_data(prepared, config; toricity=toricity, face_chunk_limit=limit)
+        chunked_validation = _raycore_vertical_trace_validation(chunked, options)
+        last_validation = chunked_validation
+        if chunked_validation.ok
+            @info "Raycore backend passed vertical trace validation after chunking BLAS geometry." face_chunk_limit=limit
+            return chunked, chunked_validation
+        end
+    end
+    return nothing, last_validation
 end
 
 KernelAbstractions.@kernel function _raycore_trace_stacks_kernel!(
     counts,
     nodes,
     heights,
+    instance_indices,
     overflow,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origins,
     directions,
@@ -3179,6 +4163,7 @@ KernelAbstractions.@kernel function _raycore_trace_stacks_kernel!(
         n_unique, overflow_hit = Raycore.all_hits!(
             nodes,
             heights,
+            instance_indices,
             static_tlas,
             ray,
             offset,
@@ -3188,6 +4173,12 @@ KernelAbstractions.@kernel function _raycore_trace_stacks_kernel!(
         for slot in 1:Int(n_unique)
             out_idx = offset + slot
             distance = heights[out_idx]
+            nodes[out_idx] = _raycore_decode_node_index(
+                node_index_by_instance_metadata,
+                metadata_stride,
+                nodes[out_idx],
+                instance_indices[out_idx],
+            )
             hit_point = ray.o + ray.d * distance
             heights[out_idx] = hit_point[3]
         end
@@ -3200,7 +4191,10 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
     counts,
     nodes,
     heights,
+    instance_indices,
     overflow,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origin_x::Float32,
     origin_y::Float32,
@@ -3238,6 +4232,7 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
         n_unique, overflow_hit = Raycore.all_hits!(
             nodes,
             heights,
+            instance_indices,
             static_tlas,
             ray,
             offset,
@@ -3247,6 +4242,12 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
         for slot in 1:Int(n_unique)
             out_idx = offset + slot
             distance = heights[out_idx]
+            nodes[out_idx] = _raycore_decode_node_index(
+                node_index_by_instance_metadata,
+                metadata_stride,
+                nodes[out_idx],
+                instance_indices[out_idx],
+            )
             hit_point = ray.o + ray.d * distance
             heights[out_idx] = hit_point[3]
         end
@@ -3259,7 +4260,10 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!
     counts,
     nodes,
     distances,
+    instance_indices,
     overflow,
+    node_index_by_instance_metadata,
+    metadata_stride::Int,
     static_tlas,
     origin_x::Float32,
     origin_y::Float32,
@@ -3297,12 +4301,22 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!
         n_unique, overflow_hit = Raycore.all_hits!(
             nodes,
             distances,
+            instance_indices,
             static_tlas,
             ray,
             offset,
             max_hits,
             hit_epsilon,
         )
+        for slot in 1:Int(n_unique)
+            out_idx = offset + slot
+            nodes[out_idx] = _raycore_decode_node_index(
+                node_index_by_instance_metadata,
+                metadata_stride,
+                nodes[out_idx],
+                instance_indices[out_idx],
+            )
+        end
         counts[pixel_idx] = n_unique
         overflow[pixel_idx] = overflow_hit
     end
@@ -3315,6 +4329,7 @@ function _raycore_trace_stacks(
     t_mins=nothing,
     t_maxs=nothing,
 )
+    _raycore_require_all_hits!("Raycore stack tracing")
     n = length(origins)
     length(directions) == n || throw(ArgumentError("Raycore stack trace origins and directions must have the same length."))
     t_mins === nothing || length(t_mins) == n ||
@@ -3338,6 +4353,7 @@ function _raycore_trace_stacks(
     counts_dev = KernelAbstractions.allocate(backend, Int32, n)
     nodes_dev = KernelAbstractions.allocate(backend, UInt32, n * max_hits)
     heights_dev = KernelAbstractions.allocate(backend, Float32, n * max_hits)
+    instance_indices_dev = KernelAbstractions.allocate(backend, UInt32, n * max_hits)
     overflow_dev = KernelAbstractions.allocate(backend, Bool, n)
 
     KernelAbstractions.copyto!(backend, origins_dev, origins_host)
@@ -3350,7 +4366,10 @@ function _raycore_trace_stacks(
         counts_dev,
         nodes_dev,
         heights_dev,
+        instance_indices_dev,
         overflow_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         origins_dev,
         directions_dev,
@@ -3365,6 +4384,7 @@ function _raycore_trace_stacks(
     return (
         counts=Array(counts_dev),
         nodes=Array(nodes_dev),
+        instance_indices=Array(instance_indices_dev),
         heights=Array(heights_dev),
         overflow=Array(overflow_dev),
         max_hits=max_hits,
@@ -3376,6 +4396,7 @@ function _raycore_trace_direction_stack_nodes(
     direction,
     options::LightOptions,
 )
+    _raycore_require_all_hits!("Raycore direction stack tracing")
     geometry = data.prepared.geometry
     plotbox = geometry.plotbox
     n_pixels = plotbox.nx * plotbox.ny
@@ -3388,6 +4409,7 @@ function _raycore_trace_direction_stack_nodes(
     counts_dev = data.stack_counts_dev
     nodes_dev = data.stack_nodes_dev
     distances_dev = data.stack_heights_dev
+    instance_indices_dev = data.stack_instance_indices_dev
     overflow_dev = data.stack_overflow_dev
 
     kernel = _raycore_trace_direction_stack_nodes_kernel!(backend, data.workgroupsize)
@@ -3395,7 +4417,10 @@ function _raycore_trace_direction_stack_nodes(
         counts_dev,
         nodes_dev,
         distances_dev,
+        instance_indices_dev,
         overflow_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         Float32(plotbox.origin_x),
         Float32(plotbox.origin_y),
@@ -3411,13 +4436,20 @@ function _raycore_trace_direction_stack_nodes(
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
+    length(data.stack_counts_host) == n_pixels || resize!(data.stack_counts_host, n_pixels)
+    length(data.stack_nodes_host) == n_pixels * max_hits || resize!(data.stack_nodes_host, n_pixels * max_hits)
+    length(data.stack_instance_indices_host) == n_pixels * max_hits ||
+        resize!(data.stack_instance_indices_host, n_pixels * max_hits)
+    length(data.stack_overflow_host) == n_pixels || resize!(data.stack_overflow_host, n_pixels)
     copyto!(data.stack_counts_host, counts_dev)
     copyto!(data.stack_nodes_host, nodes_dev)
+    copyto!(data.stack_instance_indices_host, instance_indices_dev)
     copyto!(data.stack_overflow_host, overflow_dev)
 
     return (
         counts=data.stack_counts_host,
         nodes=data.stack_nodes_host,
+        instance_indices=data.stack_instance_indices_host,
         overflow=data.stack_overflow_host,
         max_hits=max_hits,
     )
@@ -3428,6 +4460,7 @@ function _raycore_trace_direction_stack_nodes_device(
     direction,
     options::LightOptions,
 )
+    _raycore_require_all_hits!("Raycore device direction stack tracing")
     geometry = data.prepared.geometry
     plotbox = geometry.plotbox
     n_pixels = plotbox.nx * plotbox.ny
@@ -3440,6 +4473,7 @@ function _raycore_trace_direction_stack_nodes_device(
     counts_dev = data.stack_counts_dev
     nodes_dev = data.stack_nodes_dev
     distances_dev = data.stack_heights_dev
+    instance_indices_dev = data.stack_instance_indices_dev
     overflow_dev = data.stack_overflow_dev
 
     kernel = _raycore_trace_direction_stack_nodes_kernel!(backend, data.workgroupsize)
@@ -3447,7 +4481,10 @@ function _raycore_trace_direction_stack_nodes_device(
         counts_dev,
         nodes_dev,
         distances_dev,
+        instance_indices_dev,
         overflow_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         Float32(plotbox.origin_x),
         Float32(plotbox.origin_y),
@@ -3463,11 +4500,13 @@ function _raycore_trace_direction_stack_nodes_device(
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
+    length(data.stack_overflow_host) == n_pixels || resize!(data.stack_overflow_host, n_pixels)
     copyto!(data.stack_overflow_host, overflow_dev)
 
     return (
         counts_dev=counts_dev,
         nodes_dev=nodes_dev,
+        instance_indices_dev=instance_indices_dev,
         overflow=data.stack_overflow_host,
         max_hits=max_hits,
     )
@@ -3478,6 +4517,7 @@ function _raycore_trace_direction_stacks_direct(
     direction,
     options::LightOptions,
 )
+    _raycore_require_all_hits!("Raycore full direction stack tracing")
     geometry = data.prepared.geometry
     plotbox = geometry.plotbox
     n_pixels = plotbox.nx * plotbox.ny
@@ -3491,6 +4531,7 @@ function _raycore_trace_direction_stacks_direct(
     counts_dev = data.stack_counts_dev
     nodes_dev = data.stack_nodes_dev
     heights_dev = data.stack_heights_dev
+    instance_indices_dev = data.stack_instance_indices_dev
     overflow_dev = data.stack_overflow_dev
 
     kernel = _raycore_trace_direction_stacks_kernel!(backend, data.workgroupsize)
@@ -3498,7 +4539,10 @@ function _raycore_trace_direction_stacks_direct(
         counts_dev,
         nodes_dev,
         heights_dev,
+        instance_indices_dev,
         overflow_dev,
+        data.hit_decoder.node_index_by_instance_metadata_dev,
+        data.hit_decoder.metadata_stride,
         static_tlas,
         Float32(plotbox.origin_x),
         Float32(plotbox.origin_y),
@@ -3514,14 +4558,22 @@ function _raycore_trace_direction_stacks_direct(
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
+    length(data.stack_counts_host) == n_pixels || resize!(data.stack_counts_host, n_pixels)
+    length(data.stack_nodes_host) == n_pixels * max_hits || resize!(data.stack_nodes_host, n_pixels * max_hits)
+    length(data.stack_instance_indices_host) == n_pixels * max_hits ||
+        resize!(data.stack_instance_indices_host, n_pixels * max_hits)
+    length(data.stack_heights_host) == n_pixels * max_hits || resize!(data.stack_heights_host, n_pixels * max_hits)
+    length(data.stack_overflow_host) == n_pixels || resize!(data.stack_overflow_host, n_pixels)
     copyto!(data.stack_counts_host, counts_dev)
     copyto!(data.stack_nodes_host, nodes_dev)
+    copyto!(data.stack_instance_indices_host, instance_indices_dev)
     copyto!(data.stack_heights_host, heights_dev)
     copyto!(data.stack_overflow_host, overflow_dev)
 
     return (
         counts=data.stack_counts_host,
         nodes=data.stack_nodes_host,
+        instance_indices=data.stack_instance_indices_host,
         heights=data.stack_heights_host,
         overflow=data.stack_overflow_host,
         max_hits=max_hits,
@@ -3558,6 +4610,14 @@ function _raycore_projection_far(data::RaycoreSceneData, direction, options::Lig
     key = (_raycore_direction_key(direction)..., options.toricity)
     return get!(data.projection_far_cache, key) do
         _raycore_projection_far(data.prepared.geometry, direction; toricity=options.toricity)
+    end
+end
+
+function _raycore_raster_compat_projection(data::RaycoreSceneData, direction, options::LightOptions)
+    prepared = data.prepared
+    key = (_raycore_direction_key(direction)..., prepared.upper_hit)
+    return get!(data.raster_compat_projection_cache, key) do
+        _sort_projection_pixel_stacks!(_prepared_direction_projection(prepared, direction, options))
     end
 end
 
@@ -3785,11 +4845,51 @@ function _raycore_use_raster_compat_projection(data::RaycoreSceneData)
     return geometry.plotbox.nx * geometry.plotbox.ny < length(geometry.faces)
 end
 
-function _raycore_direction_projection(data::RaycoreSceneData, direction, options::LightOptions)
-    prepared = data.prepared
-    if _raycore_use_raster_compat_projection(data)
-        return _prepared_direction_projection(prepared, direction, options)
+function _raycore_geometry_vertical_span(geometry::InterceptionSceneData)
+    pb = geometry.plotbox
+    isempty(geometry.vertices) && return max(pb.pix_x, pb.pix_y, 1e-3)
+    zs = (Float64(v[3]) for v in geometry.vertices)
+    zmin, zmax = extrema(zs)
+    return max(zmax - zmin, max(pb.pix_x, pb.pix_y, 1e-3))
+end
+
+function _raycore_toric_copy_radius_needed(
+    geometry::InterceptionSceneData,
+    direction,
+    vertical_span::Float64=_raycore_geometry_vertical_span(geometry),
+)
+    dir = _normalize3(StaticArrays.SVector{3,Float64}(direction[1], direction[2], direction[3]))
+    dir[3] > 0.0 || return 0
+    pb = geometry.plotbox
+    x_radius = iszero(pb.xdim) ? typemax(Int) : ceil(Int, abs(dir[1] / dir[3]) * vertical_span / pb.xdim)
+    y_radius = iszero(pb.ydim) ? typemax(Int) : ceil(Int, abs(dir[2] / dir[3]) * vertical_span / pb.ydim)
+    return max(x_radius, y_radius)
+end
+
+function _raycore_use_raster_compat_projection(data::RaycoreSceneData, direction, options::LightOptions)
+    _raycore_use_raster_compat_projection(data) && return true
+    options.toricity || return false
+    # Raycore currently represents toricity with a finite 3x3 copy of the scene.
+    # Low-elevation rays can cross more than one plot width/height while moving
+    # through the canopy, which the CPU rasterizer handles by wrapping projected
+    # pixels. Use the raster projection for those directions to preserve periodic
+    # full-stack semantics.
+    return _raycore_toric_copy_radius_needed(data.prepared.geometry, direction, data.vertical_span) > 1
+end
+
+function _raycore_use_raster_compat_projection(data::RaycoreSceneData, turtle::TurtleGrid, options::LightOptions)
+    _raycore_use_raster_compat_projection(data) && return true
+    for sector in turtle.sectors
+        _raycore_use_raster_compat_projection(data, sector.direction, options) && return true
     end
+    return false
+end
+
+function _raycore_direction_projection(data::RaycoreSceneData, direction, options::LightOptions)
+    if _raycore_use_raster_compat_projection(data, direction, options)
+        return _raycore_raster_compat_projection(data, direction, options)
+    end
+    prepared = data.prepared
     if !prepared.upper_hit
         return _raycore_direction_projection_full_stack(data, direction, options)
     end
@@ -3885,6 +4985,33 @@ function _compute_first_order_raycore_top_hit(
     for (k, sector) in enumerate(turtle.sectors)
         fill!(sector_hits, 0)
         fill!(sector_projected_pixels_area, 0.0)
+        if _raycore_use_raster_compat_projection(data, sector.direction, options)
+            projection = _raycore_raster_compat_projection(data, sector.direction, options)
+            visible_area =
+                _visible_area_from_projection_dense(
+                    projection,
+                    options,
+                    geometry.plotbox,
+                    prepared.virtual_node_mask,
+                    prepared.node_transparency_by_index,
+                    geometry,
+                    true,
+                )
+            _accumulate_projection_hits!(hits_per_node, projection, geometry)
+
+            par_flux = fluxes.par[k]
+            nir_flux = fluxes.nir[k]
+            if par_flux != 0.0 || nir_flux != 0.0
+                @inbounds for idx in eachindex(visible_area)
+                    pa = visible_area[idx]
+                    pa <= 0.0 && continue
+                    projected_area_per_node[idx] += pa
+                    par_flux != 0.0 && (incident_power_par[idx] += par_flux * pa)
+                    nir_flux != 0.0 && (incident_power_nir[idx] += nir_flux * pa)
+                end
+            end
+            continue
+        end
         if Float32(sector.direction[3]) > 0.0f0
             nodes = _raycore_trace_direction_top_nodes_direct(data, sector.direction, options)
             @inbounds for pixel_idx in eachindex(nodes)
@@ -4025,7 +5152,7 @@ function compute_first_order(
     options::LightOptions,
     ::RasterCPUBackend,
 )
-    prepared = _prepare_interception_data(scene, models, options)
+    prepared = _prepare_interception_data(scene, models, options; include_raycore_instancing=true)
     return _compute_first_order(prepared, turtle, fluxes, options)
 end
 
@@ -4106,7 +5233,31 @@ function compute_first_order(
     options::LightOptions,
     backend::RaycoreInterceptionBackend,
 )
-    data = _prepare_raycore_interception_data(scene, models, options, backend)
+    prepared = _prepare_interception_data(scene, models, options; include_raycore_instancing=true)
+    prechunk_status =
+        _raycore_prechunk_instance_limit_status(prepared, backend.config; toricity=options.toricity)
+    if prechunk_status.exceeded
+        @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU first-order backend."
+        return _compute_first_order(prepared, turtle, fluxes, options)
+    end
+    data, data_was_chunked = _raycore_initial_scene_data(prepared, backend.config, options; toricity=options.toricity)
+    validation = _raycore_vertical_trace_validation(data, options)
+    if !validation.ok
+        chunked_data, chunked_validation = _raycore_retry_chunked_scene_data(
+            data.prepared,
+            backend.config,
+            options,
+            validation;
+            toricity=options.toricity,
+            skip_face_chunk_limit=data_was_chunked ? _raycore_face_chunk_limit() : nothing,
+        )
+        if chunked_data !== nothing
+            return _compute_first_order_raycore_top_hit(chunked_data, turtle, fluxes, options)
+        end
+        validation = chunked_validation
+        @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU first-order backend."
+        return _compute_first_order(data.prepared, turtle, fluxes, options)
+    end
     return _compute_first_order_raycore_top_hit(data, turtle, fluxes, options)
 end
 
