@@ -87,7 +87,6 @@ function _backend_key(row)
         _cell(row, "workload", _cell(row, "selftest", "unknown")),
         _cell(row, "backend"),
         _cell(row, "resolved_backend"),
-        _cell(row, "fallback_reason"),
         _cell(row, "reduction_capabilities"),
         _cell(row, "edge_accumulation"),
         _cell(row, "julia_version"),
@@ -97,14 +96,12 @@ function _backend_key(row)
 end
 
 function _row_status(row)
-    fallback = _cell(row, "fallback_reason")
     resolved = _cell(row, "resolved_backend")
     backend = _cell(row, "backend")
     reductions = _cell(row, "reduction_capabilities")
     traced = _int_cell_any(row, ("traced_dirs", "profile_traced_dirs"))
     copy_required = _int_cell_any(row, ("copy_required_dirs", "profile_copy_required_dirs"))
     reduced = _int_cell_any(row, ("reduced_dirs", "profile_reduced_dirs"))
-    fallback != "" && fallback != "none" && return "fallback"
     isempty(reductions) && return isempty(resolved) ? "metadata" : "no-raycore-data"
     traced > 0 && copy_required == 0 && reduced > 0 && return "readback-free-candidate"
     traced > 0 && copy_required > 0 && return "host-readback-required"
@@ -143,13 +140,12 @@ function _print_summary(rows)
             _cell(row, "edge_accumulation"),
             _cell(row, "run_label"),
             _cell(row, "resolved_backend"),
-            _cell(row, "fallback_reason"),
         ),
     )
 
     println("Capability matrix summary")
     @printf(
-        "%-16s %-22s %-18s %-18s %-24s %-18s %-24s %-11s %-16s %-18s %-34s %-45s %9s %8s %8s %8s %8s %9s %9s %9s %9s %8s %9s %9s %-24s\n",
+        "%-16s %-22s %-18s %-18s %-24s %-18s %-24s %-11s %-16s %-18s %-45s %9s %8s %8s %8s %8s %9s %9s %9s %9s %8s %9s %9s %-24s\n",
         "label",
         "workload",
         "backend",
@@ -160,7 +156,6 @@ function _print_summary(rows)
         "tlas",
         "faces",
         "scratch",
-        "fallback",
         "reductions",
         "turtles",
         "dirs",
@@ -181,7 +176,7 @@ function _print_summary(rows)
         profile_turtles = _int_cell(row, "profile_unique_turtle_count")
         turtle_label = input_turtles == 0 && profile_turtles == 0 ? "" : string(input_turtles, "/", profile_turtles)
         @printf(
-            "%-16s %-22s %-18s %-18s %-24s %-18s %-24s %-11s %-16s %-18s %-34s %-45s %9s %8d %8d %8d %8.2f %9.3f %9.3f %9.3f %9.3f %8d %9.3f %9.3f %-24s\n",
+            "%-16s %-22s %-18s %-18s %-24s %-18s %-24s %-11s %-16s %-18s %-45s %9s %8d %8d %8d %8.2f %9.3f %9.3f %9.3f %9.3f %8d %9.3f %9.3f %-24s\n",
             _cell(row, "run_label"),
             _cell(row, "workload", _cell(row, "selftest", "unknown")),
             _cell(row, "backend"),
@@ -192,7 +187,6 @@ function _print_summary(rows)
             _shape_label(row),
             _face_label(row),
             _scratch_label(row),
-            _cell(row, "fallback_reason"),
             _cell(row, "reduction_capabilities"),
             turtle_label,
             _int_cell_any(row, ("traced_dirs", "profile_traced_dirs")),
@@ -217,10 +211,8 @@ function _print_summary(rows)
     end
     println()
     println("Grouped rows: ", length(groups), " unique run/workload/backend states from ", length(rows), " rows.")
-    fallbacks = count(row -> _row_status(row) == "fallback", rows)
     readback = count(row -> _row_status(row) == "host-readback-required", rows)
     candidates = count(row -> _row_status(row) == "readback-free-candidate", rows)
-    println("Fallback rows: ", fallbacks)
     println("Host-readback-required rows: ", readback)
     println("Readback-free candidate rows: ", candidates)
     return rows

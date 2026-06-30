@@ -189,8 +189,8 @@ the CPU-built static TLAS showed exact raw-stack parity for reduced coffee at
 `max_hits=32,64,128,256`, exact parity with duplicate suppression disabled,
 exact parity for forced chunk limits `1536,1024,768,512`, and exact parity for
 the reduced agrivoltaics row. The strict scene-complexity smoke also stayed on
-`RaycoreInterceptionBackend` with `fallback_reason = :none` for simple plant,
-full bundled coffee, and the reduced agrivoltaics scene.
+`RaycoreInterceptionBackend` for simple plant, full bundled coffee, and the
+reduced agrivoltaics scene.
 
 Production non-CPU Raycore scene construction now checks the built BLAS depth
 before validation. If it exceeds the known software traversal-stack capacity and
@@ -210,9 +210,7 @@ Benchmark configs enable validation by default so correctness regressions fail
 clearly. Set `ARCHIMEDLIGHT_BENCH_VALIDATE=0` only when intentionally measuring
 direct Raycore runtime without CPU reference validation. A row labelled
 `raycore_metal_gpu` with resolved backend `RaycoreInterceptionBackend` stayed on
-Raycore. `cache_summary(sim)` still reports `fallback_reason` for API
-compatibility; Raycore validation does not populate it by switching to CPU, so
-successful Raycore rows report `:none`.
+Raycore.
 
 For toric scenes, ArchimedLight may also use raster-compatible projections for
 individual low-elevation directions inside an otherwise Raycore-backed
@@ -446,11 +444,11 @@ fall back automatically to the merged-mesh or chunked path.
 
 Use `benchmark/backend_comparison.jl` for reproducible local comparisons. The
 script reports time and allocation volume for each row.
-In cached mode, the table also reports the resolved backend and
-`fallback_reason`; Raycore validation errors are reported as failing rows rather
-than CPU fallback timings. By default, benchmark Raycore configs set
-`validate=true`; set `ARCHIMEDLIGHT_BENCH_VALIDATE=0` to skip CPU reference
-validation for a direct backend timing.
+In cached mode, the table also reports the resolved backend; Raycore validation
+errors are reported as failing rows rather than CPU fallback timings. By
+default, benchmark Raycore configs set `validate=true`; set
+`ARCHIMEDLIGHT_BENCH_VALIDATE=0` to skip CPU reference validation for a direct
+backend timing.
 The table also reports a compact `reductions` capability label for Raycore
 rows:
 
@@ -557,11 +555,10 @@ julia --check-bounds=auto --project=test/gpu benchmark/local_realistic_backends.
 This script currently includes the bundled coffee scene used for the
 documentation landing-page image, a local agrivoltaics wheat-panel scene, and an
 opt-in XPalm/VPalm two-oil-palm scene. It prints fresh build+run timing,
-cached-reuse timing, light totals, the resolved backend, the fallback reason,
-and the same `reductions` capability label used by the component benchmark. Use
+cached-reuse timing, light totals, the resolved backend, and the same
+`reductions` capability label used by the component benchmark. Use
 `ARCHIMEDLIGHT_BENCH_BACKENDS` and the same optional GPU flags as
-`benchmark/backend_comparison.jl` to select Metal, CUDA, oneAPI, or AMDGPU. The
-printed rows include both the resolved backend and the fallback reason. Set
+`benchmark/backend_comparison.jl` to select Metal, CUDA, oneAPI, or AMDGPU. Set
 `ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES` to override the Raycore
 `max_prechunk_instances` cap for these benchmarked backends. Set
 `ARCHIMEDLIGHT_BENCH_VALIDATE=0` to skip CPU reference validation for direct
@@ -644,12 +641,11 @@ julia --project=test/gpu benchmark/summarize_capability_matrix.jl \
 The summarizer accepts both old and metadata-prefixed TSV rows, including rows
 that use either the local realistic benchmark's stack-profile column names or
 the focused component benchmark's `profile_*`/`trace_*` fields. It prints the
-resolved backend, fallback reason, reducer capability label, stack-profile
-direction counts, copy-required count, hit-density metrics, and a compact status
-such as `fallback`, `host-readback-required`, or `readback-free-candidate`.
-When stage-split rows are present, it also prints `prepare` and `public`
-seconds so normal CPU and Raycore rows can be compared without opening the raw
-TSV.
+resolved backend, reducer capability label, stack-profile direction counts,
+copy-required count, hit-density metrics, and a compact status such as
+`host-readback-required` or `readback-free-candidate`. When stage-split rows are
+present, it also prints `prepare` and `public` seconds so normal CPU and Raycore
+rows can be compared without opening the raw TSV.
 
 Set `ARCHIMEDLIGHT_LOCAL_BENCH_SELFTEST=1` for a private benchmark-driver smoke
 test. It builds a tiny in-memory plate scene and checks that the stack-profile
@@ -1034,15 +1030,14 @@ julia --check-bounds=auto --project=test/gpu test/gpu/runtests.jl
 
 The local test asserts that the coffee Metal run resolves to
 `RaycoreInterceptionBackend`, so a silent raster fallback fails the test. The
-strict scene-complexity smoke also asserts `status = "ok"` and
-`fallback_reason = :none` for the requested Metal rows. That smoke covers the
-simple plant, the bundled coffee scene with full `plot_paving_override=2500` at
-a coarse `pixel_size=0.04`, and the reduced agrivoltaics wheat-panel scene when
-the local OPF is available. The focused Metal test writes those strict rows to
+strict scene-complexity smoke also asserts `status = "ok"` for the requested
+Metal rows. That smoke covers the simple plant, the bundled coffee scene with
+full `plot_paving_override=2500` at a coarse `pixel_size=0.04`, and the reduced
+agrivoltaics wheat-panel scene when the local OPF is available. The focused
+Metal test writes those strict rows to
 `/tmp/archimed_raycore_metal_strict_scene_complexity_smoke.tsv` so the resolved
-backend, fallback reason, geometry mode, and Raycore TLAS shape can be audited
-after the test run. If a strict scene-complexity row fails before it can run,
-the TSV row uses
+backend, geometry mode, and Raycore TLAS shape can be audited after the test
+run. If a strict scene-complexity row fails before it can run, the TSV row uses
 `status = "error"` and records `error_reason`, `error_stage`, `error_message`,
 and the available full-stack validation counts/ratios instead of reporting
 `resolved_backend = RasterCPUBackend`. The large test defaults to the local

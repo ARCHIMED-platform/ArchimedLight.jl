@@ -448,7 +448,6 @@ end
         @test all(row -> row.status == "ok", rows)
         strict_row = only(row for row in rows if row.selftest == "prepare_breakdown_raycore_strict")
         @test strict_row.resolved_backend == "RaycoreInterceptionBackend"
-        @test strict_row.fallback_reason == :none
         @test strict_row.raycore_instances > 0
         @test strict_row.stack_validation_hit_ratio == 1.0
         @test strict_row.stack_validation_occupied_ratio == 1.0

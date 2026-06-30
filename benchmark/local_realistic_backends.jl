@@ -447,8 +447,7 @@ function _time_once(workload, case)
     elapsed = @elapsed series = workload.runner(sim, workload.input)
     resolved_backend =
         sim.cache === nothing ? "unprepared" : string(nameof(typeof(sim.cache.resolved_interception_backend)))
-    fallback_reason = sim.cache === nothing ? :unprepared : sim.cache.fallback_reason
-    return (seconds=elapsed, series=series, sim=sim, resolved_backend=resolved_backend, fallback_reason=fallback_reason)
+    return (seconds=elapsed, series=series, sim=sim, resolved_backend=resolved_backend)
 end
 
 function _time_warm(workload, sim)
@@ -498,7 +497,6 @@ function _time_build(workload, case)
         series=series,
         sim=sim,
         resolved_backend=sim.cache === nothing ? "unprepared" : string(nameof(typeof(sim.cache.resolved_interception_backend))),
-        fallback_reason=sim.cache === nothing ? :unprepared : sim.cache.fallback_reason,
         geometry_mode=sim.cache === nothing || sim.cache.raycore_data === nothing ? :none : sim.cache.raycore_data.geometry_mode,
         reduction_capabilities=_reduction_capability_label(sim.cache === nothing ? nothing : sim.cache.raycore_data),
     )
@@ -802,19 +800,10 @@ function _stack_profile_selftest()
         normal_prepare.resolved_backend == "RasterCPUBackend",
         "normal prepare breakdown should resolve to RasterCPUBackend",
     )
-    _local_bench_assert(
-        normal_prepare.fallback_reason == :none,
-        "normal prepare breakdown should not record a fallback reason",
-    )
-
     raycore_prepare = _time_prepare_breakdown_once(workload, _selftest_raycore_case())
     _local_bench_assert(
         raycore_prepare.resolved_backend == "RaycoreInterceptionBackend",
         "strict Raycore prepare breakdown should stay on Raycore",
-    )
-    _local_bench_assert(
-        raycore_prepare.fallback_reason == :none,
-        "strict Raycore prepare breakdown should not fall back",
     )
     _local_bench_assert(
         raycore_prepare.raycore_instances > 0,
@@ -874,13 +863,11 @@ function _stack_profile_selftest()
         (
             selftest="prepare_breakdown_normal",
             resolved_backend=normal_prepare.resolved_backend,
-            fallback_reason=normal_prepare.fallback_reason,
             status="ok",
         ),
         (
             selftest="prepare_breakdown_raycore_strict",
             resolved_backend=raycore_prepare.resolved_backend,
-            fallback_reason=raycore_prepare.fallback_reason,
             raycore_instances=raycore_prepare.raycore_instances,
             stack_validation_hit_ratio=raycore_prepare.stack_validation_hit_ratio,
             stack_validation_occupied_ratio=raycore_prepare.stack_validation_occupied_ratio,
@@ -901,7 +888,6 @@ function _time_stack_profile_once(workload, case)
         prepare_seconds=prepare_timed.time,
         profile_seconds=profile_timed.time,
         resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
-        fallback_reason=cache.fallback_reason,
         geometry_mode=cache.raycore_data === nothing ? :none : cache.raycore_data.geometry_mode,
         reduction_capabilities=_reduction_capability_label(cache.raycore_data),
         profile_input_turtle_count=turtle_profile.input_count,
@@ -921,7 +907,6 @@ function _time_stack_profile(workload, case)
         prepare=median(prepare_seconds),
         profile=median(profile_seconds),
         resolved_backend=last.resolved_backend,
-        fallback_reason=last.fallback_reason,
         geometry_mode=last.geometry_mode,
         reduction_capabilities=last.reduction_capabilities,
         profile_input_turtle_count=last.profile_input_turtle_count,
@@ -996,7 +981,6 @@ function _time_stage_split_once(workload, case)
             public_output_seconds=public_timed.time,
             public_output_mib=_mib(public_timed.bytes),
             resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
-            fallback_reason=cache.fallback_reason,
             geometry_mode=cache.raycore_data === nothing ? :none : cache.raycore_data.geometry_mode,
             reduction_capabilities=_reduction_capability_label(cache.raycore_data),
             edge_accumulation=_case_edge_accumulation(case),
@@ -1035,7 +1019,6 @@ function _time_stage_split(workload, case)
             public_output_seconds=median([run.public_output_seconds for run in runs]),
             public_output_mib=median([run.public_output_mib for run in runs]),
             resolved_backend=last.resolved_backend,
-            fallback_reason=last.fallback_reason,
             geometry_mode=last.geometry_mode,
             reduction_capabilities=last.reduction_capabilities,
             edge_accumulation=last.edge_accumulation,
@@ -1081,7 +1064,6 @@ function _time_breakdown_once(workload, case)
     summary = ArchimedLight.cache_summary(sim)
     resolved_backend =
         sim.cache === nothing ? "unprepared" : string(nameof(typeof(sim.cache.resolved_interception_backend)))
-    fallback_reason = sim.cache === nothing ? :unprepared : sim.cache.fallback_reason
     geometry_mode = sim.cache === nothing || sim.cache.raycore_data === nothing ? :none : sim.cache.raycore_data.geometry_mode
     reduction_capabilities = _reduction_capability_label(sim.cache === nothing ? nothing : sim.cache.raycore_data)
     return (
@@ -1096,7 +1078,6 @@ function _time_breakdown_once(workload, case)
         populate_series=populate_timed.value,
         reuse_series=reuse_timed.value,
         resolved_backend=resolved_backend,
-        fallback_reason=fallback_reason,
         geometry_mode=geometry_mode,
         reduction_capabilities=reduction_capabilities,
         summary=summary,
@@ -1154,7 +1135,6 @@ function _time_prepare_breakdown_once(workload, case)
     stack_validation_timed = nothing
     stack_retry_timed = nothing
     cache_mode_timed = nothing
-    fallback_reason = :none
     resolved_backend = ib
     raycore_data = nothing
     raycore_was_chunked = false
@@ -1269,7 +1249,6 @@ function _time_prepare_breakdown_once(workload, case)
         stack_retry=stack_retry_timed,
         cache_mode_timed=cache_mode_timed,
         resolved_backend=string(nameof(typeof(resolved_backend))),
-        fallback_reason=fallback_reason,
         cache_mode=cache_mode_timed.value,
         raycore_instances=raycore_data === nothing ? 0 : length(raycore_data.tlas.instances),
         raycore_geometries=raycore_data === nothing ? 0 : Raycore.n_geometries(raycore_data.tlas),
@@ -1312,7 +1291,6 @@ function _time_prepare_breakdown(workload, case)
         stack_retry=median_phase(run -> run.stack_retry),
         cache_mode_phase=median_phase(run -> run.cache_mode_timed),
         resolved_backend=last.resolved_backend,
-        fallback_reason=last.fallback_reason,
         cache_mode=last.cache_mode,
         raycore_instances=last.raycore_instances,
         raycore_geometries=last.raycore_geometries,
@@ -1339,11 +1317,10 @@ end
 
 function _print_stack_profile_result(workload_name, case_name, timing)
     @printf(
-        "%-22s %-18s resolved=%-26s fallback=%-30s mode=%-20s reductions=%-45s prepare=%8.3f s  profile=%8.3f s  turtles=%3d/%3d  trace=%9.3f ms  trace_dir=%8.3f ms  count_area=%9.3f ms  edge=%9.3f ms  copy=%9.3f ms  copy_dir=%8.3f ms  dirs=%5d/%5d/%5d/%5d/%5d  hits=%10d  hit_util=%6.2f%%  occupied=%6.2f%%  max=%3d  overflow=%s\n",
+        "%-22s %-18s resolved=%-26s mode=%-20s reductions=%-45s prepare=%8.3f s  profile=%8.3f s  turtles=%3d/%3d  trace=%9.3f ms  trace_dir=%8.3f ms  count_area=%9.3f ms  edge=%9.3f ms  copy=%9.3f ms  copy_dir=%8.3f ms  dirs=%5d/%5d/%5d/%5d/%5d  hits=%10d  hit_util=%6.2f%%  occupied=%6.2f%%  max=%3d  overflow=%s\n",
         workload_name,
         case_name,
         timing.resolved_backend,
-        string(timing.fallback_reason),
         string(timing.geometry_mode),
         timing.reduction_capabilities,
         timing.prepare,
@@ -1371,7 +1348,6 @@ function _print_stack_profile_result(workload_name, case_name, timing)
         workload=workload_name,
         backend=case_name,
         resolved_backend=timing.resolved_backend,
-        fallback_reason=timing.fallback_reason,
         geometry_mode=timing.geometry_mode,
         reduction_capabilities=timing.reduction_capabilities,
         profile_input_turtle_count=timing.profile_input_turtle_count,
@@ -1415,7 +1391,7 @@ function main_stack_profile()
     println("reference instancing: ", get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCING", "1"))
     println("dirs column is traced/reduced/edge-reduced/diagnostic-copied/production-copy-required positive turtle directions")
     println()
-    @printf("%-22s %-18s %-35s %-39s %-25s %-45s %-18s %-18s %-13s %-18s %-19s %-20s %-18s %-18s %-18s %-25s %-12s %-12s %-12s %-8s %-10s\n", "workload", "backend", "resolved backend", "fallback", "geometry mode", "reductions", "prepare", "profile", "turtles", "trace", "trace/dir", "count_area", "edge", "copy", "copy/dir", "dirs", "hits", "hit_util", "occupied", "max", "overflow")
+    @printf("%-22s %-18s %-35s %-25s %-45s %-18s %-18s %-13s %-18s %-19s %-20s %-18s %-18s %-18s %-25s %-12s %-12s %-12s %-8s %-10s\n", "workload", "backend", "resolved backend", "geometry mode", "reductions", "prepare", "profile", "turtles", "trace", "trace/dir", "count_area", "edge", "copy", "copy/dir", "dirs", "hits", "hit_util", "occupied", "max", "overflow")
 
     for workload in workloads
         @info "Workload" name=workload.name steps=workload.steps nodes=length(workload.scene.nodes)
@@ -1429,12 +1405,11 @@ end
 
 function _print_stage_split_result(workload_name, case_name, timing)
     @printf(
-        "%-22s %-18s edge_mode=%-18s resolved=%-26s fallback=%-30s mode=%-20s ref=%-24s reductions=%-45s prepare=%8.3f s/%8.1f MiB  turtles=%3d/%3d  trace=%9.3f ms  count_area=%9.3f ms  edge=%9.3f ms  copy=%9.3f ms  public=%8.3f s/%8.1f MiB  dirs=%5d/%5d/%5d/%5d/%5d  cache=%3d/%4d  PAR=%12.4e  NIR=%12.4e\n",
+        "%-22s %-18s edge_mode=%-18s resolved=%-26s mode=%-20s ref=%-24s reductions=%-45s prepare=%8.3f s/%8.1f MiB  turtles=%3d/%3d  trace=%9.3f ms  count_area=%9.3f ms  edge=%9.3f ms  copy=%9.3f ms  public=%8.3f s/%8.1f MiB  dirs=%5d/%5d/%5d/%5d/%5d  cache=%3d/%4d  PAR=%12.4e  NIR=%12.4e\n",
         workload_name,
         case_name,
         string(timing.edge_accumulation),
         timing.resolved_backend,
-        string(timing.fallback_reason),
         string(timing.geometry_mode),
         string(timing.ref_instancing_status),
         timing.reduction_capabilities,
@@ -1463,7 +1438,6 @@ function _print_stage_split_result(workload_name, case_name, timing)
             workload=workload_name,
             backend=case_name,
             resolved_backend=timing.resolved_backend,
-            fallback_reason=timing.fallback_reason,
             geometry_mode=timing.geometry_mode,
             reduction_capabilities=timing.reduction_capabilities,
             edge_accumulation=timing.edge_accumulation,
@@ -1569,12 +1543,11 @@ function main_stage_split()
             prepare_speedup = result.prepare_seconds == 0 ? Inf : base.prepare_seconds / result.prepare_seconds
             public_speedup = result.public_output_seconds == 0 ? Inf : base.public_output_seconds / result.public_output_seconds
             @printf(
-                "%-22s %-18s edge_mode=%-18s resolved=%-26s fallback=%-30s mode=%-20s ref=%-24s reductions=%-45s prepare_speedup=%7.3fx  public_speedup=%7.3fx\n",
+                "%-22s %-18s edge_mode=%-18s resolved=%-26s mode=%-20s ref=%-24s reductions=%-45s prepare_speedup=%7.3fx  public_speedup=%7.3fx\n",
                 result.workload,
                 result.backend,
                 string(result.edge_accumulation),
                 result.resolved_backend,
-                string(result.fallback_reason),
                 string(result.geometry_mode),
                 string(result.ref_instancing_status),
                 result.reduction_capabilities,
@@ -1615,11 +1588,10 @@ function _print_prepare_breakdown_result(workload_name, case_name, timing)
         timing.stack_retry.mib +
         timing.cache_mode_phase.mib
     @printf(
-        "%-22s %-18s resolved=%-26s fallback=%-30s mode=%-20s reductions=%-45s prepared=%-22s raycore=%-22s validation=%-22s retry=%-22s stack_validation=%-22s stack_retry=%-22s total=%7.3f s/%8.1f MiB  instances=%5d  geometries=%5d  chunked=%5s  ratio=%6.3f  ref=%7d  gpu=%7d  retry=%s  stack_hit=%6.3f  stack_occ=%6.3f  stack_ref=%7d  stack_gpu=%7d  stack_retry=%s\n",
+        "%-22s %-18s resolved=%-26s mode=%-20s reductions=%-45s prepared=%-22s raycore=%-22s validation=%-22s retry=%-22s stack_validation=%-22s stack_retry=%-22s total=%7.3f s/%8.1f MiB  instances=%5d  geometries=%5d  chunked=%5s  ratio=%6.3f  ref=%7d  gpu=%7d  retry=%s  stack_hit=%6.3f  stack_occ=%6.3f  stack_ref=%7d  stack_gpu=%7d  stack_retry=%s\n",
         workload_name,
         case_name,
         timing.resolved_backend,
-        string(timing.fallback_reason),
         string(timing.geometry_mode),
         timing.reduction_capabilities,
         _format_phase(timing.prepared),
@@ -1647,7 +1619,6 @@ function _print_prepare_breakdown_result(workload_name, case_name, timing)
         workload=workload_name,
         backend=case_name,
         resolved_backend=timing.resolved_backend,
-        fallback_reason=timing.fallback_reason,
         reduction_capabilities=timing.reduction_capabilities,
         prepared_seconds=timing.prepared.seconds,
         raycore_seconds=timing.raycore.seconds,
@@ -1687,7 +1658,7 @@ function main_prepare_breakdown()
     println("reference instancing: ", get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCING", "1"))
     println("phase cells report median seconds / median allocated MiB")
     println()
-    @printf("%-22s %-18s %-35s %-39s %-25s %-45s %-22s %-22s %-22s %-22s %-21s %-13s %-14s %-9s %-10s %-9s %-9s %-8s\n", "workload", "backend", "resolved backend", "fallback", "geometry mode", "reductions", "prepared", "raycore", "validation", "retry", "total", "instances", "geometries", "chunked", "ratio", "ref", "gpu", "retry")
+    @printf("%-22s %-18s %-35s %-25s %-45s %-22s %-22s %-22s %-22s %-21s %-13s %-14s %-9s %-10s %-9s %-9s %-8s\n", "workload", "backend", "resolved backend", "geometry mode", "reductions", "prepared", "raycore", "validation", "retry", "total", "instances", "geometries", "chunked", "ratio", "ref", "gpu", "retry")
 
     for workload in workloads
         @info "Workload" name=workload.name steps=workload.steps nodes=length(workload.scene.nodes)
@@ -1734,7 +1705,6 @@ function _time_breakdown(workload, case)
         populate_mib=_median_min_max(populate_mib),
         reuse_mib=_median_min_max(reuse_mib),
         resolved_backend=last.resolved_backend,
-        fallback_reason=last.fallback_reason,
         geometry_mode=last.geometry_mode,
         reduction_capabilities=last.reduction_capabilities,
         summary=last.summary,
@@ -1747,11 +1717,10 @@ function _print_result(workload_name, case_name, build, warm)
     build_totals = _totals(build.series)
     warm_totals = _totals(warm.series)
     @printf(
-        "%-22s %-18s resolved=%-26s fallback=%-30s mode=%-20s reductions=%-45s build_median=%8.3f s  build_min=%8.3f s  cached_median=%8.3f s  PAR=%12.4e  NIR=%12.4e\n",
+        "%-22s %-18s resolved=%-26s mode=%-20s reductions=%-45s build_median=%8.3f s  build_min=%8.3f s  cached_median=%8.3f s  PAR=%12.4e  NIR=%12.4e\n",
         workload_name,
         case_name,
         build.resolved_backend,
-        string(build.fallback_reason),
         string(build.geometry_mode),
         build.reduction_capabilities,
         build.median,
@@ -1764,7 +1733,6 @@ function _print_result(workload_name, case_name, build, warm)
         workload=workload_name,
         backend=case_name,
         resolved_backend=build.resolved_backend,
-        fallback_reason=build.fallback_reason,
         geometry_mode=build.geometry_mode,
         reduction_capabilities=build.reduction_capabilities,
         build_median_seconds=build.median,
@@ -1783,11 +1751,10 @@ end
 function _print_breakdown_result(workload_name, case_name, timing)
     summary = timing.summary
     @printf(
-        "%-22s %-18s resolved=%-26s fallback=%-30s mode=%-20s reductions=%-45s construct=%8.3f s/%8.1f MiB  prepare=%8.3f s/%8.1f MiB  populate=%8.3f s/%8.1f MiB  reuse=%8.3f s/%8.1f MiB  cached_turtles=%3d  full_sectors=%4d  PAR=%12.4e  NIR=%12.4e\n",
+        "%-22s %-18s resolved=%-26s mode=%-20s reductions=%-45s construct=%8.3f s/%8.1f MiB  prepare=%8.3f s/%8.1f MiB  populate=%8.3f s/%8.1f MiB  reuse=%8.3f s/%8.1f MiB  cached_turtles=%3d  full_sectors=%4d  PAR=%12.4e  NIR=%12.4e\n",
         workload_name,
         case_name,
         timing.resolved_backend,
-        string(timing.fallback_reason),
         string(timing.geometry_mode),
         timing.reduction_capabilities,
         timing.construct.median,
@@ -1807,7 +1774,6 @@ function _print_breakdown_result(workload_name, case_name, timing)
         workload=workload_name,
         backend=case_name,
         resolved_backend=timing.resolved_backend,
-        fallback_reason=timing.fallback_reason,
         geometry_mode=timing.geometry_mode,
         reduction_capabilities=timing.reduction_capabilities,
         construct_median_seconds=timing.construct.median,
@@ -1923,11 +1889,10 @@ function main()
             build_speedup = base.build_median_seconds / result.build_median_seconds
             cached_speedup = base.cached_median_seconds / result.cached_median_seconds
             @printf(
-                "%-22s %-18s resolved=%-16s fallback=%-30s mode=%-20s reductions=%-45s build_speedup=%7.3fx  cached_speedup=%7.3fx\n",
+                "%-22s %-18s resolved=%-16s mode=%-20s reductions=%-45s build_speedup=%7.3fx  cached_speedup=%7.3fx\n",
                 result.workload,
                 result.backend,
                 result.resolved_backend,
-                string(result.fallback_reason),
                 string(result.geometry_mode),
                 result.reduction_capabilities,
                 build_speedup,

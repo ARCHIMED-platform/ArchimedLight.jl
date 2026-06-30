@@ -734,8 +734,6 @@ end
             @test normal_simple.sim.cache.resolved_interception_backend isa ArchimedLight.RasterCPUBackend
             @test ka_simple.sim.cache.resolved_interception_backend isa ArchimedLight.RaycoreInterceptionBackend
             @test metal_simple.sim.cache.resolved_interception_backend isa ArchimedLight.RaycoreInterceptionBackend
-            @test ka_simple.sim.cache.fallback_reason == :none
-            @test metal_simple.sim.cache.fallback_reason == :none
             _assert_totals_close(ka_simple.totals, normal_simple.totals; label=:raycore_ka_cpu)
             _assert_totals_close(metal_simple.totals, normal_simple.totals; label=:raycore_metal_gpu)
             simple_rows = _assert_raw_stack_sweep_ok(
@@ -861,7 +859,6 @@ end
                 interception_backend=strict_interception,
                 scattering_backend=ArchimedLight.RaycoreScatteringBackend(strict_interception),
             )
-            @test strict_cache.fallback_reason == :none
             @test strict_cache.resolved_interception_backend isa ArchimedLight.RaycoreInterceptionBackend
             @test strict_cache.raycore_data !== nothing
             @test strict_cache.raycore_data.geometry_mode in (:merged_mesh, :chunked_merged_mesh)
@@ -922,7 +919,6 @@ end
                 @test all(row -> row.backend == "raycore_metal_gpu", complexity_rows)
                 @test all(row -> row.status == "ok", complexity_rows)
                 @test all(row -> row.resolved_backend == "RaycoreInterceptionBackend", complexity_rows)
-                @test all(row -> row.fallback_reason == :none, complexity_rows)
                 @test all(row -> row.geometry_mode != :none, complexity_rows)
                 @test all(row -> row.raycore_tlas_instances > 0, complexity_rows)
                 coffee_complexity = only(row for row in complexity_rows if row.scene == "coffee_docs")
@@ -952,7 +948,6 @@ end
                 fake_row = _error_case_result(fake_error, (name="raycore_metal_gpu",))
                 @test fake_row.status == "error"
                 @test fake_row.resolved_backend == "RaycoreInterceptionBackend"
-                @test fake_row.fallback_reason == :raycore_stack_trace_validation
                 @test fake_row.error_reason == :raycore_stack_trace_validation
                 @test fake_row.error_stage == :complexity
                 @test fake_row.validation_hit_ratio == 0.5
