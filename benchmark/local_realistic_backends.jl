@@ -47,7 +47,13 @@ const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHU
                                      parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
                                      nothing
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
-const BENCH_ALLOW_FALLBACK = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "0")) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(
+    get(
+        ENV,
+        "ARCHIMEDLIGHT_BENCH_VALIDATE",
+        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
+    ),
+) in ("1", "true", "yes", "on")
 
 function _split_symbol_values(raw::AbstractString)
     return [Symbol(strip(value)) for value in split(raw, ',') if !isempty(strip(value))]
@@ -131,7 +137,7 @@ function _raycore_case(name, backend; edge_accumulation::Symbol=BENCH_EDGE_ACCUM
         max_hits_per_pixel=_env_int("ARCHIMEDLIGHT_BENCH_MAX_HITS", 32),
         workgroupsize=_env_int("ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE", 256),
         edge_accumulation=edge_accumulation,
-        allow_fallback=BENCH_ALLOW_FALLBACK,
+        validate=BENCH_VALIDATE,
     )
     BENCH_MAX_PRECHUNK_INSTANCES !== nothing &&
         (kwargs = merge(kwargs, (; max_prechunk_instances=BENCH_MAX_PRECHUNK_INSTANCES)))
@@ -730,7 +736,7 @@ function _selftest_raycore_case()
         backend=KernelAbstractions.CPU(),
         max_hits_per_pixel=8,
         edge_accumulation=:dense_atomic,
-        allow_fallback=false,
+        validate=true,
     )
     return (
         name="raycore_ka_cpu",
@@ -1165,14 +1171,12 @@ function _time_prepare_breakdown_once(workload, case)
         )
         prechunk_status = prechunk_timed.value
         if prechunk_status.exceeded
-            ArchimedLight._raycore_throw_if_fallback_disabled(
+            ArchimedLight._raycore_throw_validation_error(
                 ib.config,
                 :raycore_prechunk_instance_cap,
                 :benchmark_prepare_breakdown,
                 prechunk_status,
             )
-            fallback_reason = :raycore_prechunk_instance_cap
-            resolved_backend = ArchimedLight.RasterCPUBackend()
         else
             raycore_timed = @timed ArchimedLight._raycore_initial_scene_data(
                 prepared,
@@ -1206,16 +1210,12 @@ function _time_prepare_breakdown_once(workload, case)
                 raycore_was_chunked = true
                 retry_used = true
             else
-                ArchimedLight._raycore_throw_if_fallback_disabled(
+                ArchimedLight._raycore_throw_validation_error(
                     ib.config,
                     :raycore_trace_validation,
                     :benchmark_prepare_breakdown,
                     chunked_validation,
                 )
-                fallback_reason = :raycore_trace_validation
-                resolved_backend = ArchimedLight.RasterCPUBackend()
-                raycore_data = nothing
-                validation = chunked_validation
             end
         end
     end
@@ -1239,16 +1239,12 @@ function _time_prepare_breakdown_once(workload, case)
                 raycore_was_chunked = true
                 stack_retry_used = true
             else
-                ArchimedLight._raycore_throw_if_fallback_disabled(
+                ArchimedLight._raycore_throw_validation_error(
                     ib.config,
                     :raycore_stack_trace_validation,
                     :benchmark_prepare_breakdown,
                     chunked_validation,
                 )
-                fallback_reason = :raycore_stack_trace_validation
-                resolved_backend = ArchimedLight.RasterCPUBackend()
-                raycore_data = nothing
-                stack_validation = chunked_validation
             end
         end
     end

@@ -268,7 +268,7 @@ function _raw_config(backend, max_hits)
         workgroupsize=RAW_WORKGROUPSIZE,
         hit_epsilon=RAW_HIT_EPSILON,
         max_prechunk_instances=0,
-        allow_fallback=false,
+        validate=true,
     )
 end
 

@@ -17,7 +17,7 @@ struct RasterCPUBackend <: InterceptionBackend end
         max_hits_per_pixel=32, hit_epsilon=1.0f-4,
         edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
         propagation_backend=:auto, max_prechunk_instances=nothing,
-        scattering_eltype=nothing, allow_fallback=true)
+        scattering_eltype=nothing, validate=false)
 
 Shared configuration for Raycore-based interception and scattering backends.
 When `workgroupsize` is omitted, ArchimedLight uses a default of `256`. The
@@ -29,11 +29,11 @@ hit stacks when the loaded Raycore version supports that sentinel.
 `propagation_backend=:auto` uses the shared CPU dense solver for
 KernelAbstractions CPU and for large GPU graphs; small GPU graphs use device
 propagation. Use `:device` or `:cpu` to force either path.
-`max_prechunk_instances` limits how many BLAS instances non-CPU validation
-prechunking can create before falling back to the normal CPU backend; pass `0`
-or a negative value to disable the cap.
-`allow_fallback=false` makes Raycore validation and capability failures throw a
-`RaycoreValidationError` instead of silently resolving to `RasterCPUBackend`.
+`max_prechunk_instances` limits how many BLAS instances non-CPU prechunking can
+create; pass `0` or a negative value to disable the cap.
+`validate=true` compares non-CPU Raycore traces against the CPU reference before
+running and throws `RaycoreValidationError` on mismatch. Validation is disabled
+by default, and Raycore backends never implicitly fall back to `RasterCPUBackend`.
 """
 struct RaycoreBackendConfig{B}
     backend::B
@@ -45,7 +45,7 @@ struct RaycoreBackendConfig{B}
     propagation_backend::Symbol
     max_prechunk_instances::Int
     scattering_eltype::DataType
-    allow_fallback::Bool
+    validate::Bool
 
     function RaycoreBackendConfig(
         backend::B,
@@ -57,7 +57,7 @@ struct RaycoreBackendConfig{B}
         propagation_backend::Symbol,
         max_prechunk_instances::Integer,
         scattering_eltype::Type{<:AbstractFloat},
-        allow_fallback::Bool,
+        validate::Bool,
     ) where {B}
         workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
         max_hits_per_pixel > 0 || error("RaycoreBackendConfig max_hits_per_pixel must be positive.")
@@ -80,7 +80,7 @@ struct RaycoreBackendConfig{B}
             propagation_backend,
             max_prechunk_instances_value <= 0 ? typemax(Int) : max_prechunk_instances_value,
             scattering_eltype,
-            allow_fallback,
+            validate,
         )
     end
 end
@@ -118,8 +118,18 @@ function RaycoreBackendConfig(;
     propagation_backend::Symbol=:auto,
     max_prechunk_instances::Union{Nothing,Integer}=nothing,
     scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
-    allow_fallback::Bool=true,
+    validate::Bool=false,
+    allow_fallback::Union{Nothing,Bool}=nothing,
 )
+    if allow_fallback !== nothing
+        validate = !allow_fallback
+        Base.depwarn(
+            "`allow_fallback` is deprecated for RaycoreBackendConfig. Raycore " *
+            "backends no longer fall back to RasterCPUBackend; use `validate=true` " *
+            "to enable CPU reference validation.",
+            :RaycoreBackendConfig,
+        )
+    end
     return RaycoreBackendConfig(
         backend,
         workgroupsize === nothing ? _raycore_default_workgroupsize(backend) : workgroupsize,
@@ -130,7 +140,7 @@ function RaycoreBackendConfig(;
         propagation_backend,
         max_prechunk_instances === nothing ? _raycore_default_max_prechunk_instances() : max_prechunk_instances,
         scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
-        allow_fallback,
+        validate,
     )
 end
 
@@ -157,7 +167,7 @@ function _raycore_config_with(
     propagation_backend=config.propagation_backend,
     max_prechunk_instances=config.max_prechunk_instances,
     scattering_eltype=config.scattering_eltype,
-    allow_fallback=config.allow_fallback,
+    validate=config.validate,
 )
     return RaycoreBackendConfig(
         backend,
@@ -169,7 +179,7 @@ function _raycore_config_with(
         propagation_backend,
         max_prechunk_instances,
         scattering_eltype,
-        allow_fallback,
+        validate,
     )
 end
 
@@ -213,8 +223,18 @@ function RaycoreScatteringBackend(
     dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
     propagation_backend::Symbol=interception_backend.config.propagation_backend,
     max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
-    allow_fallback::Bool=interception_backend.config.allow_fallback,
+    validate::Bool=interception_backend.config.validate,
+    allow_fallback::Union{Nothing,Bool}=nothing,
 )
+    if allow_fallback !== nothing
+        validate = !allow_fallback
+        Base.depwarn(
+            "`allow_fallback` is deprecated for RaycoreScatteringBackend. Raycore " *
+            "backends no longer fall back to RasterCPUBackend; use `validate=true` " *
+            "to enable CPU reference validation.",
+            :RaycoreScatteringBackend,
+        )
+    end
     return RaycoreScatteringBackend(
         _raycore_config_with(
             interception_backend.config;
@@ -222,7 +242,7 @@ function RaycoreScatteringBackend(
             dense_edge_limit_bytes=dense_edge_limit_bytes,
             propagation_backend=propagation_backend,
             max_prechunk_instances=max_prechunk_instances,
-            allow_fallback=allow_fallback,
+            validate=validate,
         ),
     )
 end

@@ -111,6 +111,7 @@ function _raycore_backends(; metal=false)
         backend=backend,
         max_hits_per_pixel=_env_int("ARCHIMEDLIGHT_TEST_GPU_MAX_HITS", 32),
         workgroupsize=_env_int("ARCHIMEDLIGHT_TEST_GPU_WORKGROUPSIZE", 256),
+        validate=true,
     )
     return (
         interception=interception,
@@ -408,31 +409,31 @@ end
             if METAL_REQUESTED
                 metal = _raycore_backends(; metal=true)
                 if metal !== nothing
-                    metal_run = _run_sky_series(
-                        "raycore_metal_gpu_large",
-                        fixture.scene,
-                        fixture.models,
-                        fixture.skies,
-                        fixture.options;
-                        interception_backend=metal.interception,
-                        scattering_backend=metal.scattering,
-                    )
-                    metal_series = metal_run.series
-                    @test length(metal_series) == length(fixture.skies)
-                    foreach(_assert_valid_step, metal_series)
-                    resolved = metal_run.sim.cache === nothing ? nothing : metal_run.sim.cache.resolved_interception_backend
-                    if resolved isa ArchimedLight.RaycoreInterceptionBackend
-                        _assert_series_close(metal_series, ka_series; label="large_raycore_metal_vs_ka_cpu", rtol=2e-2, atol=1e-2)
-                    elseif fixture.source == "XPalm VPalm" && resolved isa ArchimedLight.RasterCPUBackend
-                        @test resolved isa ArchimedLight.RasterCPUBackend
-                        @test metal_run.sim.cache.fallback_reason in (
-                            :raycore_prechunk_instance_cap,
-                            :raycore_trace_validation,
-                            :raycore_stack_trace_validation,
+                    metal_run = try
+                        _run_sky_series(
+                            "raycore_metal_gpu_large",
+                            fixture.scene,
+                            fixture.models,
+                            fixture.skies,
+                            fixture.options;
+                            interception_backend=metal.interception,
+                            scattering_backend=metal.scattering,
                         )
-                        @info "XPalm Metal large scene used guarded raster fallback." reason=metal_run.sim.cache.fallback_reason
-                    else
+                    catch err
+                        @test err isa ArchimedLight.RaycoreValidationError
+                        if !(err isa ArchimedLight.RaycoreValidationError)
+                            rethrow()
+                        end
+                        @info "Metal large scene failed explicit Raycore validation." reason=err.reason stage=err.stage
+                        nothing
+                    end
+                    if metal_run !== nothing
+                        metal_series = metal_run.series
+                        @test length(metal_series) == length(fixture.skies)
+                        foreach(_assert_valid_step, metal_series)
+                        resolved = metal_run.sim.cache === nothing ? nothing : metal_run.sim.cache.resolved_interception_backend
                         @test resolved isa ArchimedLight.RaycoreInterceptionBackend
+                        _assert_series_close(metal_series, ka_series; label="large_raycore_metal_vs_ka_cpu", rtol=2e-2, atol=1e-2)
                     end
                 end
             else

@@ -49,7 +49,13 @@ const BENCH_WORKGROUPSIZE = haskey(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE") ?
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
 const BENCH_EXECUTION = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_EXECUTION", "oneshot"))
 const BENCH_COMPONENTS = split(lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_COMPONENTS", "first_order,scattering,topology,propagation")), ',')
-const BENCH_ALLOW_FALLBACK = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "0")) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(
+    get(
+        ENV,
+        "ARCHIMEDLIGHT_BENCH_VALIDATE",
+        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
+    ),
+) in ("1", "true", "yes", "on")
 
 const BENCH_SECTOR_VALUES =
     something(_split_env_values("ARCHIMEDLIGHT_BENCH_SECTOR_SWEEP", x -> parse(Int, x)), [BENCH_SECTORS])
@@ -177,7 +183,7 @@ function _raycore_interception_backend(backend; max_hits::Int, workgroupsize, ed
         backend=backend,
         max_hits_per_pixel=max_hits,
         edge_accumulation=edge_accumulation,
-        allow_fallback=BENCH_ALLOW_FALLBACK,
+        validate=BENCH_VALIDATE,
     )
     max_prechunk_instances !== nothing && (kwargs = merge(kwargs, (; max_prechunk_instances=max_prechunk_instances)))
     if workgroupsize === nothing
@@ -446,7 +452,6 @@ end
 function _cache_backend_info(cache)
     return (
         resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
-        fallback_reason=cache.fallback_reason,
         geometry_mode=cache.raycore_data === nothing ? :none : cache.raycore_data.geometry_mode,
         reduction_capabilities=_raycore_reduction_capabilities(cache.raycore_data),
     )
@@ -456,7 +461,6 @@ function _state_backend_info(state)
     state === nothing && return nothing
     return (
         resolved_backend=string(nameof(typeof(state.resolved_interception_backend))),
-        fallback_reason=state.fallback_reason,
         geometry_mode=state.raycore_data === nothing ? :none : state.raycore_data.geometry_mode,
         reduction_capabilities=_raycore_reduction_capabilities(state.raycore_data),
     )
@@ -469,9 +473,6 @@ function _backend_result_label(case, backend_info)
     resolved_backend == expected && return case.name
     return "$(case.name)->$(resolved_backend)"
 end
-
-_fallback_result_label(backend_info) =
-    backend_info === nothing ? "" : string(backend_info.fallback_reason)
 
 _geometry_mode_result_label(backend_info) =
     backend_info === nothing ? "" : string(backend_info.geometry_mode)
@@ -546,7 +547,6 @@ function _prepared_topology_state(scene, models, meteo_row, options, case)
         raycore_data=cache.raycore_data,
         backend=backend,
         resolved_interception_backend=cache.resolved_interception_backend,
-        fallback_reason=cache.fallback_reason,
     )
 end
 
@@ -643,7 +643,6 @@ function _stack_trace_state(scene, models, meteo_row, options, case)
         raycore_data=cache.raycore_data,
         directions=directions,
         resolved_interception_backend=cache.resolved_interception_backend,
-        fallback_reason=cache.fallback_reason,
     )
 end
 
@@ -696,7 +695,7 @@ end
 function _stack_trace_summary(state, stats)
     state === nothing && return ""
     if state.raycore_data === nothing
-        return ",resolved=$(nameof(typeof(state.resolved_interception_backend))),fallback=$(state.fallback_reason),stack_trace=skipped"
+        return ",resolved=$(nameof(typeof(state.resolved_interception_backend))),stack_trace=skipped"
     end
     return @sprintf(
         ",hit_util=%.2f%%,max_seen=%d,occupied=%.2f%%,overflow=%s",
@@ -823,19 +822,17 @@ function _stack_profile_benchmark_call(scene, models, meteo_row, options, case)
 end
 
 function _print_markdown_table(results)
-    println("| workload | backend | resolved | fallback | mode | reductions | median ms | min ms | max ms | median alloc MiB |")
-    println("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    println("| workload | backend | resolved | mode | reductions | median ms | min ms | max ms | median alloc MiB |")
+    println("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for row in results
         resolved = hasproperty(row, :resolved_backend) ? string(row.resolved_backend) : ""
-        fallback = hasproperty(row, :fallback_reason) ? string(row.fallback_reason) : ""
         geometry_mode = hasproperty(row, :geometry_mode) ? string(row.geometry_mode) : ""
         reductions = hasproperty(row, :reduction_capabilities) ? string(row.reduction_capabilities) : ""
         @printf(
-            "| %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f |\n",
+            "| %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f |\n",
             row.workload,
             row.backend,
             resolved,
-            fallback,
             geometry_mode,
             reductions,
             row.median_ms,
@@ -904,7 +901,6 @@ function _append_variant_results!(
                         workload=_variant_label("first_order", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
                         backend=_backend_result_label(case, backend_info),
                         resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                        fallback_reason=_fallback_result_label(backend_info),
                         geometry_mode=_geometry_mode_result_label(backend_info),
                         reduction_capabilities=_reduction_capability_label(backend_info),
                     ),
@@ -922,7 +918,6 @@ function _append_variant_results!(
                         workload=_variant_label("scattering", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
                         backend=_backend_result_label(case, backend_info),
                         resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                        fallback_reason=_fallback_result_label(backend_info),
                         geometry_mode=_geometry_mode_result_label(backend_info),
                         reduction_capabilities=_reduction_capability_label(backend_info),
                     ),
@@ -940,7 +935,6 @@ function _append_variant_results!(
                         workload=_variant_label("topology", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
                         backend=_backend_result_label(case, backend_info),
                         resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                        fallback_reason=_fallback_result_label(backend_info),
                         geometry_mode=_geometry_mode_result_label(backend_info),
                         reduction_capabilities=_reduction_capability_label(backend_info),
                     ),
@@ -958,7 +952,6 @@ function _append_variant_results!(
                         workload=_variant_label("propagation", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
                         backend=_backend_result_label(case, backend_info),
                         resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                        fallback_reason=_fallback_result_label(backend_info),
                         geometry_mode=_geometry_mode_result_label(backend_info),
                         reduction_capabilities=_reduction_capability_label(backend_info),
                     ),
@@ -976,7 +969,6 @@ function _append_variant_results!(
                         workload=_variant_label("integration", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation),
                         backend=_backend_result_label(case, backend_info),
                         resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                        fallback_reason=_fallback_result_label(backend_info),
                         geometry_mode=_geometry_mode_result_label(backend_info),
                         reduction_capabilities=_reduction_capability_label(backend_info),
                     ),
@@ -994,7 +986,6 @@ function _append_variant_results!(
                             workload=_variant_label("stack_trace", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation; extra=trace_summary),
                             backend=case.name,
                             resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                            fallback_reason=_fallback_result_label(backend_info),
                             geometry_mode=_geometry_mode_result_label(backend_info),
                             reduction_capabilities=_reduction_capability_label(backend_info),
                         ),
@@ -1014,7 +1005,6 @@ function _append_variant_results!(
                             workload=_variant_label("stack_profile", fixture, first_order_options, plot_paving, max_hits, max_prechunk_instances, workgroupsize, edge_accumulation; extra=profile_summary),
                             backend=case.name,
                             resolved_backend=backend_info === nothing ? "" : backend_info.resolved_backend,
-                            fallback_reason=_fallback_result_label(backend_info),
                             geometry_mode=_geometry_mode_result_label(backend_info),
                             reduction_capabilities=_reduction_capability_label(backend_info),
                         ),

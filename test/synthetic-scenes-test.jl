@@ -419,7 +419,7 @@ end
     end
 end
 
-@testitem "Synthetic case Raycore prechunk instance cap fallback" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
+@testitem "Synthetic case Raycore prechunk instance cap errors" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
     scene = HelperModule._synthetic_horizontal_scene([
         (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="upper", type="plate", object_id=1),
         (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.1, group="lower", type="plate", object_id=2),
@@ -444,73 +444,53 @@ end
         @test status.estimated_instances > status.max_instances
         @test status.exceeded
 
-        cache = ArchimedLight.prepare_light_cache(scene, models, options; interception_backend=ib)
-        @test cache.resolved_interception_backend isa ArchimedLight.RasterCPUBackend
-        @test cache.fallback_reason == :raycore_prechunk_instance_cap
-        @test ArchimedLight.cache_summary(cache).fallback_reason == :raycore_prechunk_instance_cap
-
-        fallback_first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=ib)
-        reference_first = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
-        @test fallback_first.projected_area_per_node == reference_first.projected_area_per_node
-        @test fallback_first.incident_power.par == reference_first.incident_power.par
-
-        strict_config = ArchimedLight.RaycoreBackendConfig(
+        cap_config = ArchimedLight.RaycoreBackendConfig(
             backend=:fake_non_cpu_backend,
             max_prechunk_instances=1,
-            allow_fallback=false,
         )
-        strict_ib = ArchimedLight.RaycoreInterceptionBackend(strict_config)
-        strict_cache_err = try
-            ArchimedLight.prepare_light_cache(scene, models, options; interception_backend=strict_ib)
+        capped_ib = ArchimedLight.RaycoreInterceptionBackend(cap_config)
+        capped_cache_err = try
+            ArchimedLight.prepare_light_cache(scene, models, options; interception_backend=capped_ib)
             nothing
         catch err
             err
         end
-        @test strict_cache_err isa ArchimedLight.RaycoreValidationError
-        @test strict_cache_err.reason == :raycore_prechunk_instance_cap
-        @test strict_cache_err.stage == :light_cache
-        @test occursin("prechunked BLAS instances", strict_cache_err.message)
+        @test capped_cache_err isa ArchimedLight.RaycoreValidationError
+        @test capped_cache_err.reason == :raycore_prechunk_instance_cap
+        @test capped_cache_err.stage == :light_cache
+        @test occursin("prechunked BLAS instances", capped_cache_err.message)
 
-        strict_first_err = try
-            ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=strict_ib)
+        capped_first_err = try
+            ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=capped_ib)
             nothing
         catch err
             err
         end
-        @test strict_first_err isa ArchimedLight.RaycoreValidationError
-        @test strict_first_err.reason == :raycore_prechunk_instance_cap
-        @test strict_first_err.stage == :first_order
+        @test capped_first_err isa ArchimedLight.RaycoreValidationError
+        @test capped_first_err.reason == :raycore_prechunk_instance_cap
+        @test capped_first_err.stage == :first_order
 
         scatter_options = HelperModule._synthetic_options(sectors=4, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true, toricity=false)
         scatter_sky = ArchimedLight.SkyState(180.0, 60.0, 100.0, 40.0, 0.8, 0.2)
         scatter_turtle = ArchimedLight.build_turtle(scatter_options, scatter_sky)
         scatter_fluxes = ArchimedLight.compute_directional_fluxes(scatter_sky, scatter_turtle, scatter_options)
         scatter_first = ArchimedLight.compute_first_order(scene, models, scatter_turtle, scatter_fluxes, scatter_options)
-        graph = ArchimedLight.build_scattering_transfer_graph(
-            scene,
-            models,
-            scatter_turtle,
-            scatter_first,
-            scatter_options;
-            backend=ArchimedLight.RaycoreScatteringBackend(ib),
-        )
-        @test graph isa ArchimedLight.ScatteringTransferGraph
-        strict_scatter_err = try
+        capped_scatter_err = try
             ArchimedLight.build_scattering_transfer_graph(
                 scene,
                 models,
                 scatter_turtle,
                 scatter_first,
                 scatter_options;
-                backend=ArchimedLight.RaycoreScatteringBackend(strict_ib),
+                backend=ArchimedLight.RaycoreScatteringBackend(capped_ib),
             )
             nothing
         catch err
             err
         end
-        @test strict_scatter_err isa ArchimedLight.RaycoreValidationError
-        @test strict_scatter_err.reason == :raycore_prechunk_instance_cap
-        @test strict_scatter_err.stage == :scattering_topology
+        @test capped_scatter_err isa ArchimedLight.RaycoreValidationError
+        @test capped_scatter_err.reason == :raycore_prechunk_instance_cap
+        @test capped_scatter_err.stage == :scattering_topology
     finally
         if old_threshold === nothing
             delete!(ENV, "ARCHIMEDLIGHT_RAYCORE_PRECHUNK_FACE_THRESHOLD")

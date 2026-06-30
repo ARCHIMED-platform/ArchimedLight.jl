@@ -258,6 +258,7 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,J,H,O,E,F,D,G,Q,A,V,M,I,U,R}
     hit_epsilon::Float32
     edge_accumulation::Symbol
     dense_edge_limit_bytes::Int
+    validate::Bool
     vertical_span::Float64
     chunked_tlas::Bool
     geometry_mode::Symbol
@@ -3990,6 +3991,7 @@ function _raycore_scene_data(
         config.hit_epsilon,
         config.edge_accumulation,
         config.dense_edge_limit_bytes,
+        config.validate,
         vertical_span,
         chunked_tlas,
         geometry_mode,
@@ -4044,6 +4046,7 @@ function _raycore_scene_data_with_static_tlas(
         data.hit_epsilon,
         data.edge_accumulation,
         data.dense_edge_limit_bytes,
+        data.validate,
         data.vertical_span,
         data.chunked_tlas,
         geometry_mode,
@@ -4381,10 +4384,8 @@ function _raycore_trace_direction_top_nodes_direct(
 end
 
 function _raycore_backend_requires_trace_validation(data::RaycoreSceneData)
-    return !(data.backend isa KernelAbstractions.CPU)
+    return data.validate && !(data.backend isa KernelAbstractions.CPU)
 end
-
-@inline _raycore_fallback_enabled(config::RaycoreBackendConfig) = config.allow_fallback
 
 function _raycore_validation_message(reason::Symbol, validation)
     reason == :raycore_prechunk_instance_cap && return _raycore_prechunk_instance_limit_message(validation)
@@ -4393,13 +4394,12 @@ function _raycore_validation_message(reason::Symbol, validation)
     return "Raycore backend failed validation for reason $reason."
 end
 
-function _raycore_throw_if_fallback_disabled(
+function _raycore_throw_validation_error(
     config::RaycoreBackendConfig,
     reason::Symbol,
     stage::Symbol,
     validation,
 )
-    _raycore_fallback_enabled(config) && return nothing
     throw(RaycoreValidationError(reason, stage, _raycore_validation_message(reason, validation), validation))
 end
 
@@ -4547,7 +4547,7 @@ function _raycore_stack_validation_cpu_data(data::RaycoreSceneData, options::Lig
         edge_accumulation=data.edge_accumulation,
         dense_edge_limit_bytes=data.dense_edge_limit_bytes,
         max_prechunk_instances=0,
-        allow_fallback=true,
+        validate=false,
     )
     return _raycore_scene_data(data.prepared, config; toricity=options.toricity)
 end
@@ -6223,14 +6223,12 @@ function compute_first_order(
     prechunk_status =
         _raycore_prechunk_instance_limit_status(prepared, backend.config; toricity=options.toricity)
     if prechunk_status.exceeded
-        _raycore_throw_if_fallback_disabled(
+        _raycore_throw_validation_error(
             backend.config,
             :raycore_prechunk_instance_cap,
             :first_order,
             prechunk_status,
         )
-        @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU first-order backend."
-        return _compute_first_order(prepared, turtle, fluxes, options)
     end
     data, data_was_chunked = _raycore_initial_scene_data(prepared, backend.config, options; toricity=options.toricity)
     validation = _raycore_vertical_trace_validation(data, options)
@@ -6247,9 +6245,7 @@ function compute_first_order(
             return _compute_first_order_raycore_top_hit(chunked_data, turtle, fluxes, options)
         end
         validation = chunked_validation
-        _raycore_throw_if_fallback_disabled(backend.config, :raycore_trace_validation, :first_order, validation)
-        @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU first-order backend."
-        return _compute_first_order(data.prepared, turtle, fluxes, options)
+        _raycore_throw_validation_error(backend.config, :raycore_trace_validation, :first_order, validation)
     end
     return _compute_first_order_raycore_top_hit(data, turtle, fluxes, options)
 end

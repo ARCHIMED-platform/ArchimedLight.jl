@@ -2224,14 +2224,12 @@ function build_scattering_transfer_graph(
             data = chunked_data
         else
             stack_validation = chunked_validation
-            _raycore_throw_if_fallback_disabled(
+            _raycore_throw_validation_error(
                 backend.config,
                 :raycore_stack_trace_validation,
                 :scattering_topology,
                 stack_validation,
             )
-            @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU scattering transfer graph backend."
-            return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
         end
     end
     pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)
@@ -2289,14 +2287,12 @@ function build_scattering_transfer_graph(
     prechunk_status =
         _raycore_prechunk_instance_limit_status(prepared, backend.config; toricity=options.toricity)
     if prechunk_status.exceeded
-        _raycore_throw_if_fallback_disabled(
+        _raycore_throw_validation_error(
             backend.config,
             :raycore_prechunk_instance_cap,
             :scattering_topology,
             prechunk_status,
         )
-        @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU scattering transfer graph backend."
-        return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
     end
     data, data_was_chunked =
         _raycore_initial_scene_data(prepared, backend.config, options; toricity=options.toricity)
@@ -2308,14 +2304,12 @@ function build_scattering_transfer_graph(
             _raycore_retry_chunked_scene_data(prepared, backend.config, options, validation; toricity=options.toricity)
         if chunked_data === nothing
             validation = chunked_validation
-            _raycore_throw_if_fallback_disabled(
+            _raycore_throw_validation_error(
                 backend.config,
                 :raycore_trace_validation,
                 :scattering_topology,
                 validation,
             )
-            @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU scattering transfer graph backend."
-            return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
         end
         data = chunked_data
         data_was_chunked = true
@@ -2334,14 +2328,12 @@ function build_scattering_transfer_graph(
             data = chunked_data
         else
             stack_validation = chunked_validation
-            _raycore_throw_if_fallback_disabled(
+            _raycore_throw_validation_error(
                 backend.config,
                 :raycore_stack_trace_validation,
                 :scattering_topology,
                 stack_validation,
             )
-            @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU scattering transfer graph backend."
-            return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
         end
     end
     pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)

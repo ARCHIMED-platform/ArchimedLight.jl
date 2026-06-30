@@ -121,7 +121,7 @@ function _raw_stack_sweep(
                 backend=KernelAbstractions.CPU(),
                 max_hits_per_pixel=max_hits,
                 hit_epsilon=hit_epsilon,
-                allow_fallback=false,
+                validate=true,
             );
             toricity=options.toricity,
             face_chunk_limit=face_chunk_limit,
@@ -132,7 +132,7 @@ function _raw_stack_sweep(
                 backend=backend,
                 max_hits_per_pixel=max_hits,
                 hit_epsilon=hit_epsilon,
-                allow_fallback=false,
+                validate=true,
             );
             toricity=options.toricity,
             face_chunk_limit=face_chunk_limit,
@@ -663,7 +663,7 @@ end
                     ArchimedLight.RaycoreBackendConfig(
                         backend=KernelAbstractions.CPU(),
                         max_hits_per_pixel=8,
-                        allow_fallback=false,
+                        validate=true,
                     );
                     toricity=raw_options.toricity,
                 )
@@ -672,7 +672,7 @@ end
                     ArchimedLight.RaycoreBackendConfig(
                         backend=backend,
                         max_hits_per_pixel=8,
-                        allow_fallback=false,
+                        validate=true,
                     );
                     toricity=raw_options.toricity,
                 )
@@ -708,7 +708,7 @@ end
             ka_interception = ArchimedLight.RaycoreInterceptionBackend(
                 backend=KernelAbstractions.CPU(),
                 max_hits_per_pixel=64,
-                allow_fallback=false,
+                validate=true,
             )
             ka_simple = _run_single_sky(
                 simple_scene,
@@ -721,7 +721,7 @@ end
             metal_interception = ArchimedLight.RaycoreInterceptionBackend(
                 backend=backend,
                 max_hits_per_pixel=64,
-                allow_fallback=false,
+                validate=true,
             )
             metal_simple = _run_single_sky(
                 simple_scene,
@@ -852,7 +852,7 @@ end
             strict_interception = ArchimedLight.RaycoreInterceptionBackend(
                 backend=backend,
                 max_hits_per_pixel=64,
-                allow_fallback=false,
+                validate=true,
             )
             strict_cache = ArchimedLight.prepare_light_cache(
                 coffee_scene,
@@ -874,7 +874,7 @@ end
             complexity_script = joinpath(@__DIR__, "..", "..", "benchmark", "scene_complexity_sweep.jl")
             complexity_env = Dict(
                 "ARCHIMEDLIGHT_BENCH_METAL" => get(ENV, "ARCHIMEDLIGHT_BENCH_METAL", nothing),
-                "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK" => get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", nothing),
+                "ARCHIMEDLIGHT_BENCH_VALIDATE" => get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", nothing),
                 "ARCHIMEDLIGHT_COMPLEXITY_BACKENDS" => get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_BACKENDS", nothing),
                 "ARCHIMEDLIGHT_COMPLEXITY_SCENES" => get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SCENES", nothing),
                 "ARCHIMEDLIGHT_COMPLEXITY_SECTORS" => get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SECTORS", nothing),
@@ -902,7 +902,7 @@ end
                 )
                 complexity_scenes = isfile(agripv_opf) ? "simple,coffee,complex" : "simple,coffee"
                 ENV["ARCHIMEDLIGHT_BENCH_METAL"] = "required"
-                ENV["ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK"] = "0"
+                ENV["ARCHIMEDLIGHT_BENCH_VALIDATE"] = "1"
                 ENV["ARCHIMEDLIGHT_COMPLEXITY_BACKENDS"] = "raycore_metal_gpu"
                 ENV["ARCHIMEDLIGHT_COMPLEXITY_SCENES"] = complexity_scenes
                 ENV["ARCHIMEDLIGHT_COMPLEXITY_SECTORS"] = "6"

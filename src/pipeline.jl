@@ -2322,7 +2322,6 @@ mutable struct LightSimulationCache
     options::LightOptions
     interception_backend::Any
     resolved_interception_backend::InterceptionBackend
-    fallback_reason::Symbol
     scattering_mode::Symbol
     scattering_backend::Union{Nothing,ScatteringBackend}
     prepared::Union{Nothing,PreparedInterceptionData}
@@ -2447,21 +2446,16 @@ function prepare_light_cache(
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
     raycore_data = nothing
     raycore_data_was_chunked = false
-    fallback_reason = :none
     if ib isa RaycoreInterceptionBackend && prepared !== nothing
         prechunk_status =
             _raycore_prechunk_instance_limit_status(prepared, ib.config; toricity=options.toricity)
         if prechunk_status.exceeded
-            _raycore_throw_if_fallback_disabled(
+            _raycore_throw_validation_error(
                 ib.config,
                 :raycore_prechunk_instance_cap,
                 :light_cache,
                 prechunk_status,
             )
-            @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU light backend for this simulation cache."
-            ib = RasterCPUBackend()
-            fallback_reason = :raycore_prechunk_instance_cap
-            scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
         else
             raycore_data, raycore_data_was_chunked =
                 _raycore_initial_scene_data(prepared, ib.config, options; toricity=options.toricity)
@@ -2483,17 +2477,12 @@ function prepare_light_cache(
                 raycore_data_was_chunked = true
             else
                 validation = chunked_validation
-                _raycore_throw_if_fallback_disabled(
+                _raycore_throw_validation_error(
                     ib.config,
                     :raycore_trace_validation,
                     :light_cache,
                     validation,
                 )
-                @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU light backend for this simulation cache."
-                ib = RasterCPUBackend()
-                raycore_data = nothing
-                fallback_reason = :raycore_trace_validation
-                scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
             end
         end
     end
@@ -2513,17 +2502,12 @@ function prepare_light_cache(
                 raycore_data_was_chunked = true
             else
                 stack_validation = chunked_validation
-                _raycore_throw_if_fallback_disabled(
+                _raycore_throw_validation_error(
                     ib.config,
                     :raycore_stack_trace_validation,
                     :light_cache,
                     stack_validation,
                 )
-                @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU light backend for this simulation cache."
-                ib = RasterCPUBackend()
-                raycore_data = nothing
-                fallback_reason = :raycore_stack_trace_validation
-                scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
             end
         end
     end
@@ -2534,7 +2518,6 @@ function prepare_light_cache(
         options,
         interception_backend,
         ib,
-        fallback_reason,
         scattering_mode,
         scattering_backend,
         prepared,
@@ -2561,7 +2544,6 @@ function cache_summary(cache::LightSimulationCache)
         )
     return (
         mode=cache.mode,
-        fallback_reason=cache.fallback_reason,
         estimated_entry_bytes=cache.estimated_entry_bytes,
         resident_bytes=cache.resident_bytes,
         cached_turtle_count=length(cache.entries),
@@ -2685,7 +2667,6 @@ function cache_summary(sim::LightSimulation)
         cached_sector_count=0,
         cached_full_response_sector_count=0,
         memory_limit_bytes=sim.memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(sim.memory_limit_bytes),
-        fallback_reason=:none,
         full_response_enabled=false,
     )
     return cache_summary(sim.cache)

@@ -25,7 +25,13 @@ const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMU
 const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES") ?
                                      parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
                                      nothing
-const BENCH_ALLOW_FALLBACK = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "0")) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(
+    get(
+        ENV,
+        "ARCHIMEDLIGHT_BENCH_VALIDATE",
+        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
+    ),
+) in ("1", "true", "yes", "on")
 
 function _split_float_env(name::AbstractString, default::Vector{Float64})
     raw = get(ENV, name, "")
@@ -60,7 +66,7 @@ function _raycore_interception_backend(backend)
         max_hits_per_pixel=BENCH_MAX_HITS,
         workgroupsize=BENCH_WORKGROUPSIZE,
         edge_accumulation=BENCH_EDGE_ACCUMULATION,
-        allow_fallback=BENCH_ALLOW_FALLBACK,
+        validate=BENCH_VALIDATE,
     )
     BENCH_MAX_PRECHUNK_INSTANCES !== nothing &&
         (kwargs = merge(kwargs, (; max_prechunk_instances=BENCH_MAX_PRECHUNK_INSTANCES)))
@@ -327,7 +333,6 @@ function _time_once(workload, options, case)
         reuse_seconds=reuse.time,
         reuse_mib=_mib(reuse.bytes),
         resolved_backend=cache === nothing ? "unprepared" : string(nameof(typeof(cache.resolved_interception_backend))),
-        fallback_reason=cache === nothing ? :unprepared : cache.fallback_reason,
         geometry_mode=shape.geometry_mode,
         raycore_chunked=shape.chunked_tlas,
         raycore_tlas_instances=shape.tlas_instances,
@@ -379,7 +384,6 @@ function _error_case_result(err, case)
         reuse_seconds=NaN,
         reuse_mib=NaN,
         resolved_backend=case.name == "normal_cpu" ? "RasterCPUBackend" : "RaycoreInterceptionBackend",
-        fallback_reason=is_validation ? err.reason : :exception,
         geometry_mode=:error,
         raycore_chunked=false,
         raycore_tlas_instances=0,
@@ -431,7 +435,6 @@ function _benchmark_case(workload, options, case)
             :validation_directions_tested,
             :validation_direction_count,
             :resolved_backend,
-            :fallback_reason,
             :geometry_mode,
             :raycore_chunked,
             :raycore_tlas_instances,
@@ -462,7 +465,6 @@ function _benchmark_case(workload, options, case)
             last.validation_directions_tested,
             last.validation_direction_count,
             last.resolved_backend,
-            last.fallback_reason,
             last.geometry_mode,
             last.raycore_chunked,
             last.raycore_tlas_instances,
@@ -520,8 +522,8 @@ function main()
     println("backends: ", join((c.name for c in cases), ", "))
     println("output: ", BENCH_OUTPUT)
     println()
-    @printf("%-20s %-16s %-7s %8s %7s %8s %8s %9s %11s %-18s %-26s %-24s %10s %10s %10s %10s %10s %10s %10s %9s %9s\n",
-        "scene", "backend", "status", "pixel", "dirs", "nodes", "faces", "pixels", "resolved", "fallback", "mode", "reductions",
+    @printf("%-20s %-16s %-7s %8s %7s %8s %8s %9s %11s %-26s %-24s %10s %10s %10s %10s %10s %10s %10s %9s %9s\n",
+        "scene", "backend", "status", "pixel", "dirs", "nodes", "faces", "pixels", "resolved", "mode", "reductions",
         "prepare", "populate", "reuse", "prep MiB", "pop MiB", "reuse MiB", "PAR d%", "tlas", "scratch")
 
     for workload in workloads
@@ -559,7 +561,7 @@ function main()
                 nir_delta = base === nothing || row.status != "ok" ? NaN : 100 * _relative_delta(row.incident_nir, base.incident_nir)
                 full_row = merge(row, (par_delta_percent=par_delta, nir_delta_percent=nir_delta))
                 push!(results, full_row)
-                @printf("%-20s %-16s %-7s %8.4f %7d %8d %8d %9d %-11s %-18s %-26s %-24s %10.3f %10.3f %10.3f %10.1f %10.1f %10.1f %10.3f %9s %9s\n",
+                @printf("%-20s %-16s %-7s %8.4f %7d %8d %8d %9d %-11s %-26s %-24s %10.3f %10.3f %10.3f %10.1f %10.1f %10.1f %10.3f %9s %9s\n",
                     full_row.scene,
                     full_row.backend,
                     full_row.status,
@@ -569,7 +571,6 @@ function main()
                     full_row.faces,
                     full_row.pixel_cells,
                     full_row.resolved_backend,
-                    string(full_row.fallback_reason),
                     string(full_row.geometry_mode),
                     full_row.reduction_capabilities,
                     full_row.prepare_seconds,

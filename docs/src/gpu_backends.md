@@ -116,43 +116,42 @@ step = ArchimedLight.run_light_step(
 )
 ```
 
-## Validation And Fallback
+## Validation
 
-Before using a non-CPU Raycore backend in a cached `LightSimulation`,
-ArchimedLight validates the backend with a vertical top-hit trace against a
-normal CPU reference. If the backend misses too much CPU-visible top area, the
-simulation falls back to `RasterCPUBackend` instead of returning silently
-invalid light budgets.
+Raycore backend selection is explicit. If you pass a non-CPU Raycore backend,
+ArchimedLight runs that Raycore backend directly. It does not validate against
+the CPU reference by default. Choose `RasterCPUBackend()` or `:raster_cpu` explicitly
+when you want CPU behavior.
 
-This guard is especially important for large realistic scenes. On Apple
-Silicon, the bundled coffee scene can fail an unchunked Metal TLAS trace even
-though smaller scenes remain valid. ArchimedLight therefore prechunks large
-non-CPU Raycore scenes before validation when their effective face count exceeds
-`ARCHIMEDLIGHT_RAYCORE_PRECHUNK_FACE_THRESHOLD` (`500000` by default). The
-chunk size is controlled by `ARCHIMEDLIGHT_RAYCORE_FACE_CHUNK_LIMIT` (`1536` by
-default). Set either variable to `0` or a negative value to disable that
-behavior.
+Set `RaycoreBackendConfig(validate=true)` or pass `validate=true` through
+`RaycoreInterceptionBackend(...)` to enable runtime validation. With validation
+enabled, ArchimedLight compares the Raycore traces against the CPU reference
+before cached execution and scattering topology construction. A mismatch throws
+`RaycoreValidationError` with a `reason`, `stage`, message, and raw validation
+payload.
 
-Very large chunked scenes can be correct but impractical to build on a GPU. By
-default, ArchimedLight falls back before Raycore construction when prechunking
-would create more than `RaycoreBackendConfig(max_prechunk_instances=...)`
-allows. The default comes from `ARCHIMEDLIGHT_RAYCORE_MAX_PRECHUNK_INSTANCES`
-(`4096` when unset). Pass `0` or a negative value, either in the config or in
-the environment variable, to disable the cap and force the guarded Raycore
-validation path.
+This guard is mainly there for debugging purposes.
 
-If a prechunked non-CPU Raycore scene fails validation, ArchimedLight retries
-with smaller chunk limits before falling back, while still respecting
-`max_prechunk_instances`. This handles occasional large-TLAS validation
-instability without disabling the safety guard.
+Very large chunked scenes can be correct but impractical to build on a GPU.
+ArchimedLight throws `RaycoreValidationError` before Raycore construction when
+prechunking would create more than
+`RaycoreBackendConfig(max_prechunk_instances=...)` allows. The default comes
+from `ARCHIMEDLIGHT_RAYCORE_MAX_PRECHUNK_INSTANCES` (`4096` when unset). Pass
+`0` or a negative value, either in the config or in the environment variable,
+to disable the cap and force Raycore construction.
 
-For cached simulations and Raycore scattering graph construction, non-CPU
-Raycore backends also run a sampled full-stack validation against a
+If validation is enabled and a prechunked non-CPU Raycore scene fails
+validation, ArchimedLight retries with smaller chunk limits before throwing,
+while still respecting `max_prechunk_instances`. This handles occasional
+large-TLAS validation instability without changing the selected backend.
+
+For cached simulations and Raycore scattering graph construction,
+`validate=true` also runs a sampled full-stack validation against a
 KernelAbstractions CPU Raycore reference. This catches cases where top-hit
 vertical tracing succeeds but `Raycore.all_hits!` misses deeper stack hits on a
 GPU backend. If the sampled full-stack hit or occupied-pixel ratios are too
-low, ArchimedLight falls back to the normal CPU backend with
-`fallback_reason = :raycore_stack_trace_validation`.
+low, ArchimedLight throws `RaycoreValidationError` with
+`reason = :raycore_stack_trace_validation`.
 
 The full-stack guard defaults to three sampled directions, at least 512
 reference stack hits or 128 occupied reference pixels per sampled direction,
@@ -207,24 +206,13 @@ unchunked merged BLAS when its depth is within capacity, and the strict cached
 Metal run must still remain on `RaycoreInterceptionBackend` rather than
 silently resolving to `RasterCPUBackend`.
 
-By default, public runs keep the guarded fallback behavior. Set
-`RaycoreBackendConfig(allow_fallback=false)` for diagnostics or benchmarks that
-must use the selected Raycore backend or fail. In strict mode, validation
-failures throw `RaycoreValidationError` with a `reason`, `stage`, message, and
-the raw validation payload instead of resolving to `RasterCPUBackend`.
-
-Benchmark configs use strict mode by default. Set
-`ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK=1` only when intentionally measuring the
-safe fallback path. When fallback is enabled, benchmark labels report the
-resolved backend. A row labelled
-`raycore_metal_gpu->RasterCPUBackend` means the requested GPU backend failed
-validation and the measured row is the CPU fallback. A row labelled
+Benchmark configs enable validation by default so correctness regressions fail
+clearly. Set `ARCHIMEDLIGHT_BENCH_VALIDATE=0` only when intentionally measuring
+direct Raycore runtime without CPU reference validation. A row labelled
 `raycore_metal_gpu` with resolved backend `RaycoreInterceptionBackend` stayed on
-Raycore. `cache_summary(sim)` also reports `fallback_reason`, currently
-`:none`, `:raycore_prechunk_instance_cap`, `:raycore_trace_validation`, or
-`:raycore_stack_trace_validation`, so large-scene runs can distinguish an
-intentional instance-cap fallback from top-hit validation failure and
-full-stack validation failure.
+Raycore. `cache_summary(sim)` still reports `fallback_reason` for API
+compatibility; Raycore validation does not populate it by switching to CPU, so
+successful Raycore rows report `:none`.
 
 For toric scenes, ArchimedLight may also use raster-compatible projections for
 individual low-elevation directions inside an otherwise Raycore-backed
@@ -458,10 +446,11 @@ fall back automatically to the merged-mesh or chunked path.
 
 Use `benchmark/backend_comparison.jl` for reproducible local comparisons. The
 script reports time and allocation volume for each row.
-In cached mode, the table also reports the resolved fallback reason so a row
-that requested GPU but measured CPU fallback is visible in the same output.
-By default, benchmark Raycore configs set `allow_fallback=false`; set
-`ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK=1` to restore fallback rows for comparison.
+In cached mode, the table also reports the resolved backend and
+`fallback_reason`; Raycore validation errors are reported as failing rows rather
+than CPU fallback timings. By default, benchmark Raycore configs set
+`validate=true`; set `ARCHIMEDLIGHT_BENCH_VALIDATE=0` to skip CPU reference
+validation for a direct backend timing.
 The table also reports a compact `reductions` capability label for Raycore
 rows:
 
@@ -477,6 +466,18 @@ fallback path. This is the current local Metal behavior on the tested
 KernelAbstractions/Metal stack. CUDA, oneAPI, or AMDGPU runs should be checked
 through this column before interpreting a GPU timing as a device-reduction
 timing.
+
+Use `benchmark/scene_parameter_sweep.jl` when the question is how pixel size
+and turtle-sector count interact across several scene shapes. It has generated
+`single_plate`, `stacked_plates`, `canopy_grid`, and `panel_canopy` scenes by
+default, with optional `coffee_docs`. Configure it with:
+
+- `ARCHIMEDLIGHT_PARAM_SCENES=single_plate,stacked_plates,canopy_grid,panel_canopy,coffee_docs`
+- `ARCHIMEDLIGHT_PARAM_PIXELS=0.20,0.10` and `ARCHIMEDLIGHT_PARAM_SECTORS=6,16,46` for global sweeps
+- `ARCHIMEDLIGHT_PARAM_CANOPY_GRID_PIXELS=0.12,0.06` and `ARCHIMEDLIGHT_PARAM_CANOPY_GRID_SECTORS=6,16,46` for per-scene overrides
+- `ARCHIMEDLIGHT_PARAM_BACKENDS=normal_cpu,raycore_ka_cpu,raycore_metal_gpu`
+- `ARCHIMEDLIGHT_PARAM_VALIDATE=1` to keep explicit Raycore validation enabled
+- `ARCHIMEDLIGHT_PARAM_OUTPUT=/tmp/archimed_scene_parameter_sweep.tsv`
 
 CPU reference:
 
@@ -563,8 +564,8 @@ and the same `reductions` capability label used by the component benchmark. Use
 printed rows include both the resolved backend and the fallback reason. Set
 `ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES` to override the Raycore
 `max_prechunk_instances` cap for these benchmarked backends. Set
-`ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK=1` to allow benchmark rows to resolve to
-the normal CPU fallback instead of failing on Raycore validation errors. Set
+`ARCHIMEDLIGHT_BENCH_VALIDATE=0` to skip CPU reference validation for direct
+Raycore timing rows. Set
 `ARCHIMEDLIGHT_LOCAL_BENCH_WORKLOADS=coffee` when the local agrivoltaics
 checkout is unavailable. Set `ARCHIMEDLIGHT_LOCAL_BENCH_WORKLOADS=xpalm` to run
 the XPalm stress case; it requires the local XPalm checkout and can be much
@@ -698,11 +699,6 @@ On the reduced coffee row, `dense_atomic` removes production copyback but adds a
 visible dense edge-reduction phase on KA CPU; `sparse_host_reduce` avoids that
 phase but remains `host-readback-required`. Keep both rows when comparing CPU
 and GPU hardware because the better choice may differ by backend.
-On the local Apple Silicon Metal setup tested here, the same reduced coffee
-stage-split row falls back with `fallback_reason=raycore_stack_trace_validation`
-before the edge-mode choice becomes material, and KernelAbstractions reports no
-Metal atomics. CUDA, AMDGPU, and oneAPI rows are therefore still needed before
-choosing GPU-specific dense-edge defaults.
 
 Reduced coffee edge-mode sweep for an atomic-capable backend:
 
@@ -811,7 +807,7 @@ include the toric low-elevation projection fallback:
 | agrivoltaics wheat/panel | Raycore Metal | `RaycoreInterceptionBackend` | 0.498 s | 0.001 s | 0.000% | 0.000% |
 | XPalm two oil palms | normal CPU | `RasterCPUBackend` | 1.794 s | 0.001 s | 0.000% | 0.000% |
 | XPalm two oil palms | Raycore KA CPU | `RaycoreInterceptionBackend` | 4.232 s | 0.001 s | 0.000% | 0.000% |
-| XPalm two oil palms | Raycore Metal | `RasterCPUBackend` fallback | 2.118 s | 0.001 s | 0.000% | 0.000% |
+| XPalm two oil palms | Raycore Metal | validation error before Raycore construction | n/a | n/a | n/a | n/a |
 
 The breakdown mode shows where those fresh-run timings are spent:
 
@@ -825,7 +821,7 @@ The breakdown mode shows where those fresh-run timings are spent:
 | agrivoltaics wheat/panel | Raycore Metal | 0.148 s / 76.4 MiB | 0.375 s / 14.9 MiB | 0.001 s / 3.1 MiB | GPU population overhead dominates |
 | XPalm two oil palms | normal CPU | 0.172 s / 431.2 MiB | 1.807 s / 418.3 MiB | 0.001 s / 1.6 MiB | population dominates the fresh CPU run |
 | XPalm two oil palms | Raycore KA CPU | 2.348 s / 3082.2 MiB | 1.828 s / 418.3 MiB | 0.001 s / 1.6 MiB | Raycore setup dominates |
-| XPalm two oil palms | Raycore Metal | 0.203 s / 396.8 MiB | 1.836 s / 418.3 MiB | 0.001 s / 1.6 MiB | Metal falls back before Raycore construction |
+| XPalm two oil palms | Raycore Metal | n/a | n/a | n/a | prechunk-instance cap throws before Raycore construction |
 
 The practical interpretation is: cached reuse is fast on all paths once the
 simulation has been prepared. Flat stack-node cache population substantially
@@ -836,9 +832,9 @@ the Raycore path when you need to exercise the portable backend or can reuse a
 prepared simulation over many steps.
 
 The XPalm row is a stress case, not a routine benchmark default. With the
-default prechunk-instance cap, Metal now falls back before constructing the
-roughly `7817` BLAS instances estimated for this scene with the current
-`1536` face chunk limit. Disable
+default prechunk-instance cap, Metal now throws before constructing the roughly
+`7817` BLAS instances estimated for this scene with the current `1536` face
+chunk limit. Disable
 `RaycoreBackendConfig(max_prechunk_instances=...)` or
 `ARCHIMEDLIGHT_RAYCORE_MAX_PRECHUNK_INSTANCES` only when you explicitly want
 to stress-test the guarded chunked Raycore path. Always check the
@@ -934,7 +930,7 @@ chunking BLAS geometry, or converting dense internal arrays back to public
 | Repeated meteo rows on the same scene | Raycore GPU with `LightSimulation` | Reuses acceleration structures, directional caches, and backend buffers. |
 | Large scene that validates without chunking | Raycore GPU | Traversal and propagation work can amortize GPU launch and transfer costs. |
 | Large scene that requires moderate chunking | benchmark both | Correctness is guarded, but chunked TLAS build and topology cost can dominate. |
-| Large scene that exceeds the chunk-instance cap | normal CPU fallback | Avoids minutes of GPU setup for stress scenes unless the cap is disabled. |
+| Large scene that exceeds the chunk-instance cap | choose CPU explicitly or raise the cap | Raycore throws instead of silently switching backend. |
 | Backend debugging or CI without GPU hardware | Raycore with `KernelAbstractions.CPU()` | Exercises the same Raycore/KA code path without Metal/CUDA/oneAPI/AMDGPU. |
 | Historical parity investigation | normal CPU | The raster backend remains the reference behavior. |
 
@@ -994,7 +990,7 @@ Metal is missing hits or merely returning the same hit set in a different order.
 
 The optional Metal GPU test suite compares normal CPU, Raycore
 KernelAbstractions CPU, and Raycore Metal on the same simple scene with
-fallback disabled for both Raycore backends. It asserts that both Raycore
+validation enabled for both Raycore backends. It asserts that both Raycore
 backends remain resolved as `RaycoreInterceptionBackend` and that aggregate
 PAR/NIR incident and absorbed totals match the normal CPU oracle within
 `rtol=5e-3, atol=1e-3`. The suite also runs the raw stack sweep for simple and
@@ -1018,7 +1014,7 @@ Metal test writes the coffee and reduced agrivoltaics raw-stack rows to
 `/tmp/archimed_raycore_metal_raw_stack_smoke.tsv` so exact rows and diagnosed
 non-exact rows can be inspected after the test run. The default Metal suite
 still runs a reduced agrivoltaics scene-complexity benchmark with
-`ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK=0` and asserts that the requested Metal
+`ARCHIMEDLIGHT_BENCH_VALIDATE=1` and asserts that the requested Metal
 Raycore backend remains the resolved backend.
 
 The realistic local tests are opt-in because they depend on large local

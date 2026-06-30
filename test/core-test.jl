@@ -133,11 +133,11 @@ end
     @test ib.config.propagation_backend == :auto
     @test ib.config.max_prechunk_instances == ArchimedLight._raycore_default_max_prechunk_instances()
     @test ib.config.scattering_eltype == Float64
-    @test ib.config.allow_fallback
+    @test !ib.config.validate
     no_cap_config = ArchimedLight.RaycoreBackendConfig(max_prechunk_instances=0)
     @test no_cap_config.max_prechunk_instances == typemax(Int)
-    strict_config = ArchimedLight.RaycoreBackendConfig(allow_fallback=false)
-    @test !strict_config.allow_fallback
+    validating_config = ArchimedLight.RaycoreBackendConfig(validate=true)
+    @test validating_config.validate
 
     resolved = ArchimedLight._resolve_interception_backend(:raycore_cpu)
     @test resolved isa ArchimedLight.RaycoreInterceptionBackend
@@ -158,13 +158,13 @@ end
     @test sb.config.propagation_backend == :auto
     @test sb.config.max_prechunk_instances == ib.config.max_prechunk_instances
     @test sb.config.scattering_eltype == Float64
-    @test sb.config.allow_fallback == ib.config.allow_fallback
+    @test sb.config.validate == ib.config.validate
     @test ArchimedLight._resolve_scattering_backend(:raycast, sb) === sb
 
     forced_cpu_sb = ArchimedLight.RaycoreScatteringBackend(ib; propagation_backend=:cpu)
     @test forced_cpu_sb.config.propagation_backend == :cpu
-    strict_sb = ArchimedLight.RaycoreScatteringBackend(ib; allow_fallback=false)
-    @test !strict_sb.config.allow_fallback
+    validating_sb = ArchimedLight.RaycoreScatteringBackend(ib; validate=true)
+    @test validating_sb.config.validate
     capped_sb = ArchimedLight.RaycoreScatteringBackend(ib; max_prechunk_instances=17)
     @test capped_sb.config.max_prechunk_instances == 17
     forced_device_sb = ArchimedLight.RaycoreScatteringBackend(propagation_backend=:device)
@@ -432,7 +432,7 @@ end
         "ARCHIMEDLIGHT_LOCAL_BENCH_PREPARE_BREAKDOWN" => get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_PREPARE_BREAKDOWN", nothing),
         "ARCHIMEDLIGHT_LOCAL_BENCH_STACK_PROFILE" => get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_STACK_PROFILE", nothing),
         "ARCHIMEDLIGHT_LOCAL_BENCH_STAGE_SPLIT" => get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_STAGE_SPLIT", nothing),
-        "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK" => get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", nothing),
+        "ARCHIMEDLIGHT_BENCH_VALIDATE" => get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", nothing),
     )
     try
         ENV["ARCHIMEDLIGHT_LOCAL_BENCH_SELFTEST"] = "1"
@@ -441,7 +441,7 @@ end
         ENV["ARCHIMEDLIGHT_LOCAL_BENCH_PREPARE_BREAKDOWN"] = ""
         ENV["ARCHIMEDLIGHT_LOCAL_BENCH_STACK_PROFILE"] = ""
         ENV["ARCHIMEDLIGHT_LOCAL_BENCH_STAGE_SPLIT"] = ""
-        ENV["ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK"] = "0"
+        ENV["ARCHIMEDLIGHT_BENCH_VALIDATE"] = "1"
 
         rows = include(script_path)
         @test length(rows) == 8
@@ -462,6 +462,12 @@ end
             end
         end
     end
+end
+
+@testitem "Scene parameter benchmark script parses" tags=[:core, :fast, :raycore_backend] begin
+    script_path = joinpath(dirname(dirname(pathof(ArchimedLight))), "benchmark", "scene_parameter_sweep.jl")
+    @test isfile(script_path)
+    @test Meta.parse("begin\n" * read(script_path, String) * "\nend") isa Expr
 end
 
 @testitem "Raycore optional device smoke" tags=[:core, :raycore_backend] begin
