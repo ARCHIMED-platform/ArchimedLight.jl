@@ -190,6 +190,8 @@ function run_raycore_device_smoke(;
 
     raster = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
     ib = ArchimedLight.RaycoreInterceptionBackend(backend=backend)
+    raycore_data = ArchimedLight._prepare_raycore_interception_data(scene, models, options, ib)
+    reduction_capabilities = ArchimedLight._raycore_device_reduction_capabilities(raycore_data)
     raycore = ArchimedLight.compute_first_order(
         scene,
         models,
@@ -258,12 +260,13 @@ function run_raycore_device_smoke(;
     _dict_close(raycore_scattering.added_power.nir, cpu_scattering.added_power.nir; atol=scattering_atol, rtol=scattering_rtol) ||
         error("Raycore scattering NIR does not match CPU raycast scattering: raycore=$(raycore_scattering.added_power.nir), cpu=$(cpu_scattering.added_power.nir).")
 
-    @info "Raycore device smoke passed" backend_type=typeof(backend) raycore_area raycore_par scattering_eltype=ib.config.scattering_eltype
+    @info "Raycore device smoke passed" backend_type=typeof(backend) raycore_area raycore_par scattering_eltype=ib.config.scattering_eltype reduction_capabilities
     return (
         backend=backend,
         first_order=(area=raycore_area, par=raycore_par),
         scattering=raycore_scattering,
         scattering_eltype=ib.config.scattering_eltype,
+        reduction_capabilities=reduction_capabilities,
     )
 end
 

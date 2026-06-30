@@ -17,7 +17,7 @@ struct RasterCPUBackend <: InterceptionBackend end
         max_hits_per_pixel=32, hit_epsilon=1.0f-4,
         edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
         propagation_backend=:auto, max_prechunk_instances=nothing,
-        scattering_eltype=nothing)
+        scattering_eltype=nothing, allow_fallback=true)
 
 Shared configuration for Raycore-based interception and scattering backends.
 When `workgroupsize` is omitted, ArchimedLight uses a default of `256`. The
@@ -32,6 +32,8 @@ propagation. Use `:device` or `:cpu` to force either path.
 `max_prechunk_instances` limits how many BLAS instances non-CPU validation
 prechunking can create before falling back to the normal CPU backend; pass `0`
 or a negative value to disable the cap.
+`allow_fallback=false` makes Raycore validation and capability failures throw a
+`RaycoreValidationError` instead of silently resolving to `RasterCPUBackend`.
 """
 struct RaycoreBackendConfig{B}
     backend::B
@@ -43,6 +45,7 @@ struct RaycoreBackendConfig{B}
     propagation_backend::Symbol
     max_prechunk_instances::Int
     scattering_eltype::DataType
+    allow_fallback::Bool
 
     function RaycoreBackendConfig(
         backend::B,
@@ -54,6 +57,7 @@ struct RaycoreBackendConfig{B}
         propagation_backend::Symbol,
         max_prechunk_instances::Integer,
         scattering_eltype::Type{<:AbstractFloat},
+        allow_fallback::Bool,
     ) where {B}
         workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
         max_hits_per_pixel > 0 || error("RaycoreBackendConfig max_hits_per_pixel must be positive.")
@@ -76,8 +80,20 @@ struct RaycoreBackendConfig{B}
             propagation_backend,
             max_prechunk_instances_value <= 0 ? typemax(Int) : max_prechunk_instances_value,
             scattering_eltype,
+            allow_fallback,
         )
     end
+end
+
+struct RaycoreValidationError <: Exception
+    reason::Symbol
+    stage::Symbol
+    message::String
+    validation
+end
+
+function Base.showerror(io::IO, err::RaycoreValidationError)
+    print(io, "RaycoreValidationError(", err.reason, ", ", err.stage, "): ", err.message)
 end
 
 function _raycore_default_max_prechunk_instances()
@@ -102,6 +118,7 @@ function RaycoreBackendConfig(;
     propagation_backend::Symbol=:auto,
     max_prechunk_instances::Union{Nothing,Integer}=nothing,
     scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
+    allow_fallback::Bool=true,
 )
     return RaycoreBackendConfig(
         backend,
@@ -113,6 +130,7 @@ function RaycoreBackendConfig(;
         propagation_backend,
         max_prechunk_instances === nothing ? _raycore_default_max_prechunk_instances() : max_prechunk_instances,
         scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
+        allow_fallback,
     )
 end
 
@@ -139,6 +157,7 @@ function _raycore_config_with(
     propagation_backend=config.propagation_backend,
     max_prechunk_instances=config.max_prechunk_instances,
     scattering_eltype=config.scattering_eltype,
+    allow_fallback=config.allow_fallback,
 )
     return RaycoreBackendConfig(
         backend,
@@ -150,6 +169,7 @@ function _raycore_config_with(
         propagation_backend,
         max_prechunk_instances,
         scattering_eltype,
+        allow_fallback,
     )
 end
 
@@ -193,6 +213,7 @@ function RaycoreScatteringBackend(
     dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
     propagation_backend::Symbol=interception_backend.config.propagation_backend,
     max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
+    allow_fallback::Bool=interception_backend.config.allow_fallback,
 )
     return RaycoreScatteringBackend(
         _raycore_config_with(
@@ -201,6 +222,7 @@ function RaycoreScatteringBackend(
             dense_edge_limit_bytes=dense_edge_limit_bytes,
             propagation_backend=propagation_backend,
             max_prechunk_instances=max_prechunk_instances,
+            allow_fallback=allow_fallback,
         ),
     )
 end
@@ -1122,9 +1144,31 @@ function DenseScatteringStaticGraph(
     return DenseScatteringStaticGraph(to_idx, from_idx, counts, coeff_par, coeff_nir, IdDict{Any,Any}())
 end
 
+function DenseScatteringStaticGraph(
+    to_idx::Vector{Int},
+    from_idx::Vector{Int},
+    counts::Vector{Int},
+    node_ids::Vector{Int},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+)
+    coeff_par = zeros(Float64, length(node_ids))
+    coeff_nir = zeros(Float64, length(node_ids))
+    @inbounds for (i, nid) in pairs(node_ids)
+        coeff_par[i] = get(coeff_par_by_node, nid, 0.0)
+        coeff_nir[i] = get(coeff_nir_by_node, nid, 0.0)
+    end
+    return DenseScatteringStaticGraph(to_idx, from_idx, counts, coeff_par, coeff_nir, IdDict{Any,Any}())
+end
+
 struct DenseScatteringGraph
     all_hits::Vector{Int}
     static::DenseScatteringStaticGraph
+    device_cache::IdDict{Any,Any}
+end
+
+function DenseScatteringGraph(all_hits::Vector{Int}, static::DenseScatteringStaticGraph)
+    return DenseScatteringGraph(all_hits, static, IdDict{Any,Any}())
 end
 
 function DenseScatteringGraph(
@@ -1136,7 +1180,7 @@ function DenseScatteringGraph(
     @inbounds for (i, nid) in pairs(node_ids)
         hit_counts[i] = get(all_hits, nid, 0)
     end
-    return DenseScatteringGraph(hit_counts, static)
+    return DenseScatteringGraph(hit_counts, static, IdDict{Any,Any}())
 end
 
 function DenseScatteringGraph(

@@ -10,7 +10,10 @@ end
 struct ScatteringTopologyCache
     pair_counts::ScatteringPairCounts
     sun_hits::Dict{Int,Int}
+    sun_hits_by_node::Vector{Int}
     node_ids::Vector{Int}
+    pair_to_idx::Vector{Int}
+    pair_from_idx::Vector{Int}
     node_group::Dict{Int,String}
     node_type::Dict{Int,String}
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
@@ -161,6 +164,21 @@ end
     return nothing
 end
 
+@inline _dense_edge_index(to_idx::Int, from_idx::Int, n_nodes::Int) = (to_idx - 1) * n_nodes + from_idx
+@inline _dense_edge_to_idx(edge::Int, n_nodes::Int) = ((edge - 1) ÷ n_nodes) + 1
+@inline _dense_edge_from_idx(edge::Int, n_nodes::Int) = ((edge - 1) % n_nodes) + 1
+
+@inline function _add_dense_index_edge_count!(
+    edge_counts::Dict{Int,Int},
+    to_idx::Int,
+    from_idx::Int,
+    n_nodes::Int,
+)
+    edge = _dense_edge_index(to_idx, from_idx, n_nodes)
+    edge_counts[edge] = get(edge_counts, edge, 0) + 1
+    return nothing
+end
+
 function _accept_scattering_link(node_group::Dict{Int,String}, to::Int, from::Int)
     !(get(node_group, to, "") == "pavement" && get(node_group, from, "") == "pavement")
 end
@@ -193,6 +211,18 @@ function _accumulate_sun_hits!(
         h == 0 && continue
         nid = node_ids[i]
         sun_hits[nid] = get(sun_hits, nid, 0) + h
+    end
+    return nothing
+end
+
+function _accumulate_sun_hits!(
+    sun_hits_by_node::Vector{Int},
+    projection::DenseDirectionProjectionResult,
+)
+    @inbounds for i in eachindex(projection.node_hits, sun_hits_by_node)
+        h = projection.node_hits[i]
+        h == 0 && continue
+        sun_hits_by_node[i] += h
     end
     return nothing
 end
@@ -550,6 +580,88 @@ end
     return nothing
 end
 
+@inline function _accumulate_scattering_index_counts_from_nodes_no_virtual!(
+    edge_counts::Dict{Int,Int},
+    nodes,
+    stack_base::Int,
+    n_hits::Int,
+    pavement_node_mask::Vector{Bool},
+    n_nodes::Int,
+)
+    n_hits <= 1 && return nothing
+
+    @inbounds begin
+        current_idx = Int(nodes[stack_base+1])
+        current_is_pavement = pavement_node_mask[current_idx]
+        for h in 1:(n_hits - 1)
+            next_idx = Int(nodes[stack_base+h+1])
+            next_is_pavement = pavement_node_mask[next_idx]
+            if !(current_is_pavement && next_is_pavement)
+                _add_dense_index_edge_count!(edge_counts, current_idx, next_idx, n_nodes)
+                _add_dense_index_edge_count!(edge_counts, next_idx, current_idx, n_nodes)
+            end
+            current_idx = next_idx
+            current_is_pavement = next_is_pavement
+        end
+    end
+    return nothing
+end
+
+@inline function _accumulate_scattering_index_counts_from_nodes!(
+    edge_counts::Dict{Int,Int},
+    nodes,
+    stack_base::Int,
+    n_hits::Int,
+    virtual_node_mask::Vector{Bool},
+    pavement_node_mask::Vector{Bool},
+    scratch::ScatteringStackScratch,
+    n_nodes::Int,
+)
+    below = scratch.nearest_nonvirtual_below
+    resize!(below, n_hits)
+
+    nearest_below = 0
+    @inbounds for h in n_hits:-1:1
+        node_idx = Int(nodes[stack_base+h])
+        if !virtual_node_mask[node_idx]
+            nearest_below = node_idx
+        end
+        below[h] = nearest_below
+    end
+
+    @inbounds begin
+        current_idx = Int(nodes[stack_base+1])
+        current_is_pavement = pavement_node_mask[current_idx]
+        nearest_above = virtual_node_mask[current_idx] ? 0 : current_idx
+        for h in 1:(n_hits - 1)
+            next_idx = Int(nodes[stack_base+h+1])
+            next_is_pavement = pavement_node_mask[next_idx]
+
+            from_below_idx = below[h+1]
+            if from_below_idx != 0
+                from_below_is_pavement = pavement_node_mask[from_below_idx]
+                if !(current_is_pavement && from_below_is_pavement)
+                    _add_dense_index_edge_count!(edge_counts, current_idx, from_below_idx, n_nodes)
+                end
+            end
+
+            if nearest_above != 0
+                from_above_is_pavement = pavement_node_mask[nearest_above]
+                if !(next_is_pavement && from_above_is_pavement)
+                    _add_dense_index_edge_count!(edge_counts, next_idx, nearest_above, n_nodes)
+                end
+            end
+
+            if !virtual_node_mask[next_idx]
+                nearest_above = next_idx
+            end
+            current_idx = next_idx
+            current_is_pavement = next_is_pavement
+        end
+    end
+    return nothing
+end
+
 KernelAbstractions.@kernel function _raycore_scattering_edge_keys_kernel!(
     edge_keys,
     edge_key_counts,
@@ -705,6 +817,50 @@ function _raycore_auto_dense_edge_accumulation_supported(data::RaycoreSceneData)
     return _raycore_dense_edge_accumulation_supported(data)
 end
 
+function _raycore_use_device_edge_accumulation_in_flat_path(data::RaycoreSceneData)
+    data.edge_accumulation == :dense_atomic &&
+        return KernelAbstractions.supports_atomics(data.backend) && _raycore_dense_edge_matrix_fits(data)
+    data.edge_accumulation == :auto && return _raycore_auto_dense_edge_accumulation_supported(data)
+    return false
+end
+
+function _raycore_accumulate_device_scattering_edges!(
+    edge_counts::Dict{UInt64,Int},
+    data::RaycoreSceneData,
+    traced,
+)
+    dense_supported = _raycore_auto_dense_edge_accumulation_supported(data)
+    if data.edge_accumulation == :dense_atomic && !KernelAbstractions.supports_atomics(data.backend)
+        error(
+            "Raycore edge_accumulation=:dense_atomic requires a KernelAbstractions backend " *
+            "with atomic support. Use :auto or :sparse_host_reduce for this backend.",
+        )
+    end
+    if data.edge_accumulation == :dense_atomic && !_raycore_dense_edge_matrix_fits(data)
+        n_nodes = length(data.prepared.geometry.node_ids)
+        error(
+            "Raycore edge_accumulation=:dense_atomic requires a dense $n_nodes x $n_nodes edge matrix " *
+            "larger than dense_edge_limit_bytes=$(data.dense_edge_limit_bytes). " *
+            "Increase RaycoreBackendConfig(dense_edge_limit_bytes=...) or use :sparse_host_reduce.",
+        )
+    end
+
+    if data.edge_accumulation == :dense_atomic || (data.edge_accumulation == :auto && dense_supported)
+        dense_counts = _raycore_scattering_dense_counts_from_device_traced_stacks(data, traced)
+        _merge_dense_edge_counts!(edge_counts, dense_counts, data.prepared.geometry.node_ids)
+    else
+        edge_keys = _raycore_scattering_edge_keys_from_device_traced_stacks(data, traced)
+        _merge_counted_packed_edge_keys!(
+            edge_counts,
+            edge_keys.keys,
+            edge_keys.counts,
+            edge_keys.max_edges,
+            data.edge_compact_host,
+        )
+    end
+    return edge_counts
+end
+
 KernelAbstractions.@kernel function _raycore_scattering_dense_counts_kernel!(
     dense_counts,
     counts,
@@ -755,6 +911,380 @@ end
 KernelAbstractions.@kernel function _raycore_clear_dense_counts_kernel!(dense_counts)
     pair_idx = @index(Global, Linear)
     @inbounds dense_counts[pair_idx] = 0
+end
+
+KernelAbstractions.@kernel function _raycore_stack_node_counts_kernel!(
+    node_counts,
+    counts,
+    nodes,
+    max_hits::Int,
+    n_nodes::Int,
+)
+    pixel_idx = @index(Global, Linear)
+    @inbounds begin
+        n_hits = Int(counts[pixel_idx])
+        stack_base = (pixel_idx - 1) * max_hits
+        for h in 1:n_hits
+            node_idx = Int(nodes[stack_base+h])
+            1 <= node_idx <= n_nodes || continue
+            @atomic :monotonic node_counts[node_idx] += Int32(1)
+        end
+    end
+end
+
+KernelAbstractions.@kernel function _raycore_clear_node_counts_kernel!(node_counts)
+    node_idx = @index(Global, Linear)
+    @inbounds node_counts[node_idx] = Int32(0)
+end
+
+KernelAbstractions.@kernel function _raycore_stack_sector_area_kernel!(
+    sector_area,
+    counts,
+    nodes,
+    virtual_node_mask,
+    node_transparency,
+    pixel_area::Float32,
+    max_hits::Int,
+    n_nodes::Int,
+)
+    pixel_idx = @index(Global, Linear)
+    @inbounds begin
+        n_hits = Int(counts[pixel_idx])
+        stack_base = (pixel_idx - 1) * max_hits
+        for h in 1:n_hits
+            node_idx = Int(nodes[stack_base+h])
+            1 <= node_idx <= n_nodes || continue
+            if virtual_node_mask[node_idx]
+                @atomic :monotonic sector_area[node_idx] += pixel_area
+                continue
+            end
+
+            transparency = node_transparency[node_idx]
+            intercepted_fraction = 1.0f0 - transparency
+            if intercepted_fraction > 0.0f0
+                @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction
+            end
+            transparency > 0.0f0 || break
+        end
+    end
+end
+
+KernelAbstractions.@kernel function _raycore_clear_sector_area_kernel!(sector_area)
+    node_idx = @index(Global, Linear)
+    @inbounds sector_area[node_idx] = 0.0f0
+end
+
+KernelAbstractions.@kernel function _raycore_clear_node_counts_and_sector_area_kernel!(
+    node_counts,
+    sector_area,
+)
+    node_idx = @index(Global, Linear)
+    @inbounds begin
+        node_counts[node_idx] = Int32(0)
+        sector_area[node_idx] = 0.0f0
+    end
+end
+
+KernelAbstractions.@kernel function _raycore_stack_node_counts_and_sector_area_kernel!(
+    node_counts,
+    sector_area,
+    counts,
+    nodes,
+    virtual_node_mask,
+    node_transparency,
+    pixel_area::Float32,
+    max_hits::Int,
+    n_nodes::Int,
+)
+    pixel_idx = @index(Global, Linear)
+    @inbounds begin
+        n_hits = Int(counts[pixel_idx])
+        stack_base = (pixel_idx - 1) * max_hits
+        area_active = true
+        for h in 1:n_hits
+            node_idx = Int(nodes[stack_base+h])
+            1 <= node_idx <= n_nodes || continue
+            @atomic :monotonic node_counts[node_idx] += Int32(1)
+
+            area_active || continue
+            if virtual_node_mask[node_idx]
+                @atomic :monotonic sector_area[node_idx] += pixel_area
+                continue
+            end
+
+            transparency = node_transparency[node_idx]
+            intercepted_fraction = 1.0f0 - transparency
+            if intercepted_fraction > 0.0f0
+                @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction
+            end
+            area_active = transparency > 0.0f0
+        end
+    end
+end
+
+function _raycore_use_device_node_count_reduction(data::RaycoreSceneData)
+    data.node_counts_dev === nothing && return false
+    return KernelAbstractions.supports_atomics(data.backend)
+end
+
+function _raycore_copy_node_counts_host!(data::RaycoreSceneData, n_nodes::Int)
+    length(data.node_counts_host) == n_nodes || resize!(data.node_counts_host, n_nodes)
+    copyto!(data.node_counts_host, data.node_counts_dev)
+    return data.node_counts_host
+end
+
+function _raycore_copy_sector_area_host!(data::RaycoreSceneData, n_nodes::Int)
+    length(data.sector_area_host) == n_nodes || resize!(data.sector_area_host, n_nodes)
+    copyto!(data.sector_area_host, data.sector_area_dev)
+    return data.sector_area_host
+end
+
+function _raycore_stack_node_counts_from_device_traced_stacks(data::RaycoreSceneData, traced)
+    _raycore_use_device_node_count_reduction(data) || return nothing
+    n_nodes = length(data.prepared.geometry.node_ids)
+    n_nodes == 0 && (empty!(data.node_counts_host); return data.node_counts_host)
+
+    backend = data.backend
+    node_counts_dev = data.node_counts_dev
+    clear_kernel = _raycore_clear_node_counts_kernel!(backend, data.workgroupsize)
+    clear_kernel(node_counts_dev; ndrange=n_nodes)
+    KernelAbstractions.synchronize(backend)
+
+    n_pixels = length(traced.overflow)
+    kernel = _raycore_stack_node_counts_kernel!(backend, data.workgroupsize)
+    kernel(
+        node_counts_dev,
+        traced.counts_dev,
+        traced.nodes_dev,
+        traced.max_hits,
+        n_nodes;
+        ndrange=n_pixels,
+    )
+    KernelAbstractions.synchronize(backend)
+    return _raycore_copy_node_counts_host!(data, n_nodes)
+end
+
+function _raycore_use_device_sector_area_reduction(data::RaycoreSceneData)
+    data.sector_area_dev === nothing && return false
+    return KernelAbstractions.supports_atomics(data.backend)
+end
+
+function _raycore_sector_area_from_device_traced_stacks(
+    data::RaycoreSceneData,
+    traced,
+    pixel_area::Real,
+)
+    _raycore_use_device_sector_area_reduction(data) || return nothing
+    n_nodes = length(data.prepared.geometry.node_ids)
+    n_nodes == 0 && (empty!(data.sector_area_host); return data.sector_area_host)
+
+    backend = data.backend
+    sector_area_dev = data.sector_area_dev
+    try
+        clear_kernel = _raycore_clear_sector_area_kernel!(backend, data.workgroupsize)
+        clear_kernel(sector_area_dev; ndrange=n_nodes)
+        KernelAbstractions.synchronize(backend)
+
+        n_pixels = length(traced.overflow)
+        kernel = _raycore_stack_sector_area_kernel!(backend, data.workgroupsize)
+        kernel(
+            sector_area_dev,
+            traced.counts_dev,
+            traced.nodes_dev,
+            data.virtual_node_mask_dev,
+            data.node_transparency_dev,
+            Float32(pixel_area),
+            traced.max_hits,
+            n_nodes;
+            ndrange=n_pixels,
+        )
+        KernelAbstractions.synchronize(backend)
+        return _raycore_copy_sector_area_host!(data, n_nodes)
+    catch err
+        @debug "Raycore device projected-area reduction failed; falling back to host stack walk" exception = (
+            err,
+            catch_backtrace(),
+        )
+        return nothing
+    end
+end
+
+function _raycore_use_device_node_count_and_sector_area_reduction(data::RaycoreSceneData)
+    data.node_counts_dev === nothing && return false
+    data.sector_area_dev === nothing && return false
+    return KernelAbstractions.supports_atomics(data.backend)
+end
+
+function _raycore_node_counts_and_sector_area_from_device_traced_stacks(
+    data::RaycoreSceneData,
+    traced,
+    pixel_area::Real,
+)
+    _raycore_use_device_node_count_and_sector_area_reduction(data) || return nothing
+    n_nodes = length(data.prepared.geometry.node_ids)
+    n_nodes == 0 && begin
+        empty!(data.node_counts_host)
+        empty!(data.sector_area_host)
+        return (node_counts=data.node_counts_host, sector_area=data.sector_area_host)
+    end
+
+    backend = data.backend
+    node_counts_dev = data.node_counts_dev
+    sector_area_dev = data.sector_area_dev
+    try
+        clear_kernel = _raycore_clear_node_counts_and_sector_area_kernel!(backend, data.workgroupsize)
+        clear_kernel(node_counts_dev, sector_area_dev; ndrange=n_nodes)
+        KernelAbstractions.synchronize(backend)
+
+        n_pixels = length(traced.overflow)
+        kernel = _raycore_stack_node_counts_and_sector_area_kernel!(backend, data.workgroupsize)
+        kernel(
+            node_counts_dev,
+            sector_area_dev,
+            traced.counts_dev,
+            traced.nodes_dev,
+            data.virtual_node_mask_dev,
+            data.node_transparency_dev,
+            Float32(pixel_area),
+            traced.max_hits,
+            n_nodes;
+            ndrange=n_pixels,
+        )
+        KernelAbstractions.synchronize(backend)
+        return (
+            node_counts=_raycore_copy_node_counts_host!(data, n_nodes),
+            sector_area=_raycore_copy_sector_area_host!(data, n_nodes),
+        )
+    catch err
+        @debug "Raycore fused device count/projected-area reduction failed; falling back to separate reducers or host stack walk" exception = (
+            err,
+            catch_backtrace(),
+        )
+        return nothing
+    end
+end
+
+function _raycore_device_reduction_capabilities(data::RaycoreSceneData)
+    supports_atomics = KernelAbstractions.supports_atomics(data.backend)
+    return (
+        supports_atomics=supports_atomics,
+        dense_edge_accumulation=_raycore_use_device_edge_accumulation_in_flat_path(data),
+        node_count_reduction=_raycore_use_device_node_count_reduction(data),
+        sector_area_reduction=_raycore_use_device_sector_area_reduction(data),
+        fused_count_area_reduction=_raycore_use_device_node_count_and_sector_area_reduction(data),
+    )
+end
+
+@inline _profile_flag_at(flag::Bool, ::Int) = flag
+@inline _profile_flag_at(flag, i::Int) = Bool(flag[i])
+
+function _raycore_stack_profile(
+    data::Union{Nothing,RaycoreSceneData},
+    directions,
+    options::LightOptions;
+    accumulate_edges=true,
+    needs_sector_area=true,
+)
+    data === nothing && return nothing
+
+    pixel_area = data.prepared.geometry.plotbox.pixel_area
+    trace_ms = 0.0
+    count_area_ms = 0.0
+    edge_ms = 0.0
+    copy_ms = 0.0
+    overflow = false
+    traced_dirs = 0
+    reduced_dirs = 0
+    edge_dirs = 0
+    copied_dirs = 0
+    copy_required_dirs = 0
+    total_hits = 0
+    total_pixels = 0
+    occupied_pixels = 0
+    max_seen = 0
+
+    for (dir_idx, direction) in pairs(directions)
+        traced_timed = @timed _raycore_trace_direction_stack_nodes_device(data, direction, options)
+        traced = traced_timed.value
+        trace_ms += 1000 * traced_timed.time
+        traced_dirs += 1
+        overflow |= any(traced.overflow)
+        dir_accumulate_edges = _profile_flag_at(accumulate_edges, dir_idx)
+        dir_needs_sector_area = _profile_flag_at(needs_sector_area, dir_idx)
+
+        count_area_timed = @timed begin
+            fused = _raycore_node_counts_and_sector_area_from_device_traced_stacks(data, traced, pixel_area)
+            if fused === nothing
+                counts = _raycore_stack_node_counts_from_device_traced_stacks(data, traced)
+                area = _raycore_sector_area_from_device_traced_stacks(data, traced, pixel_area)
+                counts === nothing && area === nothing ? nothing : (node_counts=counts, sector_area=area)
+            else
+                fused
+            end
+        end
+        count_area_ms += 1000 * count_area_timed.time
+        count_area_result = count_area_timed.value
+        count_area_result !== nothing && (reduced_dirs += 1)
+        device_node_counts = count_area_result === nothing ? nothing : count_area_result.node_counts
+        device_sector_area = count_area_result === nothing ? nothing : count_area_result.sector_area
+
+        device_edge_accumulation = dir_accumulate_edges && _raycore_use_device_edge_accumulation_in_flat_path(data)
+        if device_edge_accumulation
+            edge_timed = @timed _raycore_scattering_dense_counts_from_device_traced_stacks(data, traced)
+            edge_ms += 1000 * edge_timed.time
+            edge_dirs += 1
+        end
+
+        _raycore_flat_stack_host_copy_required(
+            dir_accumulate_edges,
+            device_edge_accumulation,
+            device_node_counts,
+            device_sector_area,
+            dir_needs_sector_area,
+        ) && (copy_required_dirs += 1)
+
+        copy_timed = @timed _raycore_copy_direction_stack_nodes_host!(data, traced)
+        host_traced = copy_timed.value
+        copy_ms += 1000 * copy_timed.time
+        copied_dirs += 1
+        @inbounds for count in host_traced.counts
+            c = Int(count)
+            total_hits += c
+            total_pixels += 1
+            occupied_pixels += c > 0
+            max_seen = max(max_seen, c)
+        end
+    end
+
+    hit_util = total_pixels == 0 ? 0.0 : 100 * total_hits / (total_pixels * data.max_hits_per_pixel)
+    occupied = total_pixels == 0 ? 0.0 : 100 * occupied_pixels / total_pixels
+    hits_per_dir = traced_dirs == 0 ? 0.0 : total_hits / traced_dirs
+    trace_ms_per_dir = traced_dirs == 0 ? 0.0 : trace_ms / traced_dirs
+    copy_ms_per_dir = copied_dirs == 0 ? 0.0 : copy_ms / copied_dirs
+
+    return (
+        trace_ms=trace_ms,
+        count_area_ms=count_area_ms,
+        edge_ms=edge_ms,
+        copy_ms=copy_ms,
+        total_ms=trace_ms + count_area_ms + edge_ms + copy_ms,
+        trace_ms_per_dir=trace_ms_per_dir,
+        copy_ms_per_dir=copy_ms_per_dir,
+        traced_dirs=traced_dirs,
+        reduced_dirs=reduced_dirs,
+        edge_dirs=edge_dirs,
+        copied_dirs=copied_dirs,
+        copy_required_dirs=copy_required_dirs,
+        copy_skippable_dirs=traced_dirs - copy_required_dirs,
+        total_hits=total_hits,
+        total_pixels=total_pixels,
+        occupied_pixels=occupied_pixels,
+        hit_util=hit_util,
+        occupied=occupied,
+        max_seen=max_seen,
+        hits_per_dir=hits_per_dir,
+        overflow=overflow,
+    )
 end
 
 function _merge_dense_edge_counts!(
@@ -815,7 +1345,10 @@ function _raycore_scattering_dense_counts_from_device_traced_stacks(
     n_nodes = length(data.prepared.geometry.node_ids)
     n_pixels = length(traced.overflow)
     n_pairs = n_nodes * n_nodes
-    (n_pixels == 0 || n_nodes == 0) && return Int[]
+    if n_pixels == 0 || n_nodes == 0
+        empty!(data.dense_edge_counts_host)
+        return data.dense_edge_counts_host
+    end
 
     backend = data.backend
     dense_counts_dev = data.dense_edge_counts_dev
@@ -842,7 +1375,9 @@ function _raycore_scattering_dense_counts_from_device_traced_stacks(
     )
     KernelAbstractions.synchronize(backend)
 
-    return Array(dense_counts_dev)
+    length(data.dense_edge_counts_host) == n_pairs || resize!(data.dense_edge_counts_host, n_pairs)
+    copyto!(data.dense_edge_counts_host, dense_counts_dev)
+    return data.dense_edge_counts_host
 end
 
 function _accumulate_scattering_counts!(
@@ -860,6 +1395,50 @@ function _accumulate_scattering_counts!(
     node_ids === nothing && error("DenseDirectionProjectionResult scattering accumulation requires node_ids")
     if sector.source == :sun
         _accumulate_sun_hits!(sun_hits, projection, node_ids)
+        return nothing
+    end
+
+    no_virtual = no_virtual_nodes === nothing ? !any(virtual_node_mask) : no_virtual_nodes
+    for stack in values(projection.pixel_hits)
+        n_hits = length(stack)
+        n_hits <= 1 && continue
+        stacks_sorted || _sort_hit_stack!(stack)
+        if no_virtual
+            _accumulate_scattering_counts_dense_no_virtual!(
+                edge_counts,
+                stack,
+                pavement_node_mask,
+                node_ids,
+            )
+        else
+            _accumulate_scattering_counts_dense!(
+                edge_counts,
+                stack,
+                virtual_node_mask,
+                pavement_node_mask,
+                scratch,
+                node_ids,
+            )
+        end
+    end
+    return nothing
+end
+
+function _accumulate_scattering_counts!(
+    edge_counts::Dict{UInt64,Int},
+    sun_hits_by_node::Vector{Int},
+    sector::TurtleSector,
+    projection::DenseDirectionProjectionResult,
+    virtual_node_mask::Vector{Bool},
+    pavement_node_mask::Vector{Bool},
+    scratch::ScatteringStackScratch;
+    node_ids::Union{Nothing,Vector{Int}}=nothing,
+    stacks_sorted::Bool=false,
+    no_virtual_nodes::Union{Nothing,Bool}=nothing,
+)
+    node_ids === nothing && error("DenseDirectionProjectionResult scattering accumulation requires node_ids")
+    if sector.source == :sun
+        _accumulate_sun_hits!(sun_hits_by_node, projection)
         return nothing
     end
 
@@ -1028,35 +1607,7 @@ function _pair_counts_from_raycore_projections(
                 "Raycore max_hits_per_pixel=$(traced.max_hits) exceeded for pixel $overflow_pixel. " *
                 "Increase RaycoreBackendConfig(max_hits_per_pixel=...).",
             )
-            dense_supported = _raycore_auto_dense_edge_accumulation_supported(data)
-            if data.edge_accumulation == :dense_atomic && !KernelAbstractions.supports_atomics(data.backend)
-                error(
-                    "Raycore edge_accumulation=:dense_atomic requires a KernelAbstractions backend " *
-                    "with atomic support. Use :auto or :sparse_host_reduce for this backend.",
-                )
-            end
-            if data.edge_accumulation == :dense_atomic && !_raycore_dense_edge_matrix_fits(data)
-                n_nodes = length(data.prepared.geometry.node_ids)
-                error(
-                    "Raycore edge_accumulation=:dense_atomic requires a dense $n_nodes x $n_nodes edge matrix " *
-                    "larger than dense_edge_limit_bytes=$(data.dense_edge_limit_bytes). " *
-                    "Increase RaycoreBackendConfig(dense_edge_limit_bytes=...) or use :sparse_host_reduce.",
-                )
-            end
-
-            if data.edge_accumulation == :dense_atomic || (data.edge_accumulation == :auto && dense_supported)
-                dense_counts = _raycore_scattering_dense_counts_from_device_traced_stacks(data, traced)
-                _merge_dense_edge_counts!(edge_counts, dense_counts, data.prepared.geometry.node_ids)
-            else
-                edge_keys = _raycore_scattering_edge_keys_from_device_traced_stacks(data, traced)
-                _merge_counted_packed_edge_keys!(
-                    edge_counts,
-                    edge_keys.keys,
-                    edge_keys.counts,
-                    edge_keys.max_edges,
-                    data.edge_compact_host,
-                )
-            end
+            _raycore_accumulate_device_scattering_edges!(edge_counts, data, traced)
             continue
         end
 
@@ -1096,7 +1647,94 @@ function _all_dir_hits_for_scattering(first::FirstOrderResult, sun_hits::Dict{In
             all_hits[nid] = max(0, get(all_hits, nid, 0) - hsun)
         end
     end
-    all_hits
+    return all_hits
+end
+
+function _dense_all_dir_hits_for_scattering(
+    first::FirstOrderResult,
+    sun_hits_by_node::Vector{Int},
+    options::LightOptions,
+    node_ids::Vector{Int},
+    topology_node_ids::Vector{Int},
+)
+    dense = first.dense
+    all_hits =
+        if dense !== nothing && isempty(first.hits_per_node) && dense.node_ids == node_ids
+            copy(dense.hits_per_node)
+        else
+            out = zeros(Int, length(node_ids))
+            if dense !== nothing && isempty(first.hits_per_node)
+                dense_index = Dict{Int,Int}(nid => i for (i, nid) in pairs(dense.node_ids))
+                @inbounds for (i, nid) in pairs(node_ids)
+                    out[i] = get(dense.hits_per_node, get(dense_index, nid, 0), 0)
+                end
+            else
+                @inbounds for (i, nid) in pairs(node_ids)
+                    out[i] = get(first.hits_per_node, nid, 0)
+                end
+            end
+            out
+        end
+    if !options.all_in_turtle
+        if node_ids == topology_node_ids
+            @inbounds for i in eachindex(all_hits, sun_hits_by_node)
+                all_hits[i] = max(0, all_hits[i] - sun_hits_by_node[i])
+            end
+        else
+            topology_index = Dict{Int,Int}(nid => i for (i, nid) in pairs(topology_node_ids))
+            @inbounds for (i, nid) in pairs(node_ids)
+                sun_idx = get(topology_index, nid, 0)
+                sun_idx == 0 && continue
+                all_hits[i] = max(0, all_hits[i] - sun_hits_by_node[sun_idx])
+            end
+        end
+    end
+    return all_hits
+end
+
+function _dense_int_vector_to_node_dict(node_ids::Vector{Int}, values::AbstractVector{<:Integer})
+    out = Dict{Int,Int}()
+    sizehint!(out, length(node_ids))
+    @inbounds for i in eachindex(node_ids)
+        out[node_ids[i]] = Int(values[i])
+    end
+    return out
+end
+
+function _dense_nonzero_int_vector_to_node_dict(node_ids::Vector{Int}, values::AbstractVector{<:Integer})
+    out = Dict{Int,Int}()
+    @inbounds for i in eachindex(node_ids, values)
+        value = Int(values[i])
+        value == 0 && continue
+        out[node_ids[i]] = value
+    end
+    return out
+end
+
+function _merge_sun_hits_into_dense!(
+    sun_hits_by_node::Vector{Int},
+    sun_hits::Dict{Int,Int},
+    node_index::Dict{Int,Int},
+)
+    isempty(sun_hits) && return sun_hits_by_node
+    for (nid, h) in sun_hits
+        idx = get(node_index, nid, 0)
+        idx == 0 && continue
+        sun_hits_by_node[idx] += h
+    end
+    return sun_hits_by_node
+end
+
+function _merge_sun_hits_into_dense!(
+    sun_hits_by_node::Vector{Int},
+    sun_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+)
+    return _merge_sun_hits_into_dense!(
+        sun_hits_by_node,
+        sun_hits,
+        Dict{Int,Int}(nid => i for (i, nid) in pairs(node_ids)),
+    )
 end
 
 function _group_optical_coeffs(models::LightModels)
@@ -1146,6 +1784,104 @@ struct ScatteringSceneContext
     group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}}
 end
 
+function _topology_dense_index_arrays(
+    pair_counts::ScatteringPairCounts,
+    sun_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    node_index::Dict{Int,Int},
+)
+    n_edges = length(pair_counts)
+    pair_to_idx = Vector{Int}(undef, n_edges)
+    pair_from_idx = Vector{Int}(undef, n_edges)
+    @inbounds for edge_idx in 1:n_edges
+        pair_to_idx[edge_idx] = node_index[pair_counts.to_nodes[edge_idx]]
+        pair_from_idx[edge_idx] = node_index[pair_counts.from_nodes[edge_idx]]
+    end
+    sun_hits_by_node = zeros(Int, length(node_ids))
+    for (nid, h) in sun_hits
+        idx = get(node_index, nid, 0)
+        idx == 0 && continue
+        sun_hits_by_node[idx] = h
+    end
+    return pair_to_idx, pair_from_idx, sun_hits_by_node
+end
+
+function _topology_dense_index_arrays(
+    pair_counts::ScatteringPairCounts,
+    sun_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+)
+    return _topology_dense_index_arrays(
+        pair_counts,
+        sun_hits,
+        node_ids,
+        Dict{Int,Int}(nid => i for (i, nid) in pairs(node_ids)),
+    )
+end
+
+function _merge_packed_edge_counts_as_indexed!(
+    indexed_edge_counts::Dict{Int,Int},
+    packed_edge_counts::Dict{UInt64,Int},
+    node_ids::Vector{Int},
+    node_index::Dict{Int,Int},
+)
+    isempty(packed_edge_counts) && return indexed_edge_counts
+    n_nodes = length(node_ids)
+    for (edge, count) in packed_edge_counts
+        to_idx = get(node_index, _unpack_scattering_to(edge), 0)
+        from_idx = get(node_index, _unpack_scattering_from(edge), 0)
+        (to_idx == 0 || from_idx == 0 || count <= 0) && continue
+        dense_edge = _dense_edge_index(to_idx, from_idx, n_nodes)
+        indexed_edge_counts[dense_edge] = get(indexed_edge_counts, dense_edge, 0) + count
+    end
+    return indexed_edge_counts
+end
+
+function _merge_packed_edge_counts_as_indexed!(
+    indexed_edge_counts::Dict{Int,Int},
+    packed_edge_counts::Dict{UInt64,Int},
+    node_ids::Vector{Int},
+)
+    return _merge_packed_edge_counts_as_indexed!(
+        indexed_edge_counts,
+        packed_edge_counts,
+        node_ids,
+        Dict{Int,Int}(nid => i for (i, nid) in pairs(node_ids)),
+    )
+end
+
+function _pair_counts_from_indexed_edges(
+    indexed_edge_counts::Dict{Int,Int},
+    node_ids::Vector{Int},
+)
+    isempty(indexed_edge_counts) && return ScatteringPairCounts(Int[], Int[], Int[]), Int[], Int[]
+    n_nodes = length(node_ids)
+    dense_edges = sort!(collect(keys(indexed_edge_counts)))
+    to_nodes = Int[]
+    from_nodes = Int[]
+    to_idx = Int[]
+    from_idx = Int[]
+    counts = Int[]
+    sizehint!(to_nodes, length(dense_edges))
+    sizehint!(from_nodes, length(dense_edges))
+    sizehint!(to_idx, length(dense_edges))
+    sizehint!(from_idx, length(dense_edges))
+    sizehint!(counts, length(dense_edges))
+
+    @inbounds for edge in dense_edges
+        count = indexed_edge_counts[edge]
+        count > 0 || continue
+        t_idx = _dense_edge_to_idx(edge, n_nodes)
+        f_idx = _dense_edge_from_idx(edge, n_nodes)
+        push!(to_idx, t_idx)
+        push!(from_idx, f_idx)
+        push!(to_nodes, node_ids[t_idx])
+        push!(from_nodes, node_ids[f_idx])
+        push!(counts, count)
+    end
+    return ScatteringPairCounts(to_nodes, from_nodes, counts), to_idx, from_idx
+end
+
 function _build_scattering_topology_cache(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
@@ -1153,18 +1889,105 @@ function _build_scattering_topology_cache(
     pair_counts::ScatteringPairCounts,
     sun_hits::Dict{Int,Int},
 )
+    return _build_scattering_topology_cache(
+        scene,
+        models,
+        prepared,
+        pair_counts,
+        zeros(Int, length(prepared.geometry.node_ids)),
+        sun_hits,
+    )
+end
+
+function _build_scattering_topology_cache(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    pair_counts::ScatteringPairCounts,
+    sun_hits_by_node::Vector{Int},
+    extra_sun_hits::Dict{Int,Int},
+)
     group_type_coeffs = _group_optical_coeffs(models)
     node_ids = copy(prepared.geometry.node_ids)
+    length(sun_hits_by_node) == length(node_ids) ||
+        throw(ArgumentError("dense sun-hit vector length $(length(sun_hits_by_node)) does not match topology node count $(length(node_ids))"))
+    node_index = prepared.geometry.node_index
     node_type = Dict{Int,String}()
     for nid in node_ids
         g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
         default_type = g == "pavement" ? "Cobblestone" : ""
         node_type[nid] = _scene_type(scene, nid, default_type)
     end
+    pair_to_idx, pair_from_idx, _unused_sun_hits =
+        _topology_dense_index_arrays(pair_counts, Dict{Int,Int}(), node_ids, node_index)
+    dense_sun_hits = copy(sun_hits_by_node)
+    _merge_sun_hits_into_dense!(dense_sun_hits, extra_sun_hits, node_index)
+    sun_hits = _dense_nonzero_int_vector_to_node_dict(node_ids, dense_sun_hits)
     return ScatteringTopologyCache(
         pair_counts,
         sun_hits,
+        dense_sun_hits,
         node_ids,
+        pair_to_idx,
+        pair_from_idx,
+        prepared.geometry.node_group,
+        node_type,
+        group_type_coeffs,
+        Ref{Union{Nothing,DenseScatteringStaticGraph}}(nothing),
+    )
+end
+
+function _build_scattering_topology_cache_from_indexed_edges(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    indexed_edge_counts::Dict{Int,Int},
+    packed_edge_counts::Dict{UInt64,Int},
+    sun_hits::Dict{Int,Int},
+)
+    return _build_scattering_topology_cache_from_indexed_edges(
+        scene,
+        models,
+        prepared,
+        indexed_edge_counts,
+        packed_edge_counts,
+        zeros(Int, length(prepared.geometry.node_ids)),
+        sun_hits,
+    )
+end
+
+function _build_scattering_topology_cache_from_indexed_edges(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    prepared::PreparedInterceptionData,
+    indexed_edge_counts::Dict{Int,Int},
+    packed_edge_counts::Dict{UInt64,Int},
+    sun_hits_by_node::Vector{Int},
+    extra_sun_hits::Dict{Int,Int},
+)
+    group_type_coeffs = _group_optical_coeffs(models)
+    node_ids = copy(prepared.geometry.node_ids)
+    length(sun_hits_by_node) == length(node_ids) ||
+        throw(ArgumentError("dense sun-hit vector length $(length(sun_hits_by_node)) does not match topology node count $(length(node_ids))"))
+    node_index = prepared.geometry.node_index
+    node_type = Dict{Int,String}()
+    for nid in node_ids
+        g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
+        default_type = g == "pavement" ? "Cobblestone" : ""
+        node_type[nid] = _scene_type(scene, nid, default_type)
+    end
+    _merge_packed_edge_counts_as_indexed!(indexed_edge_counts, packed_edge_counts, node_ids, node_index)
+    pair_counts, pair_to_idx, pair_from_idx = _pair_counts_from_indexed_edges(indexed_edge_counts, node_ids)
+    dense_sun_hits = copy(sun_hits_by_node)
+    _merge_sun_hits_into_dense!(dense_sun_hits, extra_sun_hits, node_index)
+    sun_hits = _dense_nonzero_int_vector_to_node_dict(node_ids, dense_sun_hits)
+    return ScatteringTopologyCache(
+        pair_counts,
+        sun_hits,
+        dense_sun_hits,
+        node_ids,
+        pair_to_idx,
+        pair_from_idx,
         prepared.geometry.node_group,
         node_type,
         group_type_coeffs,
@@ -1212,13 +2035,35 @@ end
 
 function _dense_scattering_static_graph!(
     topology::ScatteringTopologyCache,
+    coeff_par::Vector{Float64},
+    coeff_nir::Vector{Float64},
+)
+    dense_static = topology.dense_static[]
+    if dense_static === nothing
+        dense_static = DenseScatteringStaticGraph(
+            topology.pair_to_idx,
+            topology.pair_from_idx,
+            copy(topology.pair_counts.counts),
+            coeff_par,
+            coeff_nir,
+            IdDict{Any,Any}(),
+        )
+        topology.dense_static[] = dense_static
+    end
+    return dense_static
+end
+
+function _dense_scattering_static_graph!(
+    topology::ScatteringTopologyCache,
     coeff_par_by_node::Dict{Int,Float64},
     coeff_nir_by_node::Dict{Int,Float64},
 )
     dense_static = topology.dense_static[]
     if dense_static === nothing
         dense_static = DenseScatteringStaticGraph(
-            topology.pair_counts,
+            topology.pair_to_idx,
+            topology.pair_from_idx,
+            topology.pair_counts.counts,
             topology.node_ids,
             coeff_par_by_node,
             coeff_nir_by_node,
@@ -1254,11 +2099,37 @@ function _transfer_graph_from_topology(
     options::LightOptions,
 )
     node_ids = _node_ids_for_scattering(topology, first)
-    all_hits = _all_dir_hits_for_scattering(first, topology.sun_hits, options, node_ids)
-    coeff_par, coeff_nir =
-        _coeff_maps_by_node(node_ids, topology.node_group, topology.node_type, topology.group_type_coeffs, options)
-    dense_static = node_ids == topology.node_ids ? _dense_scattering_static_graph!(topology, coeff_par, coeff_nir) : nothing
-    return ScatteringTransferGraph(
+    dense_all_hits = _dense_all_dir_hits_for_scattering(
+        first,
+        topology.sun_hits_by_node,
+        options,
+        node_ids,
+        topology.node_ids,
+    )
+    all_hits = _dense_int_vector_to_node_dict(node_ids, dense_all_hits)
+    coeff_par, coeff_nir, dense_static =
+        if node_ids == topology.node_ids
+            cp, cn, cp_dense, cn_dense =
+                _coeff_maps_and_vectors_by_node(
+                    node_ids,
+                    topology.node_group,
+                    topology.node_type,
+                    topology.group_type_coeffs,
+                    options,
+                )
+            cp, cn, _dense_scattering_static_graph!(topology, cp_dense, cn_dense)
+        else
+            cp, cn =
+                _coeff_maps_by_node(
+                    node_ids,
+                    topology.node_group,
+                    topology.node_type,
+                    topology.group_type_coeffs,
+                    options,
+                )
+            cp, cn, nothing
+        end
+    graph = ScatteringTransferGraph(
         topology.pair_counts,
         all_hits,
         node_ids,
@@ -1271,6 +2142,10 @@ function _transfer_graph_from_topology(
         options.scattering_coeff_nir,
         dense_static,
     )
+    if dense_static !== nothing
+        graph.dense[] = DenseScatteringGraph(dense_all_hits, dense_static)
+    end
+    return graph
 end
 
 function _scattering_context(scene::PlantGeom.SceneGeometry, models::LightModels, turtle::TurtleGrid, first::FirstOrderResult, options::LightOptions)
@@ -1335,6 +2210,30 @@ function build_scattering_transfer_graph(
     options::LightOptions,
     backend::RaycoreScatteringBackend,
 )
+    stack_validation = _raycore_stack_trace_validation(data, options)
+    if !stack_validation.ok
+        chunked_data, chunked_validation = _raycore_retry_stack_chunked_scene_data(
+            data.prepared,
+            backend.config,
+            options,
+            stack_validation;
+            toricity=options.toricity,
+            skip_face_chunk_limit=data.chunked_tlas ? _raycore_face_chunk_limit() : nothing,
+        )
+        if chunked_data !== nothing
+            data = chunked_data
+        else
+            stack_validation = chunked_validation
+            _raycore_throw_if_fallback_disabled(
+                backend.config,
+                :raycore_stack_trace_validation,
+                :scattering_topology,
+                stack_validation,
+            )
+            @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU scattering transfer graph backend."
+            return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
+        end
+    end
     pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)
     topology = _build_scattering_topology_cache(scene, models, data.prepared, pair_counts, sun_hits)
     return _transfer_graph_from_topology(topology, first, options)
@@ -1390,6 +2289,12 @@ function build_scattering_transfer_graph(
     prechunk_status =
         _raycore_prechunk_instance_limit_status(prepared, backend.config; toricity=options.toricity)
     if prechunk_status.exceeded
+        _raycore_throw_if_fallback_disabled(
+            backend.config,
+            :raycore_prechunk_instance_cap,
+            :scattering_topology,
+            prechunk_status,
+        )
         @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU scattering transfer graph backend."
         return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
     end
@@ -1403,10 +2308,41 @@ function build_scattering_transfer_graph(
             _raycore_retry_chunked_scene_data(prepared, backend.config, options, validation; toricity=options.toricity)
         if chunked_data === nothing
             validation = chunked_validation
+            _raycore_throw_if_fallback_disabled(
+                backend.config,
+                :raycore_trace_validation,
+                :scattering_topology,
+                validation,
+            )
             @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU scattering transfer graph backend."
             return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
         end
         data = chunked_data
+        data_was_chunked = true
+    end
+    stack_validation = _raycore_stack_trace_validation(data, options)
+    if !stack_validation.ok
+        chunked_data, chunked_validation = _raycore_retry_stack_chunked_scene_data(
+            prepared,
+            backend.config,
+            options,
+            stack_validation;
+            toricity=options.toricity,
+            skip_face_chunk_limit=data_was_chunked ? _raycore_face_chunk_limit() : nothing,
+        )
+        if chunked_data !== nothing
+            data = chunked_data
+        else
+            stack_validation = chunked_validation
+            _raycore_throw_if_fallback_disabled(
+                backend.config,
+                :raycore_stack_trace_validation,
+                :scattering_topology,
+                stack_validation,
+            )
+            @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU scattering transfer graph backend."
+            return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
+        end
     end
     pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)
     topology = _build_scattering_topology_cache(scene, models, data.prepared, pair_counts, sun_hits)
@@ -1464,11 +2400,15 @@ end
     band::String,
     default_coeff::Float64,
 )
-    coeffs = get(
-        group_type_coeffs,
-        (group, type_name),
-        get(group_type_coeffs, (group, "*"), Dict{String,Float64}()),
-    )
+    key = (group, type_name)
+    coeffs =
+        if haskey(group_type_coeffs, key)
+            group_type_coeffs[key]
+        else
+            fallback_key = (group, "*")
+            haskey(group_type_coeffs, fallback_key) || return default_coeff
+            group_type_coeffs[fallback_key]
+        end
     return get(coeffs, band, default_coeff)
 end
 
@@ -1537,6 +2477,32 @@ function _coeff_maps_by_node(
     return coeff_par, coeff_nir
 end
 
+function _coeff_maps_and_vectors_by_node(
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    options::LightOptions,
+)
+    coeff_par = Dict{Int,Float64}()
+    coeff_nir = Dict{Int,Float64}()
+    sizehint!(coeff_par, length(node_ids))
+    sizehint!(coeff_nir, length(node_ids))
+    coeff_par_values = Vector{Float64}(undef, length(node_ids))
+    coeff_nir_values = Vector{Float64}(undef, length(node_ids))
+    @inbounds for (i, nid) in pairs(node_ids)
+        g = get(node_group, nid, "")
+        t = get(node_type, nid, "")
+        par = _group_type_band_coeff(group_type_coeffs, g, t, "PAR", options.scattering_coeff_par)
+        nir = _group_type_band_coeff(group_type_coeffs, g, t, "NIR", options.scattering_coeff_nir)
+        coeff_par[nid] = par
+        coeff_nir[nid] = nir
+        coeff_par_values[i] = par
+        coeff_nir_values[i] = nir
+    end
+    return coeff_par, coeff_nir, coeff_par_values, coeff_nir_values
+end
+
 function _initial_scattering_power(
     graph::ScatteringTransferGraph,
     first::FirstOrderResult,
@@ -1586,33 +2552,15 @@ function _dense_initial_scattering_power(
     return _dense_initial_from_node_dict(graph.node_ids, source, T)
 end
 
-function _propagate_scattering_one_band(
-    initial_power_per_node::Dict{Int,Float64},
+function _propagate_scattering_one_band_dense_only(
+    initial_power_per_node::Union{Dict{Int,Float64},AbstractVector{<:Real}},
     graph::ScatteringTransferGraph,
     coeff_by_node::Dict{Int,Float64},
     options::LightOptions,
     default_coeff::Float64,
 )
-    added, iterations, converged, _ = _propagate_scattering_one_band_dense(
-        initial_power_per_node,
-        graph,
-        coeff_by_node,
-        options,
-        default_coeff,
-    )
-    return added, iterations, converged
-end
-
-function _propagate_scattering_one_band_dense(
-    initial_power_per_node::Dict{Int,Float64},
-    graph::ScatteringTransferGraph,
-    coeff_by_node::Dict{Int,Float64},
-    options::LightOptions,
-    default_coeff::Float64,
-)
-    node_ids = graph.node_ids
-    n_nodes = length(node_ids)
-    n_nodes == 0 && return Dict{Int,Float64}(), 0, true, Float64[]
+    n_nodes = length(graph.node_ids)
+    n_nodes == 0 && return Float64[], 0, true
 
     dense = _dense_scattering_graph(graph)
     static = dense.static
@@ -1656,6 +2604,44 @@ function _propagate_scattering_one_band_dense(
             break
         end
     end
+    return added, iterations, converged
+end
+
+function _propagate_scattering_one_band(
+    initial_power_per_node::Dict{Int,Float64},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    options::LightOptions,
+    default_coeff::Float64,
+)
+    added, iterations, converged, _ = _propagate_scattering_one_band_dense(
+        initial_power_per_node,
+        graph,
+        coeff_by_node,
+        options,
+        default_coeff,
+    )
+    return added, iterations, converged
+end
+
+function _propagate_scattering_one_band_dense(
+    initial_power_per_node::Dict{Int,Float64},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    options::LightOptions,
+    default_coeff::Float64,
+)
+    node_ids = graph.node_ids
+    if isempty(node_ids)
+        return Dict{Int,Float64}(), 0, true, Float64[]
+    end
+    added, iterations, converged = _propagate_scattering_one_band_dense_only(
+        initial_power_per_node,
+        graph,
+        coeff_by_node,
+        options,
+        default_coeff,
+    )
     return _dense_vector_to_node_dict(node_ids, added), iterations, converged, added
 end
 
@@ -1937,10 +2923,57 @@ function _scattering_static_edge_device_arrays(static::DenseScatteringStaticGrap
     end
 end
 
+function _scattering_graph_all_hits_device_array(dense::DenseScatteringGraph, backend)
+    return get!(dense.device_cache, backend) do
+        all_hits_dev = KernelAbstractions.allocate(backend, Int, length(dense.all_hits))
+        KernelAbstractions.copyto!(backend, all_hits_dev, dense.all_hits)
+        all_hits_dev
+    end
+end
+
+function _cached_static_coeff_device_array(
+    static::DenseScatteringStaticGraph,
+    backend,
+    coeff_values::Vector{Float64},
+    coeff_key::Symbol,
+    ::Type{T},
+) where {T<:AbstractFloat}
+    cache_key = (objectid(backend), coeff_key, T)
+    return get!(static.device_cache, cache_key) do
+        coeff_dev = KernelAbstractions.allocate(backend, T, length(coeff_values))
+        host_values = T === Float64 ? coeff_values : T.(coeff_values)
+        KernelAbstractions.copyto!(backend, coeff_dev, host_values)
+        coeff_dev
+    end
+end
+
+function _scattering_coeff_device_array(
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    default_coeff::Float64,
+    backend,
+    ::Type{T},
+) where {T<:AbstractFloat}
+    dense = _dense_scattering_graph(graph)
+    static = dense.static
+    if coeff_by_node === graph.coeff_par_by_node && default_coeff == graph.default_coeff_par
+        return _cached_static_coeff_device_array(static, backend, static.coeff_par, :coeff_par, T)
+    elseif coeff_by_node === graph.coeff_nir_by_node && default_coeff == graph.default_coeff_nir
+        return _cached_static_coeff_device_array(static, backend, static.coeff_nir, :coeff_nir, T)
+    end
+
+    coeff = zeros(T, length(graph.node_ids))
+    @inbounds for (i, nid) in pairs(graph.node_ids)
+        coeff[i] = T(get(coeff_by_node, nid, default_coeff))
+    end
+    coeff_dev = KernelAbstractions.allocate(backend, T, length(coeff))
+    KernelAbstractions.copyto!(backend, coeff_dev, coeff)
+    return coeff_dev
+end
+
 function _copy_scattering_static_device_arrays(graph::ScatteringTransferGraph, backend)
     dense = _dense_scattering_graph(graph)
-    all_hits_dev = KernelAbstractions.allocate(backend, Int, length(graph.node_ids))
-    KernelAbstractions.copyto!(backend, all_hits_dev, dense.all_hits)
+    all_hits_dev = _scattering_graph_all_hits_device_array(dense, backend)
     edge_arrays = _scattering_static_edge_device_arrays(dense.static, backend)
     return (
         all_hits_dev=all_hits_dev,
@@ -1991,7 +3024,7 @@ function _scattering_result_from_dense(
     )
 end
 
-function _propagate_scattering_one_band_device_static(
+function _propagate_scattering_one_band_device_dense_only_static(
     initial_power_per_node::Union{Dict{Int,Float64},AbstractVector{<:Real}},
     graph::ScatteringTransferGraph,
     coeff_by_node::Dict{Int,Float64},
@@ -2004,9 +3037,18 @@ function _propagate_scattering_one_band_device_static(
 )
     node_ids = graph.node_ids
     n_nodes = length(node_ids)
-    n_nodes == 0 && return Dict{Int,Float64}(), 0, true, Float64[]
+    n_nodes == 0 && return Float64[], 0, true
 
-    initial, coeff = _dense_scattering_band_arrays(graph, initial_power_per_node, coeff_by_node, default_coeff, scattering_eltype)
+    initial =
+        if initial_power_per_node isa AbstractVector
+            length(initial_power_per_node) == n_nodes ||
+                throw(ArgumentError("dense initial scattering power length $(length(initial_power_per_node)) does not match graph node count $n_nodes"))
+            initial_power_per_node isa Vector{scattering_eltype} ?
+            initial_power_per_node :
+            scattering_eltype.(initial_power_per_node)
+        else
+            _dense_initial_from_node_dict(node_ids, initial_power_per_node, scattering_eltype)
+        end
     ref = sum(x -> Float64(x), initial)
     thr = options.scattering_stop_ratio * max(ref, eps(Float64))
     n_edges = static_device_arrays.n_edges
@@ -2015,7 +3057,7 @@ function _propagate_scattering_one_band_device_static(
     next_dev = KernelAbstractions.allocate(backend, scattering_eltype, n_nodes)
     added_dev = KernelAbstractions.allocate(backend, scattering_eltype, n_nodes)
     hit_energy_dev = KernelAbstractions.allocate(backend, scattering_eltype, n_nodes)
-    coeff_dev = KernelAbstractions.allocate(backend, scattering_eltype, n_nodes)
+    coeff_dev = _scattering_coeff_device_array(graph, coeff_by_node, default_coeff, backend, scattering_eltype)
     zero_host = zeros(scattering_eltype, n_nodes)
     next_host = Vector{scattering_eltype}(undef, n_nodes)
     added_host = Vector{scattering_eltype}(undef, n_nodes)
@@ -2024,7 +3066,6 @@ function _propagate_scattering_one_band_device_static(
     KernelAbstractions.copyto!(backend, next_dev, zero_host)
     KernelAbstractions.copyto!(backend, added_dev, zero_host)
     KernelAbstractions.copyto!(backend, hit_energy_dev, zero_host)
-    KernelAbstractions.copyto!(backend, coeff_dev, coeff)
 
     hit_kernel = _scattering_hit_energy_kernel!(backend, workgroupsize)
     zero_kernel = _scattering_zero_kernel!(backend, workgroupsize)
@@ -2072,8 +3113,56 @@ function _propagate_scattering_one_band_device_static(
     end
 
     copyto!(added_host, added_dev)
-    added = _dense_vector_to_node_dict(node_ids, added_host)
-    return added, iterations, converged, _dense_float_vector(added_host)
+    return _dense_float_vector(added_host), iterations, converged
+end
+
+function _propagate_scattering_one_band_device_static(
+    initial_power_per_node::Union{Dict{Int,Float64},AbstractVector{<:Real}},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    options::LightOptions,
+    default_coeff::Float64,
+    backend,
+    workgroupsize::Int,
+    scattering_eltype::Type{<:AbstractFloat},
+    static_device_arrays,
+)
+    dense, iterations, converged = _propagate_scattering_one_band_device_dense_only_static(
+        initial_power_per_node,
+        graph,
+        coeff_by_node,
+        options,
+        default_coeff,
+        backend,
+        workgroupsize,
+        scattering_eltype,
+        static_device_arrays,
+    )
+    return _dense_vector_to_node_dict(graph.node_ids, dense), iterations, converged, dense
+end
+
+function _propagate_scattering_one_band_device_dense_only(
+    initial_power_per_node::Union{Dict{Int,Float64},AbstractVector{<:Real}},
+    graph::ScatteringTransferGraph,
+    coeff_by_node::Dict{Int,Float64},
+    options::LightOptions,
+    default_coeff::Float64,
+    backend,
+    workgroupsize::Int,
+    scattering_eltype::Type{<:AbstractFloat},
+)
+    static_device_arrays = _copy_scattering_static_device_arrays(graph, backend)
+    return _propagate_scattering_one_band_device_dense_only_static(
+        initial_power_per_node,
+        graph,
+        coeff_by_node,
+        options,
+        default_coeff,
+        backend,
+        workgroupsize,
+        scattering_eltype,
+        static_device_arrays,
+    )
 end
 
 function _propagate_scattering_one_band_device(
@@ -2164,6 +3253,161 @@ function _raycore_use_cpu_scattering_propagation(graph::ScatteringTransferGraph,
     threshold = _raycore_cpu_propagation_edge_threshold()
     threshold > 0 || return false
     return length(graph.pair_counts) >= threshold
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    initial_power::AbstractVector{<:Real},
+    options::LightOptions,
+    backend::RaycoreScatteringBackend;
+    band::AbstractString="PAR",
+    coeff_by_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    coeffs = isnothing(coeff_by_node) ? _coeff_by_node(graph, String(band), dflt) : coeff_by_node
+    if _raycore_use_cpu_scattering_propagation(graph, backend)
+        return _compute_scattering_band_dense(
+            graph,
+            initial_power,
+            options,
+            RaycastScatteringBackend();
+            band=band,
+            coeff_by_node=coeffs,
+            default_coeff=dflt,
+        )
+    end
+    return _propagate_scattering_one_band_device_dense_only(
+        initial_power,
+        graph,
+        coeffs,
+        options,
+        dflt,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        backend.config.scattering_eltype,
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RaycoreScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    if _raycore_use_cpu_scattering_propagation(graph, backend)
+        return _compute_scattering_band_dense(
+            graph,
+            first,
+            options,
+            RaycastScatteringBackend();
+            band=band,
+            initial_power_per_node=initial_power_per_node,
+            default_coeff=dflt,
+        )
+    end
+    initial = _dense_initial_scattering_power(
+        graph,
+        first,
+        initial_power_per_node,
+        band,
+        backend.config.scattering_eltype,
+    )
+    coeffs = _coeff_by_node(graph, String(band), dflt)
+    return _propagate_scattering_one_band_device_dense_only(
+        initial,
+        graph,
+        coeffs,
+        options,
+        dflt,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        backend.config.scattering_eltype,
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    initial_power::AbstractVector{<:Real},
+    options::LightOptions,
+    ::RaycastScatteringBackend;
+    band::AbstractString="PAR",
+    coeff_by_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    coeffs = isnothing(coeff_by_node) ? _coeff_by_node(graph, String(band), dflt) : coeff_by_node
+    return _propagate_scattering_one_band_dense_only(
+        initial_power,
+        graph,
+        coeffs,
+        options,
+        dflt,
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::RaycastScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    initial = _dense_initial_scattering_power(graph, first, initial_power_per_node, band)
+    return _propagate_scattering_one_band_dense_only(
+        initial,
+        graph,
+        _coeff_by_node(graph, String(band), dflt),
+        options,
+        dflt,
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    initial_power::AbstractVector{<:Real},
+    options::LightOptions,
+    ::LinksScatteringBackend;
+    band::AbstractString="PAR",
+    coeff_by_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    return _compute_scattering_band_dense(
+        graph,
+        initial_power,
+        options,
+        RaycastScatteringBackend();
+        band=band,
+        coeff_by_node=coeff_by_node,
+        default_coeff=default_coeff,
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::LinksScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    return _compute_scattering_band_dense(
+        graph,
+        first,
+        options,
+        RaycastScatteringBackend();
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
 end
 
 """

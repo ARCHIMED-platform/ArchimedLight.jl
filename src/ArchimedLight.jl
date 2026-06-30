@@ -35,7 +35,7 @@ export InterceptionModel
 export EmitterModel
 export OpticalProperties
 export LightOptions
-export InterceptionBackend, RasterCPUBackend, RaycoreBackendConfig, RaycoreInterceptionBackend
+export InterceptionBackend, RasterCPUBackend, RaycoreBackendConfig, RaycoreInterceptionBackend, RaycoreValidationError
 export ScatteringBackend, RaycastScatteringBackend, LinksScatteringBackend, RaycoreScatteringBackend
 export SkyState
 export TurtleSector, TurtleGrid

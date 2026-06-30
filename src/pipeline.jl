@@ -204,7 +204,8 @@ end
 
 struct DenseSectorResponseStorage
     projected_area_by_sector::Matrix{Float64}
-    projected_area_active_by_sector::Vector{Vector{Int}}
+    projected_area_active_indices::Vector{Int}
+    projected_area_active_offsets::Vector{Int}
     hits_all_sectors::Vector{Int}
     emitter_incident_power_par::Vector{Float64}
     emitter_incident_power_par_active::Vector{Int}
@@ -222,14 +223,16 @@ end
 
 function _dense_sector_response_storage(
     projected_area_by_sector::Matrix{Float64},
-    projected_area_active_by_sector::Vector{Vector{Int}},
+    projected_area_active_indices::Vector{Int},
+    projected_area_active_offsets::Vector{Int},
     hits_all_sectors::Vector{Int},
     emitter_incident_power_par::DenseNodeMap{Float64},
     emitter_incident_power_nir::DenseNodeMap{Float64},
 )
     return DenseSectorResponseStorage(
         projected_area_by_sector,
-        projected_area_active_by_sector,
+        projected_area_active_indices,
+        projected_area_active_offsets,
         hits_all_sectors,
         emitter_incident_power_par.values,
         _active_indices(emitter_incident_power_par),
@@ -242,8 +245,12 @@ end
 @inline _sector_count(responses::SectorResponsesCache) = size(responses.dense.projected_area_by_sector, 2)
 @inline _sector_area_value(responses::SectorResponsesCache, sector_idx::Int, node_idx::Int) =
     responses.dense.projected_area_by_sector[node_idx, sector_idx]
-@inline _sector_active_indices(responses::SectorResponsesCache, sector_idx::Int) =
-    responses.dense.projected_area_active_by_sector[sector_idx]
+@inline function _sector_active_indices(responses::SectorResponsesCache, sector_idx::Int)
+    offsets = responses.dense.projected_area_active_offsets
+    first_idx = offsets[sector_idx]
+    last_idx = offsets[sector_idx+1] - 1
+    return @view responses.dense.projected_area_active_indices[first_idx:last_idx]
+end
 @inline _hits_all_sectors(responses::SectorResponsesCache) = responses.dense.hits_all_sectors
 @inline _emitter_incident_power_par(responses::SectorResponsesCache) = responses.dense.emitter_incident_power_par
 @inline _emitter_incident_power_nir(responses::SectorResponsesCache) = responses.dense.emitter_incident_power_nir
@@ -261,15 +268,181 @@ end
 
 function _sector_responses_host_bytes(responses::SectorResponsesCache)
     dense = responses.dense
-    active_bytes = sum(length, dense.projected_area_active_by_sector) * sizeof(Int)
     return sizeof(responses.node_ids) +
            sizeof(dense.projected_area_by_sector) +
-           active_bytes +
+           sizeof(dense.projected_area_active_indices) +
+           sizeof(dense.projected_area_active_offsets) +
            sizeof(dense.hits_all_sectors) +
            sizeof(dense.emitter_incident_power_par) +
            sizeof(dense.emitter_incident_power_par_active) +
            sizeof(dense.emitter_incident_power_nir) +
            sizeof(dense.emitter_incident_power_nir_active)
+end
+
+function _store_sector_area_and_active_indices!(
+    projected_area_by_sector::Matrix{Float64},
+    active_indices::Vector{Int},
+    active_offsets::Vector{Int},
+    sector_idx::Int,
+    values::Vector{Float64},
+)
+    @inbounds for i in eachindex(values)
+        v = values[i]
+        projected_area_by_sector[i, sector_idx] = v
+        v == 0.0 && continue
+        push!(active_indices, i)
+    end
+    active_offsets[sector_idx+1] = length(active_indices) + 1
+    return active_indices
+end
+
+function _store_device_sector_area_and_active_indices!(
+    projected_area_by_sector::Matrix{Float64},
+    active_indices::Vector{Int},
+    active_offsets::Vector{Int},
+    sector_idx::Int,
+    values::AbstractVector{<:Real},
+    area_ratio::Union{Nothing,AbstractVector{Float64}}=nothing,
+)
+    @inbounds for i in eachindex(values)
+        v = Float64(values[i])
+        area_ratio === nothing || (v *= area_ratio[i])
+        projected_area_by_sector[i, sector_idx] = v
+        v == 0.0 && continue
+        push!(active_indices, i)
+    end
+    active_offsets[sector_idx+1] = length(active_indices) + 1
+    return active_indices
+end
+
+function _consume_raycore_device_dense_response!(
+    projected_area_by_sector::Matrix{Float64},
+    active_indices::Vector{Int},
+    active_offsets::Vector{Int},
+    sector_idx::Int,
+    hits_all_sectors::Vector{Int},
+    scattering_sun_hits_by_node::Vector{Int},
+    projected_pixels_area::Vector{Float64},
+    data::Union{Nothing,RaycoreSceneData},
+    direction,
+    device_node_counts,
+    device_sector_area,
+    pixel_area::Real,
+    accumulate_sun_hits::Bool,
+    use_area_ratio::Bool,
+)
+    has_counts = device_node_counts !== nothing
+    has_sector_area = device_sector_area !== nothing
+    (has_counts || has_sector_area) || return false
+
+    if has_counts && has_sector_area && !use_area_ratio
+        @inbounds for node_idx in eachindex(device_sector_area)
+            count = Int(device_node_counts[node_idx])
+            if count != 0
+                hits_all_sectors[node_idx] += count
+                accumulate_sun_hits && (scattering_sun_hits_by_node[node_idx] += count)
+            end
+
+            area = Float64(device_sector_area[node_idx])
+            projected_area_by_sector[node_idx, sector_idx] = area
+            area == 0.0 && continue
+            push!(active_indices, node_idx)
+        end
+        active_offsets[sector_idx+1] = length(active_indices) + 1
+        return true
+    end
+
+    if has_counts
+        @inbounds for node_idx in eachindex(device_node_counts)
+            count = Int(device_node_counts[node_idx])
+            count == 0 && continue
+            hits_all_sectors[node_idx] += count
+            accumulate_sun_hits && (scattering_sun_hits_by_node[node_idx] += count)
+            use_area_ratio && (projected_pixels_area[node_idx] += count * pixel_area)
+        end
+    end
+
+    if has_sector_area
+        sector_area_ratio =
+            use_area_ratio ?
+            _raycore_area_ratio_by_node(
+                data === nothing ? error("Raycore area-ratio dense response consumption requires RaycoreSceneData") : data,
+                :full_stack,
+                direction,
+                projected_pixels_area,
+            ) :
+            nothing
+        _store_device_sector_area_and_active_indices!(
+            projected_area_by_sector,
+            active_indices,
+            active_offsets,
+            sector_idx,
+            device_sector_area,
+            sector_area_ratio,
+        )
+        return true
+    end
+
+    return false
+end
+
+function _consume_raycore_device_dense_flux_response!(
+    projected_area_per_node::Vector{Float64},
+    incident_power_par::Vector{Float64},
+    incident_power_nir::Vector{Float64},
+    hits_per_node::Vector{Int},
+    scattering_sun_hits_by_node::Vector{Int},
+    projected_pixels_area::Vector{Float64},
+    device_node_counts,
+    device_sector_area,
+    pixel_area::Real,
+    par_flux::Real,
+    nir_flux::Real,
+    accumulate_sun_hits::Bool,
+    collect_projected_pixels::Bool,
+    sector_area_ratio::Union{Nothing,AbstractVector{Float64}}=nothing,
+)
+    has_counts = device_node_counts !== nothing
+    has_sector_area = device_sector_area !== nothing
+    has_flux = par_flux != 0.0 || nir_flux != 0.0
+
+    if has_counts
+        @inbounds for node_idx in eachindex(device_node_counts)
+            count = Int(device_node_counts[node_idx])
+            count == 0 && continue
+            hits_per_node[node_idx] += count
+            accumulate_sun_hits && (scattering_sun_hits_by_node[node_idx] += count)
+            collect_projected_pixels && (projected_pixels_area[node_idx] += count * pixel_area)
+        end
+    end
+
+    area_consumed = false
+    if has_sector_area && has_flux && (!collect_projected_pixels || sector_area_ratio !== nothing)
+        @inbounds for node_idx in eachindex(device_sector_area)
+            pa = Float64(device_sector_area[node_idx])
+            sector_area_ratio === nothing || (pa *= sector_area_ratio[node_idx])
+            pa <= 0.0 && continue
+            projected_area_per_node[node_idx] += pa
+            par_flux != 0.0 && (incident_power_par[node_idx] += par_flux * pa)
+            nir_flux != 0.0 && (incident_power_nir[node_idx] += nir_flux * pa)
+        end
+        area_consumed = true
+    end
+
+    return (counts_consumed=has_counts, area_consumed=area_consumed)
+end
+
+@inline function _raycore_flat_stack_host_copy_required(
+    accumulate_edges::Bool,
+    device_edge_accumulation::Bool,
+    device_node_counts,
+    device_sector_area,
+    needs_sector_area::Bool,
+)
+    device_node_counts === nothing && return true
+    accumulate_edges && !device_edge_accumulation && return true
+    needs_sector_area && device_sector_area === nothing && return true
+    return false
 end
 
 function _dense_sector_float(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
@@ -331,13 +504,15 @@ function _build_sector_responses(
     n = length(turtle.sectors)
     geometry = prepared.geometry
     projected_area_by_sector = zeros(Float64, length(geometry.node_ids), n)
-    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    projected_area_active_indices = Int[]
+    projected_area_active_offsets = Vector{Int}(undef, n + 1)
+    projected_area_active_offsets[1] = 1
     hits_all_sectors = zeros(Int, length(geometry.node_ids))
-    sector_hits = zeros(Int, length(geometry.node_ids))
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
     scattering_edge_counts = options.scattering ? Dict{UInt64,Int}() : nothing
     scattering_sun_hits = options.scattering ? Dict{Int,Int}() : nothing
+    scattering_sun_hits_by_node = options.scattering ? zeros(Int, length(geometry.node_ids)) : nothing
     scattering_scratch = options.scattering ? ScatteringStackScratch() : nothing
     no_virtual_nodes = isempty(prepared.virtual_nodes)
 
@@ -352,14 +527,14 @@ function _build_sector_responses(
             prepared.node_transparency_by_index,
             geometry,
         )
-        @views projected_area_by_sector[:, i] .= sector_area
-        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
-        _copy_projection_hits!(sector_hits, projection, geometry)
-        @inbounds for j in eachindex(sector_hits)
-            h = sector_hits[j]
-            h == 0 && continue
-            hits_all_sectors[j] += h
-        end
+        _store_sector_area_and_active_indices!(
+            projected_area_by_sector,
+            projected_area_active_indices,
+            projected_area_active_offsets,
+            i,
+            sector_area,
+        )
+        _accumulate_projection_hits!(hits_all_sectors, projection, geometry)
         if emitter_edge_counts !== nothing
             if projection isa DenseDirectionProjectionResult
                 _accumulate_emitter_transfer_counts!(
@@ -384,7 +559,7 @@ function _build_sector_responses(
             if projection isa DenseDirectionProjectionResult
                 _accumulate_scattering_counts!(
                     scattering_edge_counts,
-                    scattering_sun_hits,
+                    scattering_sun_hits_by_node,
                     sector,
                     projection,
                     prepared.virtual_node_mask,
@@ -418,6 +593,7 @@ function _build_sector_responses(
                 models,
                 prepared,
                 _edge_counts_from_packed(scattering_edge_counts),
+                scattering_sun_hits_by_node,
                 scattering_sun_hits,
             )
         else
@@ -427,7 +603,8 @@ function _build_sector_responses(
         prepared,
         _dense_sector_response_storage(
             projected_area_by_sector,
-            projected_area_active_by_sector,
+            projected_area_active_indices,
+            projected_area_active_offsets,
             hits_all_sectors,
             emitter_incident_power_par,
             emitter_incident_power_nir,
@@ -454,13 +631,15 @@ function _build_sector_responses(
     end
     n = length(turtle.sectors)
     projected_area_by_sector = zeros(Float64, length(geometry.node_ids), n)
-    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    projected_area_active_indices = Int[]
+    projected_area_active_offsets = Vector{Int}(undef, n + 1)
+    projected_area_active_offsets[1] = 1
     hits_all_sectors = zeros(Int, length(geometry.node_ids))
-    sector_hits = zeros(Int, length(geometry.node_ids))
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
     scattering_edge_counts = options.scattering ? Dict{UInt64,Int}() : nothing
     scattering_sun_hits = options.scattering ? Dict{Int,Int}() : nothing
+    scattering_sun_hits_by_node = options.scattering ? zeros(Int, length(geometry.node_ids)) : nothing
     scattering_scratch = options.scattering ? ScatteringStackScratch() : nothing
     no_virtual_nodes = isempty(prepared.virtual_nodes)
 
@@ -476,14 +655,14 @@ function _build_sector_responses(
             geometry,
             true,
         )
-        @views projected_area_by_sector[:, i] .= sector_area
-        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
-        _copy_projection_hits!(sector_hits, projection, geometry)
-        @inbounds for j in eachindex(sector_hits)
-            h = sector_hits[j]
-            h == 0 && continue
-            hits_all_sectors[j] += h
-        end
+        _store_sector_area_and_active_indices!(
+            projected_area_by_sector,
+            projected_area_active_indices,
+            projected_area_active_offsets,
+            i,
+            sector_area,
+        )
+        _accumulate_projection_hits!(hits_all_sectors, projection, geometry)
         if emitter_edge_counts !== nothing
             _accumulate_emitter_transfer_counts!(
                 emitter_edge_counts,
@@ -497,7 +676,7 @@ function _build_sector_responses(
         if scattering_edge_counts !== nothing
             _accumulate_scattering_counts!(
                 scattering_edge_counts,
-                scattering_sun_hits,
+                scattering_sun_hits_by_node,
                 sector,
                 projection,
                 prepared.virtual_node_mask,
@@ -518,6 +697,7 @@ function _build_sector_responses(
                 models,
                 prepared,
                 _edge_counts_from_packed(scattering_edge_counts),
+                scattering_sun_hits_by_node,
                 scattering_sun_hits,
             )
         else
@@ -527,7 +707,8 @@ function _build_sector_responses(
         prepared,
         _dense_sector_response_storage(
             projected_area_by_sector,
-            projected_area_active_by_sector,
+            projected_area_active_indices,
+            projected_area_active_offsets,
             hits_all_sectors,
             emitter_incident_power_par,
             emitter_incident_power_nir,
@@ -550,22 +731,24 @@ function _build_sector_responses_raycore_flat(
     n_nodes = length(geometry.node_ids)
     pixel_area = geometry.plotbox.pixel_area
     projected_area_by_sector = zeros(Float64, n_nodes, n)
-    projected_area_active_by_sector = Vector{Vector{Int}}(undef, n)
+    projected_area_active_indices = Int[]
+    projected_area_active_offsets = Vector{Int}(undef, n + 1)
+    projected_area_active_offsets[1] = 1
     hits_all_sectors = zeros(Int, n_nodes)
-    sector_sun_hits = zeros(Int, n_nodes)
-    projected_pixels_area = zeros(Float64, n_nodes)
+    projected_pixels_area = options.area_ratio ? zeros(Float64, n_nodes) : Float64[]
     sector_area = zeros(Float64, n_nodes)
-    sector_area_ratio = ones(Float64, n_nodes)
     scattering_edge_counts = Dict{UInt64,Int}()
+    scattering_indexed_edge_counts = Dict{Int,Int}()
     scattering_sun_hits = Dict{Int,Int}()
+    scattering_sun_hits_by_node = zeros(Int, n_nodes)
     scattering_scratch = ScatteringStackScratch()
     no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for i in 1:n
         sector = turtle.sectors[i]
-        sector.source == :sun && fill!(sector_sun_hits, 0)
-        fill!(projected_pixels_area, 0.0)
+        options.area_ratio && fill!(projected_pixels_area, 0.0)
         fill!(sector_area, 0.0)
+        sector_area_stored = false
 
         if _raycore_use_raster_compat_projection(data, sector.direction, options)
             projection = _raycore_raster_compat_projection(data, sector.direction, options)
@@ -574,7 +757,7 @@ function _build_sector_responses_raycore_flat(
                     sector_area,
                     hits_all_sectors,
                     scattering_edge_counts,
-                    scattering_sun_hits,
+                    scattering_sun_hits_by_node,
                     sector,
                     projection,
                     prepared,
@@ -608,108 +791,154 @@ function _build_sector_responses_raycore_flat(
                 )
             end
         elseif Float32(sector.direction[3]) > 0.0f0
-            traced = _raycore_trace_direction_stack_nodes(data, sector.direction, options)
-            overflow_pixel = findfirst(traced.overflow)
+            traced_device = _raycore_trace_direction_stack_nodes_device(data, sector.direction, options)
+            overflow_pixel = findfirst(traced_device.overflow)
             overflow_pixel === nothing || error(
-                "Raycore max_hits_per_pixel=$(traced.max_hits) exceeded for pixel $overflow_pixel. " *
+                "Raycore max_hits_per_pixel=$(traced_device.max_hits) exceeded for pixel $overflow_pixel. " *
                 "Increase RaycoreBackendConfig(max_hits_per_pixel=...).",
             )
-
-            counts = traced.counts
-            nodes = traced.nodes
-            max_hits = traced.max_hits
             accumulate_edges = sector.source != :sun
             accumulate_sun_hits = sector.source == :sun
-            @inbounds for pixel_idx in eachindex(counts)
-                n_hits = Int(counts[pixel_idx])
-                n_hits == 0 && continue
-                stack_base = (pixel_idx - 1) * max_hits
-                for h in 1:n_hits
-                    node_idx = Int(nodes[stack_base+h])
-                    hits_all_sectors[node_idx] += 1
-                    if accumulate_sun_hits
-                        sector_sun_hits[node_idx] += 1
-                    end
-                    projected_pixels_area[node_idx] += pixel_area
-                end
+            device_edge_accumulation =
+                accumulate_edges && _raycore_use_device_edge_accumulation_in_flat_path(data)
+            device_edge_accumulation &&
+                _raycore_accumulate_device_scattering_edges!(scattering_edge_counts, data, traced_device)
+            device_node_counts = nothing
+            device_sector_area = nothing
+            fused_reduction =
+                _raycore_node_counts_and_sector_area_from_device_traced_stacks(data, traced_device, pixel_area)
+            if fused_reduction !== nothing
+                device_node_counts = fused_reduction.node_counts
+                device_sector_area = fused_reduction.sector_area
+            else
+                device_node_counts = _raycore_stack_node_counts_from_device_traced_stacks(data, traced_device)
+                device_sector_area =
+                    _raycore_sector_area_from_device_traced_stacks(data, traced_device, pixel_area)
+            end
+            host_stack_needed = _raycore_flat_stack_host_copy_required(
+                accumulate_edges,
+                device_edge_accumulation,
+                device_node_counts,
+                device_sector_area,
+                true,
+            )
+            if host_stack_needed
+                traced = _raycore_copy_direction_stack_nodes_host!(data, traced_device)
+                counts = traced.counts
+                nodes = traced.nodes
+                max_hits = traced.max_hits
 
-                if accumulate_edges && n_hits > 1
-                    if no_virtual_nodes
-                        _accumulate_scattering_counts_dense_from_nodes_no_virtual!(
-                            scattering_edge_counts,
-                            nodes,
-                            stack_base,
-                            n_hits,
-                            geometry.pavement_node_mask,
-                            geometry.node_ids,
-                        )
-                    else
-                        _accumulate_scattering_counts_dense_from_nodes!(
-                            scattering_edge_counts,
-                            nodes,
-                            stack_base,
-                            n_hits,
-                            prepared.virtual_node_mask,
-                            geometry.pavement_node_mask,
-                            scattering_scratch,
-                            geometry.node_ids,
-                        )
-                    end
-                end
-
-                for h in 1:n_hits
-                    node_idx = Int(nodes[stack_base+h])
-                    if prepared.virtual_node_mask[node_idx]
-                        sector_area[node_idx] += pixel_area
-                        continue
+                @inbounds for pixel_idx in eachindex(counts)
+                    n_hits = Int(counts[pixel_idx])
+                    n_hits == 0 && continue
+                    stack_base = (pixel_idx - 1) * max_hits
+                    if device_node_counts === nothing
+                        for h in 1:n_hits
+                            node_idx = Int(nodes[stack_base+h])
+                            hits_all_sectors[node_idx] += 1
+                            if accumulate_sun_hits
+                                scattering_sun_hits_by_node[node_idx] += 1
+                            end
+                            options.area_ratio && (projected_pixels_area[node_idx] += pixel_area)
+                        end
                     end
 
-                    transparency = prepared.node_transparency_by_index[node_idx]
-                    intercepted_fraction = 1.0 - transparency
-                    if intercepted_fraction > 0.0
-                        sector_area[node_idx] += pixel_area * intercepted_fraction
+                    if accumulate_edges && !device_edge_accumulation && n_hits > 1
+                        if no_virtual_nodes
+                            _accumulate_scattering_index_counts_from_nodes_no_virtual!(
+                                scattering_indexed_edge_counts,
+                                nodes,
+                                stack_base,
+                                n_hits,
+                                geometry.pavement_node_mask,
+                                n_nodes,
+                            )
+                        else
+                            _accumulate_scattering_index_counts_from_nodes!(
+                                scattering_indexed_edge_counts,
+                                nodes,
+                                stack_base,
+                                n_hits,
+                                prepared.virtual_node_mask,
+                                geometry.pavement_node_mask,
+                                scattering_scratch,
+                                n_nodes,
+                            )
+                        end
                     end
-                    transparency > 0.0 || break
+
+                    if device_sector_area === nothing
+                        for h in 1:n_hits
+                            node_idx = Int(nodes[stack_base+h])
+                            if prepared.virtual_node_mask[node_idx]
+                                sector_area[node_idx] += pixel_area
+                                continue
+                            end
+
+                            transparency = prepared.node_transparency_by_index[node_idx]
+                            intercepted_fraction = 1.0 - transparency
+                            if intercepted_fraction > 0.0
+                                sector_area[node_idx] += pixel_area * intercepted_fraction
+                            end
+                            transparency > 0.0 || break
+                        end
+                    end
                 end
             end
 
-            if accumulate_sun_hits
-                @inbounds for idx in eachindex(sector_sun_hits)
-                    h = sector_sun_hits[idx]
-                    h == 0 && continue
-                    nid = geometry.node_ids[idx]
-                    scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
-                end
-            end
-
-            if options.area_ratio
-                sector_area_ratio = _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
+            sector_area_stored = _consume_raycore_device_dense_response!(
+                projected_area_by_sector,
+                projected_area_active_indices,
+                projected_area_active_offsets,
+                i,
+                hits_all_sectors,
+                scattering_sun_hits_by_node,
+                projected_pixels_area,
+                data,
+                sector.direction,
+                device_node_counts,
+                device_sector_area,
+                pixel_area,
+                accumulate_sun_hits,
+                options.area_ratio,
+            )
+            if !sector_area_stored && options.area_ratio
+                sector_area_ratio =
+                    _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
                 @inbounds for idx in eachindex(sector_area)
                     sector_area[idx] *= sector_area_ratio[idx]
                 end
-            else
-                fill!(sector_area_ratio, 1.0)
             end
         end
 
-        @views projected_area_by_sector[:, i] .= sector_area
-        projected_area_active_by_sector[i] = _dense_node_map_active_indices(sector_area)
+        if !sector_area_stored
+            _store_sector_area_and_active_indices!(
+                projected_area_by_sector,
+                projected_area_active_indices,
+                projected_area_active_offsets,
+                i,
+                sector_area,
+            )
+        end
     end
 
     emitter_incident_power_par, emitter_incident_power_nir =
         _dense_emitter_incident_power(nothing, nothing, prepared)
-    scattering_topology = _build_scattering_topology_cache(
+    scattering_topology = _build_scattering_topology_cache_from_indexed_edges(
         scene,
         models,
         prepared,
-        _edge_counts_from_packed(scattering_edge_counts),
+        scattering_indexed_edge_counts,
+        scattering_edge_counts,
+        scattering_sun_hits_by_node,
         scattering_sun_hits,
     )
     return SectorResponsesCache(
         prepared,
         _dense_sector_response_storage(
             projected_area_by_sector,
-            projected_area_active_by_sector,
+            projected_area_active_indices,
+            projected_area_active_offsets,
             hits_all_sectors,
             emitter_incident_power_par,
             emitter_incident_power_nir,
@@ -735,7 +964,8 @@ function _sky_fraction_from_sector_responses(
         sector.source == :sun && continue
         sky_count += 1
         @inbounds for j in _sector_active_indices(responses, i)
-            visible_sum[j] += _sector_area_value(responses, i, j)
+            pa = _sector_area_value(responses, i, j)
+            visible_sum[j] += pa
         end
     end
 
@@ -894,7 +1124,7 @@ function _accumulate_dense_projection_first_order_and_scattering!(
     incident_power_nir::Vector{Float64},
     hits_per_node::Vector{Int},
     scattering_edge_counts::Dict{UInt64,Int},
-    scattering_sun_hits::Dict{Int,Int},
+    scattering_sun_hits_by_node::Vector{Int},
     sector::TurtleSector,
     projection::DenseDirectionProjectionResult,
     prepared::PreparedInterceptionData,
@@ -910,7 +1140,7 @@ function _accumulate_dense_projection_first_order_and_scattering!(
     end
 
     if sector.source == :sun
-        _accumulate_sun_hits!(scattering_sun_hits, projection, geometry.node_ids)
+        _accumulate_sun_hits!(scattering_sun_hits_by_node, projection)
     end
 
     active_flux = par_flux != 0.0 || nir_flux != 0.0
@@ -962,7 +1192,7 @@ function _fill_dense_projection_area_hits_and_scattering!(
     sector_area::Vector{Float64},
     hits_all_sectors::Vector{Int},
     scattering_edge_counts::Dict{UInt64,Int},
-    scattering_sun_hits::Dict{Int,Int},
+    scattering_sun_hits_by_node::Vector{Int},
     sector::TurtleSector,
     projection::DenseDirectionProjectionResult,
     prepared::PreparedInterceptionData,
@@ -976,8 +1206,7 @@ function _fill_dense_projection_area_hits_and_scattering!(
             h = projection.node_hits[i]
             h == 0 && continue
             hits_all_sectors[i] += h
-            nid = geometry.node_ids[i]
-            scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
+            scattering_sun_hits_by_node[i] += h
         end
     else
         @inbounds for i in eachindex(projection.node_hits)
@@ -1040,7 +1269,9 @@ function _stream_first_order_with_scattering_topology(
     hits_per_node = zeros(Int, length(geometry.node_ids))
     scattering_edge_counts = Dict{UInt64,Int}()
     scattering_sun_hits = Dict{Int,Int}()
+    scattering_sun_hits_by_node = zeros(Int, length(geometry.node_ids))
     scattering_scratch = ScatteringStackScratch()
+    no_virtual_nodes = isempty(prepared.virtual_nodes)
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
 
@@ -1093,7 +1324,7 @@ function _stream_first_order_with_scattering_topology(
         if projection isa DenseDirectionProjectionResult
             _accumulate_scattering_counts!(
                 scattering_edge_counts,
-                scattering_sun_hits,
+                scattering_sun_hits_by_node,
                 sector,
                 projection,
                 prepared.virtual_node_mask,
@@ -1141,6 +1372,7 @@ function _stream_first_order_with_scattering_topology(
         models,
         prepared,
         _edge_counts_from_packed(scattering_edge_counts),
+        scattering_sun_hits_by_node,
         scattering_sun_hits,
     )
     return first, topology
@@ -1175,6 +1407,7 @@ function _stream_first_order_with_raycore_scattering_topology(
     hits_per_node = zeros(Int, length(geometry.node_ids))
     scattering_edge_counts = Dict{UInt64,Int}()
     scattering_sun_hits = Dict{Int,Int}()
+    scattering_sun_hits_by_node = zeros(Int, length(geometry.node_ids))
     scattering_scratch = ScatteringStackScratch()
     emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
     emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
@@ -1231,7 +1464,7 @@ function _stream_first_order_with_raycore_scattering_topology(
         if projection isa DenseDirectionProjectionResult
             _accumulate_scattering_counts!(
                 scattering_edge_counts,
-                scattering_sun_hits,
+                scattering_sun_hits_by_node,
                 sector,
                 projection,
                 prepared.virtual_node_mask,
@@ -1279,6 +1512,7 @@ function _stream_first_order_with_raycore_scattering_topology(
         models,
         prepared,
         _edge_counts_from_packed(scattering_edge_counts),
+        scattering_sun_hits_by_node,
         scattering_sun_hits,
     )
     return first, topology
@@ -1300,17 +1534,16 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
     incident_power_par = zeros(Float64, n_nodes)
     incident_power_nir = zeros(Float64, n_nodes)
     hits_per_node = zeros(Int, n_nodes)
-    sector_sun_hits = zeros(Int, n_nodes)
-    projected_pixels_area = zeros(Float64, n_nodes)
-    sector_area_ratio = ones(Float64, n_nodes)
+    projected_pixels_area = options.area_ratio ? zeros(Float64, n_nodes) : Float64[]
     scattering_edge_counts = Dict{UInt64,Int}()
+    scattering_indexed_edge_counts = Dict{Int,Int}()
     scattering_sun_hits = Dict{Int,Int}()
+    scattering_sun_hits_by_node = zeros(Int, n_nodes)
     scattering_scratch = ScatteringStackScratch()
     no_virtual_nodes = isempty(prepared.virtual_nodes)
 
     for (k, sector) in enumerate(turtle.sectors)
-        sector.source == :sun && fill!(sector_sun_hits, 0)
-        fill!(projected_pixels_area, 0.0)
+        options.area_ratio && fill!(projected_pixels_area, 0.0)
         if _raycore_use_raster_compat_projection(data, sector.direction, options)
             projection = _raycore_raster_compat_projection(data, sector.direction, options)
             par_flux = fluxes.par[k]
@@ -1322,7 +1555,7 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
                     incident_power_nir,
                     hits_per_node,
                     scattering_edge_counts,
-                    scattering_sun_hits,
+                    scattering_sun_hits_by_node,
                     sector,
                     projection,
                     prepared,
@@ -1368,73 +1601,155 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
             end
             continue
         end
-        traced = _raycore_trace_direction_stack_nodes(data, sector.direction, options)
-        overflow_pixel = findfirst(traced.overflow)
+        traced_device = _raycore_trace_direction_stack_nodes_device(data, sector.direction, options)
+        overflow_pixel = findfirst(traced_device.overflow)
         overflow_pixel === nothing || error(
-            "Raycore max_hits_per_pixel=$(traced.max_hits) exceeded for pixel $overflow_pixel. " *
+            "Raycore max_hits_per_pixel=$(traced_device.max_hits) exceeded for pixel $overflow_pixel. " *
             "Increase RaycoreBackendConfig(max_hits_per_pixel=...).",
         )
-
-        counts = traced.counts
-        nodes = traced.nodes
-        max_hits = traced.max_hits
-        accumulate_edges = sector.source != :sun
-        accumulate_sun_hits = sector.source == :sun
-        @inbounds for pixel_idx in eachindex(counts)
-            n_hits = Int(counts[pixel_idx])
-            n_hits == 0 && continue
-            stack_base = (pixel_idx - 1) * max_hits
-            for h in 1:n_hits
-                node_idx = Int(nodes[stack_base+h])
-                hits_per_node[node_idx] += 1
-                if accumulate_sun_hits
-                    sector_sun_hits[node_idx] += 1
-                end
-                projected_pixels_area[node_idx] += pixel_area
-            end
-
-            if accumulate_edges && n_hits > 1
-                if no_virtual_nodes
-                    _accumulate_scattering_counts_dense_from_nodes_no_virtual!(
-                        scattering_edge_counts,
-                        nodes,
-                        stack_base,
-                        n_hits,
-                        geometry.pavement_node_mask,
-                        geometry.node_ids,
-                    )
-                else
-                    _accumulate_scattering_counts_dense_from_nodes!(
-                        scattering_edge_counts,
-                        nodes,
-                        stack_base,
-                        n_hits,
-                        prepared.virtual_node_mask,
-                        geometry.pavement_node_mask,
-                        scattering_scratch,
-                        geometry.node_ids,
-                    )
-                end
-            end
-        end
-
-        if accumulate_sun_hits
-            @inbounds for idx in eachindex(sector_sun_hits)
-                h = sector_sun_hits[idx]
-                h == 0 && continue
-                nid = geometry.node_ids[idx]
-                scattering_sun_hits[nid] = get(scattering_sun_hits, nid, 0) + h
-            end
-        end
-
         par_flux = fluxes.par[k]
         nir_flux = fluxes.nir[k]
-        (par_flux == 0.0 && nir_flux == 0.0) && continue
+        has_flux = par_flux != 0.0 || nir_flux != 0.0
+        accumulate_edges = sector.source != :sun
+        accumulate_sun_hits = sector.source == :sun
+        device_edge_accumulation =
+            accumulate_edges && _raycore_use_device_edge_accumulation_in_flat_path(data)
+        device_edge_accumulation &&
+            _raycore_accumulate_device_scattering_edges!(scattering_edge_counts, data, traced_device)
+        device_node_counts = nothing
+        device_sector_area = nothing
+        if has_flux
+            fused_reduction =
+                _raycore_node_counts_and_sector_area_from_device_traced_stacks(data, traced_device, pixel_area)
+            if fused_reduction !== nothing
+                device_node_counts = fused_reduction.node_counts
+                device_sector_area = fused_reduction.sector_area
+            end
+        end
+        if device_node_counts === nothing
+            device_node_counts = _raycore_stack_node_counts_from_device_traced_stacks(data, traced_device)
+        end
+        if device_sector_area === nothing && has_flux
+            device_sector_area = _raycore_sector_area_from_device_traced_stacks(data, traced_device, pixel_area)
+        end
+        _consume_raycore_device_dense_flux_response!(
+            projected_area_per_node,
+            incident_power_par,
+            incident_power_nir,
+            hits_per_node,
+            scattering_sun_hits_by_node,
+            projected_pixels_area,
+            device_node_counts,
+            device_sector_area,
+            pixel_area,
+            par_flux,
+            nir_flux,
+            accumulate_sun_hits,
+            options.area_ratio,
+        )
+        host_stack_needed = _raycore_flat_stack_host_copy_required(
+            accumulate_edges,
+            device_edge_accumulation,
+            device_node_counts,
+            device_sector_area,
+            has_flux,
+        )
+        traced = nothing
+        counts = nothing
+        nodes = nothing
+        max_hits = 0
+        if host_stack_needed
+            traced = _raycore_copy_direction_stack_nodes_host!(data, traced_device)
+            counts = traced.counts
+            nodes = traced.nodes
+            max_hits = traced.max_hits
 
-        if options.area_ratio
-            sector_area_ratio = _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
-        else
-            fill!(sector_area_ratio, 1.0)
+            @inbounds for pixel_idx in eachindex(counts)
+                n_hits = Int(counts[pixel_idx])
+                n_hits == 0 && continue
+                stack_base = (pixel_idx - 1) * max_hits
+                if device_node_counts === nothing
+                    for h in 1:n_hits
+                        node_idx = Int(nodes[stack_base+h])
+                        hits_per_node[node_idx] += 1
+                        if accumulate_sun_hits
+                            scattering_sun_hits_by_node[node_idx] += 1
+                        end
+                        options.area_ratio && (projected_pixels_area[node_idx] += pixel_area)
+                    end
+                end
+
+                if accumulate_edges && !device_edge_accumulation && n_hits > 1
+                    if no_virtual_nodes
+                        _accumulate_scattering_index_counts_from_nodes_no_virtual!(
+                            scattering_indexed_edge_counts,
+                            nodes,
+                            stack_base,
+                            n_hits,
+                            geometry.pavement_node_mask,
+                            n_nodes,
+                        )
+                    else
+                        _accumulate_scattering_index_counts_from_nodes!(
+                            scattering_indexed_edge_counts,
+                            nodes,
+                            stack_base,
+                            n_hits,
+                            prepared.virtual_node_mask,
+                            geometry.pavement_node_mask,
+                            scattering_scratch,
+                            n_nodes,
+                        )
+                    end
+                end
+
+                if device_sector_area === nothing && !options.area_ratio && has_flux
+                    for h in 1:n_hits
+                        node_idx = Int(nodes[stack_base+h])
+                        if prepared.virtual_node_mask[node_idx]
+                            pa = pixel_area
+                            projected_area_per_node[node_idx] += pa
+                            par_flux != 0.0 && (incident_power_par[node_idx] += par_flux * pa)
+                            nir_flux != 0.0 && (incident_power_nir[node_idx] += nir_flux * pa)
+                            continue
+                        end
+
+                        transparency = prepared.node_transparency_by_index[node_idx]
+                        intercepted_fraction = 1.0 - transparency
+                        if intercepted_fraction > 0.0
+                            pa = pixel_area * intercepted_fraction
+                            projected_area_per_node[node_idx] += pa
+                            par_flux != 0.0 && (incident_power_par[node_idx] += par_flux * pa)
+                            nir_flux != 0.0 && (incident_power_nir[node_idx] += nir_flux * pa)
+                        end
+                        transparency > 0.0 || break
+                    end
+                end
+            end
+        end
+
+        (par_flux == 0.0 && nir_flux == 0.0) && continue
+        options.area_ratio || continue
+
+        sector_area_ratio = _raycore_area_ratio_by_node(data, :full_stack, sector.direction, projected_pixels_area)
+        if device_sector_area !== nothing
+            _consume_raycore_device_dense_flux_response!(
+                projected_area_per_node,
+                incident_power_par,
+                incident_power_nir,
+                hits_per_node,
+                scattering_sun_hits_by_node,
+                projected_pixels_area,
+                nothing,
+                device_sector_area,
+                pixel_area,
+                par_flux,
+                nir_flux,
+                false,
+                false,
+                sector_area_ratio,
+            )
+            continue
         end
         @inbounds for pixel_idx in eachindex(counts)
             n_hits = Int(counts[pixel_idx])
@@ -1471,11 +1786,13 @@ function _stream_first_order_with_raycore_scattering_topology_flat(
         incident_power_nir,
         hits_per_node,
     )
-    topology = _build_scattering_topology_cache(
+    topology = _build_scattering_topology_cache_from_indexed_edges(
         scene,
         models,
         prepared,
-        _edge_counts_from_packed(scattering_edge_counts),
+        scattering_indexed_edge_counts,
+        scattering_edge_counts,
+        scattering_sun_hits_by_node,
         scattering_sun_hits,
     )
     return first, topology
@@ -2135,6 +2452,12 @@ function prepare_light_cache(
         prechunk_status =
             _raycore_prechunk_instance_limit_status(prepared, ib.config; toricity=options.toricity)
         if prechunk_status.exceeded
+            _raycore_throw_if_fallback_disabled(
+                ib.config,
+                :raycore_prechunk_instance_cap,
+                :light_cache,
+                prechunk_status,
+            )
             @warn _raycore_prechunk_instance_limit_message(prechunk_status) * " Falling back to the normal CPU light backend for this simulation cache."
             ib = RasterCPUBackend()
             fallback_reason = :raycore_prechunk_instance_cap
@@ -2157,12 +2480,49 @@ function prepare_light_cache(
             )
             if chunked_data !== nothing
                 raycore_data = chunked_data
+                raycore_data_was_chunked = true
             else
                 validation = chunked_validation
+                _raycore_throw_if_fallback_disabled(
+                    ib.config,
+                    :raycore_trace_validation,
+                    :light_cache,
+                    validation,
+                )
                 @warn _raycore_trace_validation_message(validation) * " Falling back to the normal CPU light backend for this simulation cache."
                 ib = RasterCPUBackend()
                 raycore_data = nothing
                 fallback_reason = :raycore_trace_validation
+                scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
+            end
+        end
+    end
+    if raycore_data !== nothing && (options.cache_radiation || options.scattering)
+        stack_validation = _raycore_stack_trace_validation(raycore_data, options)
+        if !stack_validation.ok
+            chunked_data, chunked_validation = _raycore_retry_stack_chunked_scene_data(
+                prepared,
+                ib.config,
+                options,
+                stack_validation;
+                toricity=options.toricity,
+                skip_face_chunk_limit=raycore_data_was_chunked ? _raycore_face_chunk_limit() : nothing,
+            )
+            if chunked_data !== nothing
+                raycore_data = chunked_data
+                raycore_data_was_chunked = true
+            else
+                stack_validation = chunked_validation
+                _raycore_throw_if_fallback_disabled(
+                    ib.config,
+                    :raycore_stack_trace_validation,
+                    :light_cache,
+                    stack_validation,
+                )
+                @warn _raycore_stack_trace_validation_message(stack_validation) * " Falling back to the normal CPU light backend for this simulation cache."
+                ib = RasterCPUBackend()
+                raycore_data = nothing
+                fallback_reason = :raycore_stack_trace_validation
                 scattering_backend isa RaycoreScatteringBackend && (scattering_backend = nothing)
             end
         end
@@ -2765,10 +3125,32 @@ function _fill_sector_band_initial_matrix!(
         end
         sector_idx = sector_indices[row]
         for j in _sector_active_indices(responses, sector_idx)
-            initial_power_by_sector[row, j] += _sector_area_value(responses, sector_idx, j)
+            pa = _sector_area_value(responses, sector_idx, j)
+            initial_power_by_sector[row, j] += pa
         end
     end
     return initial_power_by_sector
+end
+
+function _sector_band_initial_vector(
+    responses::SectorResponsesCache,
+    sector_idx::Int,
+    band_u::String,
+)
+    n_nodes = length(responses.node_ids)
+    initial_power = zeros(Float64, n_nodes)
+    emitter =
+        band_u == "NIR" ? _emitter_incident_power_nir(responses) : _emitter_incident_power_par(responses)
+    emitter_active =
+        band_u == "NIR" ? _emitter_incident_power_nir_active(responses) :
+        _emitter_incident_power_par_active(responses)
+    @inbounds for j in emitter_active
+        initial_power[j] = emitter[j]
+    end
+    @inbounds for j in _sector_active_indices(responses, sector_idx)
+        initial_power[j] += _sector_area_value(responses, sector_idx, j)
+    end
+    return initial_power
 end
 
 function _ensure_sector_band_caches_batch!(
@@ -2843,9 +3225,30 @@ function _ensure_sector_band_cache!(
     existing !== nothing && return existing, iterations[sector_idx], converged[sector_idx]
 
     cache.mode == :partial && _evict_cache_entries!(cache, n_nodes * sizeof(Float64); protect_key=entry.key)
-    first = _combine_single_sector_response(entry.responses_cache, sector_idx, band_u, false)
     graph = _cached_scattering_graph!(cache, entry)
     backend = _resolve_scattering_backend(cache.scattering_mode, cache.scattering_backend)
+    if (band_u == "PAR" || band_u == "NIR") && graph.node_ids == geometry.node_ids
+        initial_power = _sector_band_initial_vector(entry.responses_cache, sector_idx, band_u)
+        coeff_by_node = band_u == "NIR" ? graph.coeff_nir_by_node : graph.coeff_par_by_node
+        default_coeff = band_u == "NIR" ? graph.default_coeff_nir : graph.default_coeff_par
+        dense, it, conv = _compute_scattering_band_dense(
+            graph,
+            initial_power,
+            options,
+            backend;
+            band=band_u,
+            default_coeff=default_coeff,
+            coeff_by_node=coeff_by_node,
+        )
+        target[sector_idx] = dense
+        iterations[sector_idx] = it
+        converged[sector_idx] = conv
+        entry.resident_bytes += n_nodes * sizeof(Float64)
+        cache.resident_bytes += n_nodes * sizeof(Float64)
+        return dense, it, conv
+    end
+
+    first = _combine_single_sector_response(entry.responses_cache, sector_idx, band_u, false)
     result =
         compute_scattering_band(
             graph,

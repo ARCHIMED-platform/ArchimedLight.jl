@@ -425,7 +425,11 @@ end
                         _assert_series_close(metal_series, ka_series; label="large_raycore_metal_vs_ka_cpu", rtol=2e-2, atol=1e-2)
                     elseif fixture.source == "XPalm VPalm" && resolved isa ArchimedLight.RasterCPUBackend
                         @test resolved isa ArchimedLight.RasterCPUBackend
-                        @test metal_run.sim.cache.fallback_reason in (:raycore_prechunk_instance_cap, :raycore_trace_validation)
+                        @test metal_run.sim.cache.fallback_reason in (
+                            :raycore_prechunk_instance_cap,
+                            :raycore_trace_validation,
+                            :raycore_stack_trace_validation,
+                        )
                         @info "XPalm Metal large scene used guarded raster fallback." reason=metal_run.sim.cache.fallback_reason
                     else
                         @test resolved isa ArchimedLight.RaycoreInterceptionBackend

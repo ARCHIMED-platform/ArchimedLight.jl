@@ -23,6 +23,147 @@ end
     @test isapprox(get(HelperModule._incident_par_initial_flux(run.budget), 1, 0.0), 100.0; atol=1e-10, rtol=1e-10)
 end
 
+@testitem "Synthetic case Raycore dense response reducer consumption" tags = [:synthetic, :fast, :raycore_backend] begin
+    projected_area_by_sector = zeros(Float64, 3, 2)
+    active_indices = Int[]
+    active_offsets = [1, 0, 0]
+    hits_all_sectors = [10, 0, 1]
+    sun_hits_by_node = zeros(Int, 3)
+
+    stored = ArchimedLight._consume_raycore_device_dense_response!(
+        projected_area_by_sector,
+        active_indices,
+        active_offsets,
+        1,
+        hits_all_sectors,
+        sun_hits_by_node,
+        Float64[],
+        nothing,
+        nothing,
+        Int32[2, 0, 3],
+        Float32[0.5, 0.0, 1.25],
+        0.2,
+        true,
+        false,
+    )
+
+    @test stored
+    @test hits_all_sectors == [12, 0, 4]
+    @test sun_hits_by_node == [2, 0, 3]
+    @test projected_area_by_sector[:, 1] == [0.5, 0.0, 1.25]
+    @test projected_area_by_sector[:, 2] == zeros(3)
+    @test active_indices == [1, 3]
+    @test active_offsets == [1, 3, 0]
+
+    projected_pixels_area = zeros(Float64, 3)
+    hits_only = zeros(Int, 3)
+    sun_hits_only = zeros(Int, 3)
+    stored_hits_only = ArchimedLight._consume_raycore_device_dense_response!(
+        zeros(Float64, 3, 1),
+        Int[],
+        [1, 0],
+        1,
+        hits_only,
+        sun_hits_only,
+        projected_pixels_area,
+        nothing,
+        nothing,
+        Int32[1, 2, 0],
+        nothing,
+        0.25,
+        false,
+        true,
+    )
+
+    @test !stored_hits_only
+    @test hits_only == [1, 2, 0]
+    @test sun_hits_only == zeros(Int, 3)
+    @test projected_pixels_area == [0.25, 0.5, 0.0]
+
+    projected_area_per_node = zeros(Float64, 3)
+    incident_par = zeros(Float64, 3)
+    incident_nir = zeros(Float64, 3)
+    flux_hits = zeros(Int, 3)
+    flux_sun_hits = zeros(Int, 3)
+    flux_projected_pixels = zeros(Float64, 3)
+    consumed = ArchimedLight._consume_raycore_device_dense_flux_response!(
+        projected_area_per_node,
+        incident_par,
+        incident_nir,
+        flux_hits,
+        flux_sun_hits,
+        flux_projected_pixels,
+        Int32[2, 0, 1],
+        Float32[0.5, 0.0, 0.25],
+        0.1,
+        4.0,
+        2.0,
+        true,
+        false,
+    )
+
+    @test consumed.counts_consumed
+    @test consumed.area_consumed
+    @test flux_hits == [2, 0, 1]
+    @test flux_sun_hits == [2, 0, 1]
+    @test flux_projected_pixels == zeros(3)
+    @test projected_area_per_node == [0.5, 0.0, 0.25]
+    @test incident_par == [2.0, 0.0, 1.0]
+    @test incident_nir == [1.0, 0.0, 0.5]
+
+    ratio_area = zeros(Float64, 3)
+    ratio_par = zeros(Float64, 3)
+    ratio_nir = zeros(Float64, 3)
+    ratio_hits = zeros(Int, 3)
+    ratio_sun_hits = zeros(Int, 3)
+    ratio_projected_pixels = zeros(Float64, 3)
+    ratio_counts = ArchimedLight._consume_raycore_device_dense_flux_response!(
+        ratio_area,
+        ratio_par,
+        ratio_nir,
+        ratio_hits,
+        ratio_sun_hits,
+        ratio_projected_pixels,
+        Int32[1, 2, 0],
+        Float32[0.5, 0.25, 0.0],
+        0.2,
+        10.0,
+        0.0,
+        false,
+        true,
+    )
+
+    @test ratio_counts.counts_consumed
+    @test !ratio_counts.area_consumed
+    @test ratio_hits == [1, 2, 0]
+    @test ratio_projected_pixels == [0.2, 0.4, 0.0]
+    @test ratio_area == zeros(3)
+
+    ratio_area_pass = ArchimedLight._consume_raycore_device_dense_flux_response!(
+        ratio_area,
+        ratio_par,
+        ratio_nir,
+        ratio_hits,
+        ratio_sun_hits,
+        ratio_projected_pixels,
+        nothing,
+        Float32[0.5, 0.25, 0.0],
+        0.2,
+        10.0,
+        0.0,
+        false,
+        false,
+        [2.0, 4.0, 1.0],
+    )
+
+    @test !ratio_area_pass.counts_consumed
+    @test ratio_area_pass.area_consumed
+    @test ratio_hits == [1, 2, 0]
+    @test ratio_area == [1.0, 1.0, 0.0]
+    @test ratio_par == [10.0, 10.0, 0.0]
+    @test ratio_nir == zeros(3)
+end
+
 @testitem "Synthetic case Raycore scene adapter metadata" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
     scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
     models = HelperModule._default_synthetic_models()
@@ -117,6 +258,37 @@ end
     @test instance_indices[1:2] == UInt32[1, 2]
     decoded = [ArchimedLight._raycore_decode_node_index(decoder, metadata[i], instance_indices[i]) for i in 1:Int(count)]
     @test decoded == UInt32[11, 21]
+
+    exact_overlap_instances = [
+        Raycore.InstanceDescriptor(UInt32(1), UInt32(1), identity, identity, UInt32(0)),
+        Raycore.InstanceDescriptor(UInt32(1), UInt32(2), identity, identity, UInt32(0)),
+    ]
+    exact_overlap_tlas = Raycore.build_tlas([blas], exact_overlap_instances)
+    fill!(metadata, UInt32(0))
+    fill!(distances, 0.0f0)
+    fill!(instance_indices, UInt32(0))
+    count, overflow = Raycore.all_hits!(metadata, distances, instance_indices, exact_overlap_tlas, ray, 0, 4, 1.0f-5)
+    @test count == Int32(2)
+    @test !overflow
+    @test metadata[1:2] == UInt32[1, 1]
+    @test sort(instance_indices[1:2]) == UInt32[1, 2]
+    @test distances[1] ≈ distances[2]
+    decoded = [ArchimedLight._raycore_decode_node_index(decoder, metadata[i], instance_indices[i]) for i in 1:Int(count)]
+    @test sort(decoded) == UInt32[11, 21]
+
+    duplicate_tri_blas = Raycore.build_blas([tri, tri])
+    duplicate_tri_tlas = Raycore.build_tlas(
+        [duplicate_tri_blas],
+        [Raycore.InstanceDescriptor(UInt32(1), UInt32(1), identity, identity, UInt32(0))],
+    )
+    fill!(metadata, UInt32(0))
+    fill!(distances, 0.0f0)
+    fill!(instance_indices, UInt32(0))
+    count, overflow = Raycore.all_hits!(metadata, distances, instance_indices, duplicate_tri_tlas, ray, 0, 4, 1.0f-5)
+    @test count == Int32(1)
+    @test !overflow
+    @test metadata[1] == UInt32(1)
+    @test instance_indices[1] == UInt32(1)
 end
 
 @testitem "Synthetic case Raycore reference mesh instancing" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
@@ -128,6 +300,14 @@ end
     @test prepared.geometry.raycore_instanced_geometry !== nothing
     @test prepared.geometry.raycore_instanced_geometry.prototype_node_count == 2
     @test prepared.geometry.raycore_instanced_geometry.fallback_face_count == 0
+    diag = ArchimedLight._raycore_reference_instancing_diagnostics(scene, prepared, options)
+    @test diag.status == :eligible
+    @test diag.candidate_nodes == 2
+    @test diag.supported_nodes == 2
+    @test diag.reusable_refs == 1
+    @test diag.reusable_nodes == 2
+    @test diag.saved_faces > 0
+    @test diag.savings_ratio > 0
 
     data = ArchimedLight._prepare_raycore_interception_data(
         scene,
@@ -138,6 +318,16 @@ end
     @test data.geometry_mode == :reference_instances
     @test data.hit_decoder.instance_count == 2
     @test data.hit_decoder.metadata_stride == length(data.prepared.geometry.node_ids) + 1
+    shape = ArchimedLight._raycore_scene_shape_summary(data)
+    @test shape.geometry_mode == :reference_instances
+    @test !shape.chunked_tlas
+    @test shape.tlas_instances == 2
+    @test shape.reference_prototype_count == 1
+    @test shape.reference_prototype_node_count == 2
+    @test shape.reference_prototype_face_count == prepared.geometry.raycore_instanced_geometry.prototype_face_count
+    @test shape.reference_fallback_face_count == 0
+    @test shape.reference_compact_face_count == shape.reference_prototype_face_count
+    @test shape.expanded_face_count == length(prepared.geometry.faces)
 
     first_node_id, second_node_id = data.prepared.geometry.node_ids[1:2]
     first_node_idx = data.prepared.geometry.node_index[first_node_id]
@@ -168,6 +358,12 @@ end
     )
     @test toric_data.geometry_mode == :reference_instances
     @test toric_data.hit_decoder.instance_count == length(toric_data.tlas.instances)
+    toric_shape = ArchimedLight._raycore_scene_shape_summary(toric_data)
+    @test toric_shape.geometry_mode == :reference_instances
+    @test toric_shape.tlas_instances == length(toric_data.tlas.instances)
+    @test toric_shape.reference_prototype_count == shape.reference_prototype_count
+    @test toric_shape.reference_compact_face_count == shape.reference_compact_face_count
+    @test toric_shape.expanded_face_instance_upper_bound == toric_shape.tlas_instances * toric_shape.expanded_face_count
     @test ArchimedLight._raycore_decode_node_index(toric_data.hit_decoder, UInt32(1), UInt32(1)) == UInt32(first_node_idx)
     @test ArchimedLight._raycore_decode_node_index(toric_data.hit_decoder, UInt32(1), UInt32(10)) == UInt32(second_node_idx)
 end
@@ -179,6 +375,11 @@ end
 
     prepared = ArchimedLight._prepare_interception_data(scene, models, options; include_raycore_instancing=true)
     @test prepared.geometry.raycore_instanced_geometry === nothing
+    tapered_diag = ArchimedLight._raycore_reference_instancing_diagnostics(scene, prepared, options)
+    @test tapered_diag.status == :no_reusable_references
+    @test tapered_diag.tapered_nodes == 2
+    @test tapered_diag.candidate_nodes == 0
+    @test tapered_diag.reusable_refs == 0
     data = ArchimedLight._prepare_raycore_interception_data(
         scene,
         models,
@@ -199,6 +400,9 @@ end
     old_limit = get(ENV, "ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCE_LIMIT", nothing)
     try
         ENV["ARCHIMEDLIGHT_RAYCORE_REFERENCE_INSTANCE_LIMIT"] = "1"
+        limited_diag = ArchimedLight._raycore_reference_instancing_diagnostics(shared_scene, shared_prepared, options)
+        @test limited_diag.status == :instance_limit
+        @test limited_diag.instance_count > 1
         limited_data = ArchimedLight._prepare_raycore_interception_data(
             shared_scene,
             models,
@@ -250,6 +454,33 @@ end
         @test fallback_first.projected_area_per_node == reference_first.projected_area_per_node
         @test fallback_first.incident_power.par == reference_first.incident_power.par
 
+        strict_config = ArchimedLight.RaycoreBackendConfig(
+            backend=:fake_non_cpu_backend,
+            max_prechunk_instances=1,
+            allow_fallback=false,
+        )
+        strict_ib = ArchimedLight.RaycoreInterceptionBackend(strict_config)
+        strict_cache_err = try
+            ArchimedLight.prepare_light_cache(scene, models, options; interception_backend=strict_ib)
+            nothing
+        catch err
+            err
+        end
+        @test strict_cache_err isa ArchimedLight.RaycoreValidationError
+        @test strict_cache_err.reason == :raycore_prechunk_instance_cap
+        @test strict_cache_err.stage == :light_cache
+        @test occursin("prechunked BLAS instances", strict_cache_err.message)
+
+        strict_first_err = try
+            ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options; backend=strict_ib)
+            nothing
+        catch err
+            err
+        end
+        @test strict_first_err isa ArchimedLight.RaycoreValidationError
+        @test strict_first_err.reason == :raycore_prechunk_instance_cap
+        @test strict_first_err.stage == :first_order
+
         scatter_options = HelperModule._synthetic_options(sectors=4, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=true, toricity=false)
         scatter_sky = ArchimedLight.SkyState(180.0, 60.0, 100.0, 40.0, 0.8, 0.2)
         scatter_turtle = ArchimedLight.build_turtle(scatter_options, scatter_sky)
@@ -264,6 +495,22 @@ end
             backend=ArchimedLight.RaycoreScatteringBackend(ib),
         )
         @test graph isa ArchimedLight.ScatteringTransferGraph
+        strict_scatter_err = try
+            ArchimedLight.build_scattering_transfer_graph(
+                scene,
+                models,
+                scatter_turtle,
+                scatter_first,
+                scatter_options;
+                backend=ArchimedLight.RaycoreScatteringBackend(strict_ib),
+            )
+            nothing
+        catch err
+            err
+        end
+        @test strict_scatter_err isa ArchimedLight.RaycoreValidationError
+        @test strict_scatter_err.reason == :raycore_prechunk_instance_cap
+        @test strict_scatter_err.stage == :scattering_topology
     finally
         if old_threshold === nothing
             delete!(ENV, "ARCHIMEDLIGHT_RAYCORE_PRECHUNK_FACE_THRESHOLD")
@@ -304,7 +551,8 @@ end
     @test cpu_responses.dense isa ArchimedLight.DenseSectorResponseStorage
     @test ray_responses.dense isa ArchimedLight.DenseSectorResponseStorage
     @test size(ray_responses.dense.projected_area_by_sector) == (length(ray_responses.node_ids), length(turtle.sectors))
-    @test cpu_responses.dense.projected_area_active_by_sector == ray_responses.dense.projected_area_active_by_sector
+    @test cpu_responses.dense.projected_area_active_indices == ray_responses.dense.projected_area_active_indices
+    @test cpu_responses.dense.projected_area_active_offsets == ray_responses.dense.projected_area_active_offsets
     @test cpu_responses.dense.projected_area_by_sector ≈ ray_responses.dense.projected_area_by_sector
     @test ArchimedLight._hits_all_sectors(cpu_responses) == ArchimedLight._hits_all_sectors(ray_responses)
 
@@ -397,6 +645,36 @@ end
     @test all(idx -> traced_direction_stack.instance_indices[idx] == UInt32(1), occupied_slots)
     @test all(idx -> traced_direction_stack.nodes[idx] in UInt32[1, 2], occupied_slots)
 
+    raw_stack = ArchimedLight._raycore_trace_direction_raw_stacks(
+        stack_data,
+        stack_turtle.sectors[1].direction,
+        stack_options,
+    )
+    @test raw_stack.counts == traced_direction_stack.counts
+    @test raw_stack.overflow == traced_direction_stack.overflow
+    @test all(idx -> raw_stack.instance_indices[idx] == UInt32(1), occupied_slots)
+    @test all(idx -> raw_stack.metadata[idx] in UInt32[1, 2], occupied_slots)
+
+    comparison_data = ArchimedLight._prepare_raycore_interception_data(
+        leaf_scene,
+        leaf_models,
+        stack_options,
+        ArchimedLight.RaycoreInterceptionBackend(),
+    )
+    raw_comparison = ArchimedLight._raycore_raw_stack_comparison(
+        stack_data,
+        comparison_data,
+        stack_turtle.sectors[1].direction,
+        stack_options,
+    )
+    @test raw_comparison.ok
+    @test raw_comparison.reference_hits == raw_comparison.candidate_hits
+    @test raw_comparison.hit_ratio == 1.0
+    @test raw_comparison.reference_occupied == raw_comparison.candidate_occupied
+    @test raw_comparison.occupied_ratio == 1.0
+    @test raw_comparison.reference_overflow == raw_comparison.candidate_overflow == 0
+    @test raw_comparison.mismatch === nothing
+
     stack_first = ArchimedLight.compute_first_order(leaf_scene, leaf_models, stack_turtle, stack_fluxes, stack_options; backend=:raycore_cpu)
     @test isapprox(get(stack_first.projected_area_per_node, 1, 0.0), 0.75; atol=1e-10, rtol=1e-10)
     @test isapprox(get(stack_first.projected_area_per_node, 2, 0.0), 0.75; atol=1e-10, rtol=1e-10)
@@ -483,6 +761,25 @@ end
         options,
         ArchimedLight.RaycoreInterceptionBackend(edge_accumulation=:sparse_host_reduce),
     )
+    prebuilt_data = ArchimedLight._prepare_raycore_interception_data(
+        scene,
+        models,
+        options,
+        ArchimedLight.RaycoreInterceptionBackend(edge_accumulation=:sparse_host_reduce),
+    )
+    prebuilt_graph = ArchimedLight.build_scattering_transfer_graph(
+        scene,
+        models,
+        prebuilt_data,
+        turtle,
+        first,
+        options,
+        sparse_sb,
+    )
+    @test prebuilt_graph.pair_counts.to_nodes == sparse_graph.pair_counts.to_nodes
+    @test prebuilt_graph.pair_counts.from_nodes == sparse_graph.pair_counts.from_nodes
+    @test prebuilt_graph.pair_counts.counts == sparse_graph.pair_counts.counts
+    @test prebuilt_graph.all_hits == sparse_graph.all_hits
     @test sparse_data.edge_keys_dev !== nothing
     @test sparse_data.edge_key_counts_dev !== nothing
     @test sparse_data.dense_edge_counts_dev === nothing
@@ -520,6 +817,7 @@ end
     @test !isempty(sparse_data.edge_keys_host)
     @test !isempty(sparse_data.edge_key_counts_host)
     @test sparse_edge_keys1.max_edges == 2 * (sparse_data.max_hits_per_pixel - 1)
+    @test !ArchimedLight._raycore_use_device_edge_accumulation_in_flat_path(sparse_data)
     sparse_edge_counts = Dict{UInt64,Int}()
     compact_scratch = sparse_data.edge_compact_host
     ArchimedLight._merge_counted_packed_edge_keys!(
@@ -531,6 +829,58 @@ end
     )
     @test !isempty(sparse_edge_counts)
     @test sparse_data.edge_compact_host === compact_scratch
+    indexed_edge_counts = Dict{Int,Int}()
+    ArchimedLight._merge_packed_edge_counts_as_indexed!(
+        indexed_edge_counts,
+        sparse_edge_counts,
+        sparse_data.prepared.geometry.node_ids,
+    )
+    packed_topology = ArchimedLight._build_scattering_topology_cache(
+        scene,
+        models,
+        sparse_data.prepared,
+        ArchimedLight._edge_counts_from_packed(sparse_edge_counts),
+        Dict{Int,Int}(),
+    )
+    packed_dense_sun_hits = zeros(Int, length(sparse_data.prepared.geometry.node_ids))
+    packed_dense_sun_hits[1] = 4
+    packed_mixed_sun_topology = ArchimedLight._build_scattering_topology_cache(
+        scene,
+        models,
+        sparse_data.prepared,
+        ArchimedLight.ScatteringPairCounts(Int[], Int[], Int[]),
+        packed_dense_sun_hits,
+        Dict(sparse_data.prepared.geometry.node_ids[1] => 1),
+    )
+    @test packed_mixed_sun_topology.sun_hits_by_node[1] == 5
+    @test packed_mixed_sun_topology.sun_hits[sparse_data.prepared.geometry.node_ids[1]] == 5
+    indexed_topology = ArchimedLight._build_scattering_topology_cache_from_indexed_edges(
+        scene,
+        models,
+        sparse_data.prepared,
+        indexed_edge_counts,
+        Dict{UInt64,Int}(),
+        Dict{Int,Int}(),
+    )
+    @test indexed_topology.pair_counts.to_nodes == packed_topology.pair_counts.to_nodes
+    @test indexed_topology.pair_counts.from_nodes == packed_topology.pair_counts.from_nodes
+    @test indexed_topology.pair_counts.counts == packed_topology.pair_counts.counts
+    @test indexed_topology.pair_to_idx == packed_topology.pair_to_idx
+    @test indexed_topology.pair_from_idx == packed_topology.pair_from_idx
+    dense_sun_hits = zeros(Int, length(sparse_data.prepared.geometry.node_ids))
+    dense_sun_hits[1] = 2
+    extra_sun_hits = Dict(sparse_data.prepared.geometry.node_ids[1] => 3)
+    mixed_sun_topology = ArchimedLight._build_scattering_topology_cache_from_indexed_edges(
+        scene,
+        models,
+        sparse_data.prepared,
+        Dict{Int,Int}(),
+        Dict{UInt64,Int}(),
+        dense_sun_hits,
+        extra_sun_hits,
+    )
+    @test mixed_sun_topology.sun_hits_by_node[1] == 5
+    @test mixed_sun_topology.sun_hits[sparse_data.prepared.geometry.node_ids[1]] == 5
     dense_data = ArchimedLight._prepare_raycore_interception_data(
         scene,
         models,
@@ -547,11 +897,159 @@ end
     @test !any(dense_traced.overflow)
     @test dense_traced.instance_indices_dev === dense_data.stack_instance_indices_dev
     dense_counts1 = ArchimedLight._raycore_scattering_dense_counts_from_device_traced_stacks(dense_data, dense_traced)
+    dense_counts_expected = copy(dense_counts1)
     dense_counts2 = ArchimedLight._raycore_scattering_dense_counts_from_device_traced_stacks(dense_data, dense_traced)
+    @test ArchimedLight._raycore_use_device_edge_accumulation_in_flat_path(dense_data)
+    @test ArchimedLight._raycore_use_device_node_count_reduction(dense_data)
+    @test ArchimedLight._raycore_use_device_sector_area_reduction(dense_data)
+    @test ArchimedLight._raycore_use_device_node_count_and_sector_area_reduction(dense_data)
+    caps = ArchimedLight._raycore_device_reduction_capabilities(dense_data)
+    @test caps.dense_edge_accumulation
+    @test caps.node_count_reduction
+    @test caps.sector_area_reduction
+    @test caps.fused_count_area_reduction
+    stack_validation = ArchimedLight._raycore_stack_trace_validation(dense_data, options)
+    @test stack_validation.ok
+    @test !stack_validation.required
+    @test stack_validation.directions_tested == 0
+    @test stack_validation.direction_count == 0
+    @test stack_validation.min_reference_hits == 512
+    @test stack_validation.min_reference_occupied == 128
+    @test stack_validation.min_hit_ratio == 0.95
+    @test stack_validation.min_occupied_ratio == 0.95
+    old_validation_dirs = get(ENV, "ARCHIMEDLIGHT_RAYCORE_STACK_VALIDATION_DIRECTIONS", nothing)
+    try
+        ENV["ARCHIMEDLIGHT_RAYCORE_STACK_VALIDATION_DIRECTIONS"] = "2"
+        @test length(ArchimedLight._raycore_stack_validation_directions()) == 2
+    finally
+        if old_validation_dirs === nothing
+            delete!(ENV, "ARCHIMEDLIGHT_RAYCORE_STACK_VALIDATION_DIRECTIONS")
+        else
+            ENV["ARCHIMEDLIGHT_RAYCORE_STACK_VALIDATION_DIRECTIONS"] = old_validation_dirs
+        end
+    end
+    stack_validation_message = ArchimedLight._raycore_stack_trace_validation_message((
+        raycore_hits=1,
+        reference_hits=2,
+        hit_ratio=0.5,
+        raycore_occupied=1,
+        reference_occupied=2,
+        occupied_ratio=0.5,
+        min_hit_ratio=0.95,
+        min_occupied_ratio=0.95,
+        directions_tested=1,
+        direction_count=3,
+    ))
+    @test occursin("full-stack trace validation", stack_validation_message)
+    @test occursin("min_hit_ratio=0.95", stack_validation_message)
+    dense_node_counts = ArchimedLight._raycore_stack_node_counts_from_device_traced_stacks(dense_data, dense_traced)
+    dense_sector_area = ArchimedLight._raycore_sector_area_from_device_traced_stacks(
+        dense_data,
+        dense_traced,
+        dense_data.prepared.geometry.plotbox.pixel_area,
+    )
+    dense_fused = ArchimedLight._raycore_node_counts_and_sector_area_from_device_traced_stacks(
+        dense_data,
+        dense_traced,
+        dense_data.prepared.geometry.plotbox.pixel_area,
+    )
     @test dense_data.dense_edge_counts_dev !== nothing
+    @test dense_data.node_counts_dev !== nothing
+    @test dense_data.sector_area_dev !== nothing
     @test dense_counts1 isa Vector{Int32}
-    @test dense_counts2 == dense_counts1
+    @test dense_counts1 === dense_data.dense_edge_counts_host
+    @test dense_counts2 === dense_data.dense_edge_counts_host
+    @test dense_counts2 == dense_counts_expected
     @test any(!iszero, dense_counts1)
+    @test dense_node_counts isa Vector{Int32}
+    @test dense_sector_area isa Vector{Float32}
+    @test dense_fused.node_counts == dense_node_counts
+    @test dense_fused.sector_area == dense_sector_area
+    @test dense_node_counts === dense_data.node_counts_host
+    @test dense_sector_area === dense_data.sector_area_host
+    dense_node_counts_expected = copy(dense_node_counts)
+    dense_sector_area_expected = copy(dense_sector_area)
+    dense_fused_again = ArchimedLight._raycore_node_counts_and_sector_area_from_device_traced_stacks(
+        dense_data,
+        dense_traced,
+        dense_data.prepared.geometry.plotbox.pixel_area,
+    )
+    @test dense_fused_again.node_counts === dense_data.node_counts_host
+    @test dense_fused_again.sector_area === dense_data.sector_area_host
+    @test dense_fused_again.node_counts == dense_node_counts_expected
+    @test dense_fused_again.sector_area == dense_sector_area_expected
+    dense_trace_counts = Array(dense_traced.counts_dev)
+    @test sum(Int, dense_node_counts) == sum(Int, dense_trace_counts)
+    dense_profile = ArchimedLight._raycore_stack_profile(
+        dense_data,
+        (turtle.sectors[sparse_sector_idx].direction,),
+        options,
+    )
+    @test dense_profile.traced_dirs == 1
+    @test dense_profile.copied_dirs == 1
+    @test dense_profile.copy_required_dirs == 0
+    @test dense_profile.copy_skippable_dirs == 1
+    @test dense_profile.reduced_dirs == 1
+    @test dense_profile.edge_dirs == 1
+    @test dense_profile.total_pixels == length(dense_trace_counts)
+    @test dense_profile.total_hits == sum(Int, dense_trace_counts)
+    @test dense_profile.occupied_pixels == count(!iszero, dense_trace_counts)
+    @test dense_profile.max_seen == maximum(Int.(dense_trace_counts))
+    @test isapprox(
+        dense_profile.hit_util,
+        100 * dense_profile.total_hits / (dense_profile.total_pixels * dense_data.max_hits_per_pixel);
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    @test isapprox(
+        dense_profile.occupied,
+        100 * dense_profile.occupied_pixels / dense_profile.total_pixels;
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    empty_profile = ArchimedLight._raycore_stack_profile(
+        dense_data,
+        typeof(turtle.sectors[sparse_sector_idx].direction)[],
+        options;
+        accumulate_edges=Bool[],
+        needs_sector_area=Bool[],
+    )
+    @test empty_profile.trace_ms == 0.0
+    @test empty_profile.count_area_ms == 0.0
+    @test empty_profile.edge_ms == 0.0
+    @test empty_profile.copy_ms == 0.0
+    @test empty_profile.total_ms == 0.0
+    @test empty_profile.traced_dirs == 0
+    @test empty_profile.reduced_dirs == 0
+    @test empty_profile.edge_dirs == 0
+    @test empty_profile.copied_dirs == 0
+    @test empty_profile.copy_required_dirs == 0
+    @test empty_profile.copy_skippable_dirs == 0
+    @test empty_profile.total_hits == 0
+    @test empty_profile.total_pixels == 0
+    @test empty_profile.occupied_pixels == 0
+    @test empty_profile.hit_util == 0.0
+    @test empty_profile.occupied == 0.0
+    @test empty_profile.max_seen == 0
+    @test empty_profile.hits_per_dir == 0.0
+    @test !empty_profile.overflow
+
+    repeated_profile = ArchimedLight._raycore_stack_profile(
+        dense_data,
+        [turtle.sectors[sparse_sector_idx].direction, turtle.sectors[sparse_sector_idx].direction],
+        options;
+        accumulate_edges=[false, true],
+        needs_sector_area=[false, true],
+    )
+    @test repeated_profile.traced_dirs == 2
+    @test repeated_profile.copied_dirs == 2
+    @test repeated_profile.copy_required_dirs == 0
+    @test repeated_profile.copy_skippable_dirs == 2
+    @test repeated_profile.reduced_dirs == 2
+    @test repeated_profile.edge_dirs == 1
+    @test repeated_profile.total_pixels == 2 * length(dense_trace_counts)
+    @test repeated_profile.total_hits == 2 * sum(Int, dense_trace_counts)
+    @test repeated_profile.occupied_pixels == 2 * count(!iszero, dense_trace_counts)
     auto_data = ArchimedLight._prepare_raycore_interception_data(
         scene,
         models,
@@ -579,6 +1077,23 @@ end
     end
     @test length(auto_data.tlas.instances) == 1
     @test length(chunked_auto_data.tlas.instances) > 1
+    auto_shape = ArchimedLight._raycore_scene_shape_summary(auto_data)
+    chunked_shape = ArchimedLight._raycore_scene_shape_summary(chunked_auto_data)
+    @test auto_shape.geometry_mode == auto_data.geometry_mode
+    @test auto_shape.tlas_instances == length(auto_data.tlas.instances)
+    @test auto_shape.tlas_geometries > 0
+    @test auto_shape.node_count == length(auto_data.prepared.geometry.node_ids)
+    @test auto_shape.expanded_face_count == length(auto_data.prepared.geometry.faces)
+    @test auto_shape.expanded_face_instance_upper_bound == auto_shape.tlas_instances * auto_shape.expanded_face_count
+    @test auto_shape.dense_edge_pairs == length(auto_data.dense_edge_counts_dev)
+    @test auto_shape.edge_key_capacity == 0
+    @test chunked_shape.geometry_mode == chunked_auto_data.geometry_mode
+    @test chunked_shape.chunked_tlas
+    @test chunked_shape.tlas_instances == length(chunked_auto_data.tlas.instances)
+    @test chunked_shape.tlas_geometries > 0
+    @test chunked_shape.expanded_face_count == length(chunked_auto_data.prepared.geometry.faces)
+    @test chunked_shape.dense_edge_pairs == 0
+    @test chunked_shape.edge_key_capacity == length(chunked_auto_data.edge_keys_dev)
     @test streamed_chunk_count[] == length(collected_chunks)
     @test length(chunked_auto_data.tlas.instances) == length(collected_chunks)
     @test ArchimedLight._raycore_auto_dense_edge_accumulation_supported(auto_data)
@@ -593,7 +1108,8 @@ end
     @test chunked_auto_data.edge_key_counts_dev !== nothing
     @test isempty(chunked_auto_data.edge_keys_host)
     @test isempty(chunked_auto_data.edge_key_counts_host)
-    @test graph.dense[] === nothing
+    @test graph.dense[] !== nothing
+    @test graph.dense[].all_hits == [get(graph.all_hits, nid, 0) for nid in graph.node_ids]
     dense_initial_par = ArchimedLight._dense_initial_scattering_power(graph, first, nothing, "PAR")
     @test dense_initial_par === first.dense.incident_power.par
     dense_initial_nir32 = ArchimedLight._dense_initial_scattering_power(graph, first, nothing, "NIR", Float32)
@@ -875,6 +1391,19 @@ end
     @test size(ray_responses.dense.projected_area_by_sector) == (length(ray_responses.node_ids), length(scatter_turtle.sectors))
     topology = scatter_entry.responses_cache.scattering_topology
     @test topology !== nothing
+    @test length(topology.pair_to_idx) == length(topology.pair_counts)
+    @test length(topology.pair_from_idx) == length(topology.pair_counts)
+    @test length(topology.sun_hits_by_node) == length(topology.node_ids)
+    @test [
+        topology.node_ids[topology.pair_to_idx[i]] for i in eachindex(topology.pair_to_idx)
+    ] == topology.pair_counts.to_nodes
+    @test [
+        topology.node_ids[topology.pair_from_idx[i]] for i in eachindex(topology.pair_from_idx)
+    ] == topology.pair_counts.from_nodes
+    @test Dict(
+        topology.node_ids[i] => topology.sun_hits_by_node[i] for i in eachindex(topology.node_ids) if topology.sun_hits_by_node[i] != 0
+    ) == topology.sun_hits
+    @test sum(topology.sun_hits_by_node) == sum(values(topology.sun_hits); init=0)
     @test topology.dense_static[] === nothing
     unit_first = ArchimedLight._combine_sector_responses(
         scatter_entry.responses_cache,
@@ -887,6 +1416,8 @@ end
     @test unit_fast.dense.incident_power.par == unit_first.dense.incident_power.par
     @test unit_fast.dense.incident_power.nir == unit_first.dense.incident_power.nir
     @test unit_fast.dense.hits_per_node == unit_first.dense.hits_per_node
+    @test ArchimedLight._sector_band_initial_vector(scatter_entry.responses_cache, 1, "PAR") ==
+          unit_fast.dense.incident_power.par
     unit_nir = ArchimedLight._combine_sector_responses(
         scatter_entry.responses_cache,
         ArchimedLight._unit_directional_fluxes(scatter_entry.turtle, 1; nir=1.0),
@@ -897,15 +1428,23 @@ end
     @test unit_nir_fast.dense.incident_power.par == unit_nir.dense.incident_power.par
     @test unit_nir_fast.dense.incident_power.nir == unit_nir.dense.incident_power.nir
     @test unit_nir_fast.dense.hits_per_node == unit_nir.dense.hits_per_node
+    @test ArchimedLight._sector_band_initial_vector(scatter_entry.responses_cache, 1, "NIR") ==
+          unit_nir_fast.dense.incident_power.nir
     graph1 = ArchimedLight.build_scattering_transfer_graph(topology, unit_first, scatter_options, sb)
     @test topology.dense_static[] !== nothing
+    @test graph1.dense[] !== nothing
+    @test graph1.dense[].all_hits == [get(graph1.all_hits, nid, 0) for nid in graph1.node_ids]
     graph2 = ArchimedLight.build_scattering_transfer_graph(topology, unit_first, scatter_options, sb)
     @test graph1.dense_static === topology.dense_static[]
     @test graph2.dense_static === topology.dense_static[]
     @test isempty(graph1.dense_static.device_cache)
+    @test isempty(graph1.dense[].device_cache)
     dev_static1 = ArchimedLight._scattering_static_edge_device_arrays(graph1.dense_static, sb.config.backend)
     dev_static2 = ArchimedLight._scattering_static_edge_device_arrays(graph2.dense_static, sb.config.backend)
     @test dev_static1 === dev_static2
+    dev_arrays1 = ArchimedLight._copy_scattering_static_device_arrays(graph1, sb.config.backend)
+    dev_arrays2 = ArchimedLight._copy_scattering_static_device_arrays(graph1, sb.config.backend)
+    @test dev_arrays1.all_hits_dev === dev_arrays2.all_hits_dev
     @test scatter_entry.scattering_graph === nothing
     par_dense1, par_it1, par_conv1 = ArchimedLight._ensure_sector_band_cache!(scatter_cache, scatter_entry, 1, "PAR")
     @test scatter_entry.scattering_graph !== nothing
@@ -916,6 +1455,25 @@ end
     @test par_conv2 == par_conv1
     _nir_dense, _nir_it, _nir_conv = ArchimedLight._ensure_sector_band_cache!(scatter_cache, scatter_entry, 1, "NIR")
     @test scatter_entry.scattering_graph === cached_graph
+    par_first = ArchimedLight._combine_single_sector_response(scatter_entry.responses_cache, 1, "PAR", false)
+    par_public = ArchimedLight.compute_scattering_band(
+        cached_graph,
+        par_first,
+        scatter_options;
+        backend=sb,
+        band="PAR",
+    )
+    par_dense_only, par_dense_it, par_dense_conv = ArchimedLight._compute_scattering_band_dense(
+        cached_graph,
+        par_first,
+        scatter_options,
+        sb;
+        band="PAR",
+    )
+    @test isapprox(par_dense_only, par_public.dense_added_power_per_node; atol=1e-10, rtol=1e-10)
+    @test isapprox(par_dense1, par_dense_only; atol=1e-10, rtol=1e-10)
+    @test par_dense_it == par_public.iterations == par_it1
+    @test par_dense_conv == par_public.converged == par_conv1
     batch_indices = collect(2:min(3, length(scatter_entry.turtle.sectors)))
     scalar_batch_par = [
         ArchimedLight.compute_scattering_band(
