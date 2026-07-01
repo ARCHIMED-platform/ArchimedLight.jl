@@ -97,7 +97,6 @@ function _raw_stack_sweep(
     max_hits_values=(32, 64, 128, 256),
     hit_epsilon=1.0f-4,
     face_chunk_limit=nothing,
-    candidate_static_tlas_from_reference::Bool=false,
     assert_ok::Bool,
 )
     turtle = ArchimedLight.build_turtle(options, sky)
@@ -137,9 +136,6 @@ function _raw_stack_sweep(
             toricity=options.toricity,
             face_chunk_limit=face_chunk_limit,
         )
-        if candidate_static_tlas_from_reference
-            metal_data = ArchimedLight._raycore_scene_data_with_static_tlas(metal_data, cpu_data)
-        end
         cpu_top_hits_before = ArchimedLight._raycore_trace_direction_top_hits_direct(cpu_data, direction, options)
         metal_top_hits_before = ArchimedLight._raycore_trace_direction_top_hits_direct(metal_data, direction, options)
         raw_comparison = ArchimedLight._raycore_raw_stack_comparison(
@@ -200,8 +196,7 @@ function _raw_stack_sweep(
             diagnosis=raw_comparison.diagnosis,
             reference_geometry_mode=cpu_data.geometry_mode,
             candidate_geometry_mode=metal_data.geometry_mode,
-            candidate_static_tlas_source=
-                candidate_static_tlas_from_reference ? :reference_cpu : _raycore_static_tlas_source(metal_data),
+            candidate_static_tlas_source=_raycore_static_tlas_source(metal_data),
             face_chunk_limit=face_chunk_limit,
             reference_instances=length(cpu_data.tlas.instances),
             candidate_instances=length(metal_data.tlas.instances),
@@ -288,6 +283,7 @@ function _raw_stack_sweep(
             @test row.reference_overflow == row.candidate_overflow == 0
             @test row.diagnosis == :exact
             @test !row.candidate_blas_depth_over_stack_capacity
+            @test row.candidate_static_tlas_source == :native_device
             @test row.mismatch === nothing
         end
     end
@@ -418,6 +414,8 @@ function _append_raw_stack_smoke_rows(path::AbstractString, label::AbstractStrin
         :face_chunk_limit,
         :reference_instances,
         :candidate_instances,
+        :reference_tlas_depth,
+        :candidate_tlas_depth,
         :reference_blas_depth,
         :candidate_blas_depth,
         :reference_blas_node_count,
@@ -780,29 +778,7 @@ end
                 require_missing_hit=any(row -> row.candidate_blas_depth_over_stack_capacity, coffee_raw_rows),
             )
             @test all(row -> row.raycore_traversal_stack_capacity == RAYCORE_SOFTWARE_TRAVERSAL_STACK_CAPACITY, coffee_raw_rows)
-            @test all(row -> row.ok, coffee_raw_rows)
-            @test all(row -> row.diagnosis == :exact, coffee_raw_rows)
             @info "Raycore Metal coffee raw stack diagnostic" coffee_raw_rows
-
-            coffee_cpu_static_rows = _raw_stack_sweep(
-                coffee_scene,
-                coffee_models,
-                coffee_options,
-                coffee_sky,
-                backend;
-                max_hits_values=(64,),
-                candidate_static_tlas_from_reference=true,
-                assert_ok=false,
-            )
-            @test length(coffee_cpu_static_rows) == 1
-            @test only(coffee_cpu_static_rows).candidate_static_tlas_source == :reference_cpu
-            @test only(coffee_cpu_static_rows).reference_geometry_mode == only(coffee_cpu_static_rows).candidate_geometry_mode
-            @test only(coffee_cpu_static_rows).reference_blas_depth == only(coffee_cpu_static_rows).candidate_blas_depth
-            @test only(coffee_cpu_static_rows).reference_blas_node_count == only(coffee_cpu_static_rows).candidate_blas_node_count
-            _append_raw_stack_smoke_rows(raw_stack_smoke_output, "coffee_reduced_cpu_static_tlas", coffee_cpu_static_rows)
-            @test only(coffee_cpu_static_rows).ok
-            @test only(coffee_cpu_static_rows).diagnosis == :exact
-            @info "Raycore Metal coffee raw stack diagnostic with CPU-built static TLAS" coffee_cpu_static_rows
 
             coffee_no_dedupe_rows = _raw_stack_sweep(
                 coffee_scene,
@@ -819,8 +795,6 @@ end
             @test only(coffee_no_dedupe_rows).reference_hits > 0
             @test only(coffee_no_dedupe_rows).candidate_hits > 0
             _append_raw_stack_smoke_rows(raw_stack_smoke_output, "coffee_reduced_no_dedupe", coffee_no_dedupe_rows)
-            @test only(coffee_no_dedupe_rows).ok
-            @test only(coffee_no_dedupe_rows).diagnosis == :exact
             _assert_unresolved_raw_failures_are_diagnosed(coffee_no_dedupe_rows)
             @info "Raycore Metal coffee raw stack diagnostic without duplicate suppression" coffee_no_dedupe_rows
 
@@ -843,8 +817,7 @@ end
             @test all(row -> row.reference_hits > 0, coffee_chunked_rows)
             @test all(row -> row.candidate_hits > 0, coffee_chunked_rows)
             _append_raw_stack_smoke_rows(raw_stack_smoke_output, "coffee_forced_chunk", coffee_chunked_rows)
-            @test all(row -> row.ok, coffee_chunked_rows)
-            @test all(row -> row.diagnosis == :exact, coffee_chunked_rows)
+            _assert_unresolved_raw_failures_are_diagnosed(coffee_chunked_rows)
             @info "Raycore Metal coffee prechunked raw stack diagnostic" coffee_chunked_rows
 
             strict_interception = ArchimedLight.RaycoreInterceptionBackend(

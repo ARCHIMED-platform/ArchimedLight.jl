@@ -1,5 +1,7 @@
 [deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 ArchimedLight = "ca362a0f-208d-4994-8e0e-d922fd0d438a"
+Atomix = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -12,6 +14,10 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
 ArchimedLight = {path = "../.."}
+Atomix = {path = "/Users/rvezy/Documents/dev/Atomix"}
+KernelAbstractions = {path = "/Users/rvezy/Documents/dev/KernelAbstractions"}
+Metal = {path = "/Users/rvezy/Documents/dev/Metal"}
+Raycore = {path = "/Users/rvezy/Documents/dev/Raycore"}
 
 [compat]
 Metal = "1"

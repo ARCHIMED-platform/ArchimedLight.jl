@@ -2,6 +2,7 @@
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 AirspeedVelocity = "1c8270ee-6884-45cc-9545-60fa71ec23e4"
 ArchimedLight = "ca362a0f-208d-4994-8e0e-d922fd0d438a"
+Atomix = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -14,3 +15,6 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [sources]
 ArchimedLight = { path = ".." }
+Atomix = { path = "/Users/rvezy/Documents/dev/Atomix" }
+KernelAbstractions = { path = "/Users/rvezy/Documents/dev/KernelAbstractions" }
+Raycore = { path = "/Users/rvezy/Documents/dev/Raycore" }

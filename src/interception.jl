@@ -3836,9 +3836,7 @@ function _raycore_scene_data(
     toricity::Bool=false,
     face_chunk_limit::Union{Nothing,Int}=nothing,
 )
-    tlas_build_backend =
-        config.backend isa KernelAbstractions.CPU ? config.backend : KernelAbstractions.CPU()
-    tlas = Raycore.TLAS(tlas_build_backend)
+    tlas = Raycore.TLAS(config.backend)
     chunked_tlas = face_chunk_limit !== nothing
     geometry_mode = :merged_mesh
     instanced_build =
@@ -3886,7 +3884,7 @@ function _raycore_scene_data(
         )
     end
     Raycore.sync!(tlas)
-    kernel_tlas = Adapt.adapt(config.backend, tlas.static_tlas)
+    kernel_tlas = Adapt.adapt(config.backend, tlas)
     hit_decoder =
         isempty(decoder_table) ?
         _raycore_identity_hit_decoder(prepared, config.backend, instance_count) :
@@ -3994,61 +3992,6 @@ function _raycore_scene_data(
         config.validate,
         vertical_span,
         chunked_tlas,
-        geometry_mode,
-    )
-end
-
-function _raycore_scene_data_with_static_tlas(
-    data::RaycoreSceneData,
-    source::RaycoreSceneData;
-    geometry_mode::Symbol=data.geometry_mode,
-)
-    kernel_tlas = Adapt.adapt(data.backend, source.tlas.static_tlas)
-    return RaycoreSceneData(
-        data.prepared,
-        source.tlas,
-        kernel_tlas,
-        data.backend,
-        data.top_nodes_dev,
-        data.top_nodes_host,
-        data.stack_counts_dev,
-        data.stack_nodes_dev,
-        data.stack_instance_indices_dev,
-        data.stack_heights_dev,
-        data.stack_overflow_dev,
-        data.edge_keys_dev,
-        data.edge_key_counts_dev,
-        data.dense_edge_counts_dev,
-        data.dense_edge_counts_host,
-        data.node_counts_dev,
-        data.node_transparency_dev,
-        data.sector_area_dev,
-        data.node_counts_host,
-        data.sector_area_host,
-        data.virtual_node_mask_dev,
-        data.pavement_node_mask_dev,
-        data.node_ids_dev,
-        data.stack_counts_host,
-        data.stack_nodes_host,
-        data.stack_instance_indices_host,
-        data.stack_heights_host,
-        data.stack_overflow_host,
-        data.edge_keys_host,
-        data.edge_key_counts_host,
-        data.edge_compact_host,
-        data.projection_far_cache,
-        data.projected_mesh_area_cache,
-        data.raster_compat_projection_cache,
-        data.hit_decoder,
-        data.area_ratio_cache,
-        data.workgroupsize,
-        data.max_hits_per_pixel,
-        data.hit_epsilon,
-        data.edge_accumulation,
-        data.dense_edge_limit_bytes,
-        data.validate,
-        data.vertical_span,
-        data.chunked_tlas,
         geometry_mode,
     )
 end
