@@ -8,9 +8,6 @@ using Documenter
 
 DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
-include("generate_reference_figures.jl")
-generate_reference_figures()
-
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
