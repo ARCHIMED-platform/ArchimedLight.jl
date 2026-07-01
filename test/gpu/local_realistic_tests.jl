@@ -133,7 +133,8 @@ function _coffee_fixture()
 end
 
 function _vpalm_modules()
-    xpalm_root = get(ENV, "ARCHIMEDLIGHT_TEST_XPALM_ROOT", "/Users/rvezy/Documents/dev/XPalm")
+    xpalm_root = get(ENV, "ARCHIMEDLIGHT_TEST_XPALM_ROOT", "")
+    isempty(xpalm_root) && return (nothing, "Set ARCHIMEDLIGHT_TEST_XPALM_ROOT to the XPalm checkout.")
     isdir(xpalm_root) || return (nothing, "XPalm checkout not found at $xpalm_root")
     package_dir = dirname(xpalm_root)
 
@@ -235,11 +236,8 @@ function _agripv_panel_mesh(width, length, height, inclination_deg)
 end
 
 function _agripv_wheat_fixture()
-    root = get(
-        ENV,
-        "ARCHIMEDLIGHT_TEST_AGRIPV_ROOT",
-        "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-    )
+    root = get(ENV, "ARCHIMEDLIGHT_TEST_AGRIPV_ROOT", "")
+    isempty(root) && return (nothing, "Set ARCHIMEDLIGHT_TEST_AGRIPV_ROOT to enable the agrivoltaics fixture.")
     opf_path = joinpath(root, "0_simulations", "archicrop", "wheat", "plant_1995-06-24.opf")
     isfile(opf_path) || return (nothing, "Agrivoltaics wheat OPF not found at $opf_path")
 

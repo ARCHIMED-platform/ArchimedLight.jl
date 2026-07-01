@@ -49,13 +49,7 @@ const BENCH_WORKGROUPSIZE = haskey(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE") ?
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
 const BENCH_EXECUTION = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_EXECUTION", "oneshot"))
 const BENCH_COMPONENTS = split(lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_COMPONENTS", "first_order,scattering,topology,propagation")), ',')
-const BENCH_VALIDATE = lowercase(
-    get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_VALIDATE",
-        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
-    ),
-) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", "1")) in ("1", "true", "yes", "on")
 
 const BENCH_SECTOR_VALUES =
     something(_split_env_values("ARCHIMEDLIGHT_BENCH_SECTOR_SWEEP", x -> parse(Int, x)), [BENCH_SECTORS])

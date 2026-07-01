@@ -13,7 +13,7 @@ using PlantGeom
 using Printf
 using Statistics
 
-const BENCH_SCENES_RAW = get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SCENES", "simple,coffee,complex")
+const BENCH_SCENES_RAW = get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SCENES", "simple,coffee")
 const BENCH_SCENES = [strip(lowercase(value)) for value in split(BENCH_SCENES_RAW, ',') if !isempty(strip(value))]
 const BENCH_SECTORS = [parse(Int, strip(value)) for value in split(get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SECTORS", "6,16,46"), ',') if !isempty(strip(value))]
 const BENCH_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_SAMPLES", "1"))
@@ -25,13 +25,7 @@ const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMU
 const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES") ?
                                      parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
                                      nothing
-const BENCH_VALIDATE = lowercase(
-    get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_VALIDATE",
-        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
-    ),
-) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", "1")) in ("1", "true", "yes", "on")
 
 function _split_float_env(name::AbstractString, default::Vector{Float64})
     raw = get(ENV, name, "")
@@ -140,11 +134,8 @@ function _load_coffee_workload()
 end
 
 function _load_agripv_workload()
-    root = get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT",
-        "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-    )
+    root = get(ENV, "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT", "")
+    !isempty(root) || error("Set ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT to enable the agrivoltaics workload.")
     opf_path = joinpath(root, "0_simulations", "archicrop", "wheat", "plant_1995-06-24.opf")
     isfile(opf_path) || error("Agrivoltaics wheat OPF not found at $opf_path")
 

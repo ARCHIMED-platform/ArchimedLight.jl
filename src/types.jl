@@ -104,9 +104,6 @@ function _raycore_default_max_prechunk_instances()
 end
 
 _raycore_default_scattering_eltype(backend) = backend isa KernelAbstractions.CPU ? Float64 : Float32
-_raycore_backend_type_name(backend) = string(typeof(backend))
-_raycore_is_metal_backend(backend) = occursin("Metal", _raycore_backend_type_name(backend))
-_raycore_default_workgroupsize(backend) = _raycore_is_metal_backend(backend) ? 256 : 256
 
 function RaycoreBackendConfig(;
     backend=KernelAbstractions.CPU(),
@@ -119,20 +116,10 @@ function RaycoreBackendConfig(;
     max_prechunk_instances::Union{Nothing,Integer}=nothing,
     scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
     validate::Bool=false,
-    allow_fallback::Union{Nothing,Bool}=nothing,
 )
-    if allow_fallback !== nothing
-        validate = !allow_fallback
-        Base.depwarn(
-            "`allow_fallback` is deprecated for RaycoreBackendConfig. Raycore " *
-            "backends no longer fall back to RasterCPUBackend; use `validate=true` " *
-            "to enable CPU reference validation.",
-            :RaycoreBackendConfig,
-        )
-    end
     return RaycoreBackendConfig(
         backend,
-        workgroupsize === nothing ? _raycore_default_workgroupsize(backend) : workgroupsize,
+        workgroupsize === nothing ? 256 : workgroupsize,
         max_hits_per_pixel,
         hit_epsilon,
         edge_accumulation,
@@ -224,17 +211,7 @@ function RaycoreScatteringBackend(
     propagation_backend::Symbol=interception_backend.config.propagation_backend,
     max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
     validate::Bool=interception_backend.config.validate,
-    allow_fallback::Union{Nothing,Bool}=nothing,
 )
-    if allow_fallback !== nothing
-        validate = !allow_fallback
-        Base.depwarn(
-            "`allow_fallback` is deprecated for RaycoreScatteringBackend. Raycore " *
-            "backends no longer fall back to RasterCPUBackend; use `validate=true` " *
-            "to enable CPU reference validation.",
-            :RaycoreScatteringBackend,
-        )
-    end
     return RaycoreScatteringBackend(
         _raycore_config_with(
             interception_backend.config;
@@ -728,14 +705,8 @@ Fields:
   interception.
 - `nir_scattering`: include NIR in the multiple-scattering stage. This has no
   effect if `nir_interception=false`.
-- `java_logged_turtle_dirs`: use the Java-compatibility turtle direction path
-  used in parity/debug workflows.
 - `meteo_range`: optional historical range selector applied during meteo
   preparation, for example `"2, 5"` or a datetime range.
-- `debug`: enable debug-only compatibility hooks.
-- `log_debug`: emit additional debug logging where implemented.
-- `debug_drop_leading_hit`: optional `(node_id, x, y)` hook used to remove a
-  leading raster hit at one pixel for parity debugging.
 
 Typical starting point for simple runs:
 
@@ -760,11 +731,7 @@ Base.@kwdef struct LightOptions
     allow_overlapping_meteo_steps::Bool = false
     nir_interception::Bool = true
     nir_scattering::Bool = true
-    java_logged_turtle_dirs::Bool = false
     meteo_range::Union{Nothing,String} = nothing
-    debug::Bool = false
-    log_debug::Bool = false
-    debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}} = nothing
 end
 
 function LightOptions(old::LightOptions; kwargs...)
@@ -787,11 +754,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :allow_overlapping_meteo_steps => old.allow_overlapping_meteo_steps,
         :nir_interception => old.nir_interception,
         :nir_scattering => old.nir_scattering,
-        :java_logged_turtle_dirs => old.java_logged_turtle_dirs,
         :meteo_range => old.meteo_range,
-        :debug => old.debug,
-        :log_debug => old.log_debug,
-        :debug_drop_leading_hit => old.debug_drop_leading_hit,
     )
     for (k, v) in kwargs
         params[k] = v

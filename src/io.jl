@@ -279,23 +279,9 @@ function read_options(path::AbstractString)
         ),
         nir_interception=_as_bool(get(raw, "nir_interception", true), true),
         nir_scattering=_as_bool(get(raw, "nir_scattering", true), true),
-        java_logged_turtle_dirs=_as_bool(get(raw, "java_logged_turtle_dirs", false), false),
         meteo_range=begin
             v = get(raw, "meteo_range", nothing)
             v === nothing ? nothing : strip(string(v))
-        end,
-        debug=_as_bool(get(raw, "debug", false), false),
-        log_debug=_as_bool(get(raw, "log_debug", false), false),
-        debug_drop_leading_hit=begin
-            v = get(raw, "debug_drop_leading_hit", nothing)
-            if v isa AbstractDict
-                node_id = _as_int(get(v, "node_id", nothing), 0)
-                x = _as_int(get(v, "x", nothing), -1)
-                y = _as_int(get(v, "y", nothing), -1)
-                node_id > 0 && x >= 0 && y >= 0 ? (node_id=node_id, x=x, y=y) : nothing
-            else
-                nothing
-            end
         end,
     )
 end

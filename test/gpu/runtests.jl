@@ -859,12 +859,9 @@ end
                 "ARCHIMEDLIGHT_BENCH_MAX_HITS" => get(ENV, "ARCHIMEDLIGHT_BENCH_MAX_HITS", nothing),
             )
             try
-                agripv_opf = joinpath(
-                    get(
-                        ENV,
-                        "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT",
-                        "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-                    ),
+                agripv_root = get(ENV, "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT", "")
+                agripv_opf = isempty(agripv_root) ? "" : joinpath(
+                    agripv_root,
                     "0_simulations",
                     "archicrop",
                     "wheat",
@@ -941,12 +938,9 @@ end
                 end
             end
 
-            raw_agripv_opf = joinpath(
-                get(
-                    ENV,
-                    "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT",
-                    "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-                ),
+            raw_agripv_root = get(ENV, "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT", "")
+            raw_agripv_opf = isempty(raw_agripv_root) ? "" : joinpath(
+                raw_agripv_root,
                 "0_simulations",
                 "archicrop",
                 "wheat",

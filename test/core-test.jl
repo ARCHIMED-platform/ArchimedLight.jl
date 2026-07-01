@@ -123,7 +123,6 @@ end
 
     @test ib isa ArchimedLight.InterceptionBackend
     @test ib.config.workgroupsize == 256
-    @test ArchimedLight._raycore_default_workgroupsize(ArchimedLight.KernelAbstractions.CPU()) == 256
     @test ib.config.max_hits_per_pixel == 32
     @test ib.config.hit_epsilon == Float32(1.0f-4)
     raw_stack_config = ArchimedLight.RaycoreBackendConfig(hit_epsilon=-1.0f0)

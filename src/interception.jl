@@ -1088,60 +1088,6 @@ function _cfg_toricity(options::LightOptions)
     options.toricity
 end
 
-function _cfg_debug_drop_leading_hit(options::LightOptions)
-    options.debug_drop_leading_hit
-end
-
-function _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options::LightOptions)
-    spec = _cfg_debug_drop_leading_hit(options)
-    spec === nothing && return
-    idx = spec.x + 1 + spec.y * plotbox.nx
-    stack = get(pixel_hits, idx, nothing)
-    stack === nothing && return
-    isempty(stack) && return
-
-    _sort_hit_stack!(stack)
-    top_nid = _stack_hit_node(stack, 1)
-    top_nid == spec.node_id || return
-
-    deleteat!(stack, 1)
-    if isempty(stack)
-        delete!(pixel_hits, idx)
-    end
-
-    node_hits[top_nid] = max(0, get(node_hits, top_nid, 0) - 1)
-    projected_pixels_area[top_nid] = max(0.0, get(projected_pixels_area, top_nid, 0.0) - plotbox.pixel_area)
-end
-
-function _apply_debug_drop_leading_hit!(
-    pixel_hits,
-    node_hits::Vector{Int},
-    projected_pixels_area::Vector{Float64},
-    plotbox,
-    options::LightOptions,
-    node_ids::Vector{Int},
-)
-    spec = _cfg_debug_drop_leading_hit(options)
-    spec === nothing && return
-    idx = spec.x + 1 + spec.y * plotbox.nx
-    stack = get(pixel_hits, idx, nothing)
-    stack === nothing && return
-    isempty(stack) && return
-
-    _sort_hit_stack!(stack)
-    top_idx = _stack_hit_node(stack, 1)
-    top_nid = node_ids[top_idx]
-    top_nid == spec.node_id || return
-
-    deleteat!(stack, 1)
-    if isempty(stack)
-        delete!(pixel_hits, idx)
-    end
-
-    node_hits[top_idx] = max(0, node_hits[top_idx] - 1)
-    projected_pixels_area[top_idx] = max(0.0, projected_pixels_area[top_idx] - plotbox.pixel_area)
-end
-
 function _is_sensor_interception(interception::InterceptionModel)
     interception.sensor || return lowercase(strip(interception.model)) == "virtualsensor"
     return true
@@ -1706,10 +1652,10 @@ function _projection_cache_context(vertices, faces, face2node, plotbox, options:
     )
 end
 
-function _projection_cache_path(cache_ctx::ProjectionCacheContext, direction, upper_hit::Bool=false, strict_java_float::Bool=false)
+function _projection_cache_path(cache_ctx::ProjectionCacheContext, direction, upper_hit::Bool=false)
     scene_hex = string(cache_ctx.scene_key, base=16, pad=16)
     dir_hex = string(_projection_dir_key(direction), base=16, pad=16)
-    mode = (upper_hit ? "u1" : "u0") * (strict_java_float ? "_sf1" : "_sf0")
+    mode = upper_hit ? "u1" : "u0"
     joinpath(cache_ctx.cache_dir, "proj_" * scene_hex * "_" * dir_hex * "_" * mode * ".jls")
 end
 
@@ -1861,41 +1807,6 @@ function _compute_normal(points)
     StaticArrays.SVector{3,Float64}(0.0, 0.0, 0.0)
 end
 
-function _compute_normal_f32(points)
-    length(points) < 2 && return StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
-    @inbounds for n in 1:(length(points)-2)
-        p0 = points[n]
-        p1 = points[n+1]
-        p2 = points[n+2]
-
-        v1x = Float32(p1[1] - p0[1])
-        v1y = Float32(p1[2] - p0[2])
-        v1z = Float32(p1[3] - p0[3])
-        n1 = sqrt((v1x * v1x) + (v1y * v1y) + (v1z * v1z))
-        n1 <= 0.0f0 && continue
-        v1x /= n1
-        v1y /= n1
-        v1z /= n1
-
-        v2x = Float32(p2[1] - p1[1])
-        v2y = Float32(p2[2] - p1[2])
-        v2z = Float32(p2[3] - p1[3])
-        n2 = sqrt((v2x * v2x) + (v2y * v2y) + (v2z * v2z))
-        n2 <= 0.0f0 && continue
-        v2x /= n2
-        v2y /= n2
-        v2z /= n2
-
-        nx = (v1y * v2z) - (v1z * v2y)
-        ny = (v1z * v2x) - (v1x * v2z)
-        nz = (v1x * v2y) - (v1y * v2x)
-        nnorm = sqrt((nx * nx) + (ny * ny) + (nz * nz))
-        nnorm <= 0.0f0 && continue
-        return StaticArrays.SVector{3,Float32}(nx / nnorm, ny / nnorm, nz / nnorm)
-    end
-    StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
-end
-
 @inline function _project_vertex_to_ground_pixel(v, dirx::Float32, diry::Float32, dirz::Float32, ox::Float32, oy::Float32, pxs::Float32, pys::Float32, u::Float32)
     pz = Float32(v[3]) * u
     dz = -pz / dirz
@@ -1958,7 +1869,6 @@ function _project_triangle!(
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-    strict_java_float::Bool,
     stack_type::Type,
 )
     _project_triangle!(
@@ -1981,7 +1891,6 @@ function _project_triangle!(
         ny,
         toricity,
         upper_hit,
-        strict_java_float,
         1.0f0,
         stack_type,
     )
@@ -2007,7 +1916,6 @@ function _project_triangle!(
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-    strict_java_float::Bool,
     unit_scale::Float32,
     stack_type::Type,
 )
@@ -2042,7 +1950,7 @@ function _project_triangle!(
     _get_border_pixels(pix2, pix3, iMin, minY, maxY)
     _get_border_pixels(pix3, pix1, iMin, minY, maxY)
 
-    normal = strict_java_float ? _compute_normal_f32((pix1, pix2, pix3)) : _compute_normal((pix1, pix2, pix3))
+    normal = _compute_normal((pix1, pix2, pix3))
     slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
@@ -2125,7 +2033,6 @@ function _project_triangle!(
     ny::Int,
     toricity::Bool,
     upper_hit::Bool,
-    strict_java_float::Bool,
     unit_scale::Float32,
     stack_type::Type,
     scratch::RasterScanlineScratch,
@@ -2160,7 +2067,7 @@ function _project_triangle!(
     _get_border_pixels(pix2, pix3, iMin, minY, maxY)
     _get_border_pixels(pix3, pix1, iMin, minY, maxY)
 
-    normal = strict_java_float ? _compute_normal_f32((pix1, pix2, pix3)) : _compute_normal((pix1, pix2, pix3))
+    normal = _compute_normal((pix1, pix2, pix3))
     slopeX_f32, slopeY_f32 =
         if abs(normal[3]) > 1e-5
             (Float32(normal[1] / normal[3]), Float32(normal[2] / normal[3]))
@@ -2533,8 +2440,7 @@ function _prepared_direction_projection(
     options::LightOptions,
 )
     geometry = prepared.geometry
-    strict_java_float = _strict_java_float(options)
-    return _direction_projection_cached(geometry, direction, options, prepared.cache_ctx; upper_hit=prepared.upper_hit, strict_java_float=strict_java_float)
+    return _direction_projection_cached(geometry, direction, options, prepared.cache_ctx; upper_hit=prepared.upper_hit)
 end
 
 function _build_direction_projections(
@@ -2564,9 +2470,8 @@ function _rasterize_direction_java(
     virtual_nodes=Set{Int}(),
     upper_hit::Bool=false,
 )
-    strict_java_float = _strict_java_float(options)
     projection =
-        _direction_projection_cached(vertices, faces, face2node, direction, options, plotbox, cache_ctx; upper_hit=upper_hit, strict_java_float=strict_java_float)
+        _direction_projection_cached(vertices, faces, face2node, direction, options, plotbox, cache_ctx; upper_hit=upper_hit)
     return _visible_area_from_projection(projection, options, plotbox, virtual_nodes), projection.node_hits
 end
 
@@ -2583,7 +2488,6 @@ function _accumulate_direction_projection!(
     plotbox,
     toricity::Bool,
     use_upper_hit::Bool,
-    strict_java_float::Bool,
     unit_scale::Float32,
     stack_type::Type,
 )
@@ -2616,7 +2520,6 @@ function _accumulate_direction_projection!(
             ny,
             toricity,
             use_upper_hit,
-            strict_java_float,
             unit_scale,
             stack_type,
         )
@@ -2636,7 +2539,6 @@ function _accumulate_direction_projection_prepared!(
     plotbox,
     toricity::Bool,
     use_upper_hit::Bool,
-    strict_java_float::Bool,
     unit_scale::Float32,
     stack_type::Type,
 )
@@ -2671,7 +2573,6 @@ function _accumulate_direction_projection_prepared!(
             ny,
             toricity,
             use_upper_hit,
-            strict_java_float,
             unit_scale,
             stack_type,
             scratch,
@@ -2694,8 +2595,7 @@ function _direction_projection_materialized(
 )
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
-    strict_java_float = _strict_java_float(options)
-    unit_scale = Float32(_projection_unit_scale(options))
+    unit_scale = 1.0f0
     stack_type = _pixel_hit_stack_type(options, plotbox)
     use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
     pixel_hits = _pixel_hits_table(stack_type, use_dense_table, plotbox, use_upper_hit)
@@ -2715,14 +2615,12 @@ function _direction_projection_materialized(
         plotbox,
         toricity,
         use_upper_hit,
-        strict_java_float,
         unit_scale,
         stack_type,
     )
     node_hits_map = _dense_int_node_map(node_ids, node_hits)
     projected_mesh_area_map = _dense_float_node_map(node_ids, projected_mesh_area)
     projected_pixels_area_map = _dense_float_node_map(node_ids, projected_pixels_area)
-    _apply_debug_drop_leading_hit!(pixel_hits, node_hits_map, projected_pixels_area_map, plotbox, options)
     return DirectionProjectionResult(pixel_hits, node_hits_map, projected_mesh_area_map, projected_pixels_area_map)
 end
 
@@ -2739,8 +2637,7 @@ function _direction_projection_prepared(
 )
     toricity = _cfg_toricity(options)
     use_upper_hit = upper_hit === nothing ? false : Bool(upper_hit)
-    strict_java_float = _strict_java_float(options)
-    unit_scale = Float32(_projection_unit_scale(options))
+    unit_scale = 1.0f0
     stack_type = _pixel_hit_stack_type(options, plotbox)
     use_dense_table = dense_pixel_hits && _use_dense_pixel_hits(plotbox)
     use_flat_hit_pool =
@@ -2770,12 +2667,10 @@ function _direction_projection_prepared(
         plotbox,
         toricity,
         use_upper_hit,
-        strict_java_float,
         unit_scale,
         stack_type,
     )
     use_flat_hit_pool && (pixel_hits = _finalize_flat_pixel_hits(pixel_hits))
-    _apply_debug_drop_leading_hit!(pixel_hits, node_hits, projected_pixels_area, plotbox, options, node_ids)
     return DenseDirectionProjectionResult(pixel_hits, node_hits, projected_mesh_area, projected_pixels_area)
 end
 
@@ -2817,12 +2712,12 @@ function _direction_projection(
     )
 end
 
-function _direction_projection_cached(vertices, faces, face2node, direction, options::LightOptions, plotbox, cache_ctx; upper_hit::Bool=false, strict_java_float::Bool=false)
+function _direction_projection_cached(vertices, faces, face2node, direction, options::LightOptions, plotbox, cache_ctx; upper_hit::Bool=false)
     if cache_ctx === nothing
         return _direction_projection(vertices, faces, face2node, direction, options, plotbox; upper_hit=upper_hit)
     end
 
-    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
@@ -2840,7 +2735,6 @@ function _direction_projection_cached(
     options::LightOptions,
     cache_ctx;
     upper_hit::Bool=false,
-    strict_java_float::Bool=false,
 )
     if cache_ctx === nothing
         return _direction_projection_prepared(
@@ -2856,7 +2750,7 @@ function _direction_projection_cached(
         )
     end
 
-    path = _projection_cache_path(cache_ctx, direction, upper_hit, strict_java_float)
+    path = _projection_cache_path(cache_ctx, direction, upper_hit)
     if isfile(path)
         cached = _read_projection_cache(path)
         cached !== nothing && return cached
@@ -2877,14 +2771,6 @@ function _direction_projection_cached(
     )
     _write_projection_cache(path, result)
     return result
-end
-
-function _strict_java_float(options::LightOptions)
-    false
-end
-
-function _projection_unit_scale(options::LightOptions)
-    1.0
 end
 
 function _paving_mesh(plotbox, cobble_count::Int, first_node_id::Int)
@@ -4135,7 +4021,8 @@ end
 @inline _raycore_kernel_tlas(data::RaycoreSceneData) = data.kernel_tlas
 
 function _raycore_all_hits_available()
-    return isdefined(Raycore, Symbol("all_hits!"))
+    isdefined(Raycore, Symbol("all_hits!")) || return false
+    return !isempty(methods(getfield(Raycore, Symbol("all_hits!"))))
 end
 
 function _raycore_require_all_hits!(context::AbstractString)
@@ -4472,7 +4359,6 @@ function _raycore_reference_top_pixel_count(
         options,
         prepared.cache_ctx;
         upper_hit=true,
-        strict_java_float=_strict_java_float(options),
     )
     return count(_ -> true, values(projection.pixel_hits))
 end
@@ -5867,10 +5753,6 @@ function _raycore_direction_projection_top_hit(
     )
 end
 
-function _check_raycore_top_hit_supported(prepared::PreparedInterceptionData, options::LightOptions)
-    return nothing
-end
-
 function _raycore_use_raster_compat_projection(data::RaycoreSceneData)
     geometry = data.prepared.geometry
     # Archimed's CPU rasterizer records coverage per projected pixel cell.
@@ -6001,7 +5883,6 @@ function _compute_first_order_raycore_top_hit(
 )
     prepared = data.prepared
     geometry = prepared.geometry
-    _check_raycore_top_hit_supported(prepared, options)
 
     if !prepared.upper_hit ||
        !isempty(prepared.emitter_nodes) ||

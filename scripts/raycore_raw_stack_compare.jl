@@ -129,11 +129,8 @@ function _load_coffee_workload()
 end
 
 function _load_agripv_workload()
-    root = get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT",
-        "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-    )
+    root = get(ENV, "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT", "")
+    !isempty(root) || error("Set ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT to enable the agrivoltaics workload.")
     opf_path = joinpath(root, "0_simulations", "archicrop", "wheat", "plant_1995-06-24.opf")
     isfile(opf_path) || error("Agrivoltaics wheat OPF not found at $opf_path")
 

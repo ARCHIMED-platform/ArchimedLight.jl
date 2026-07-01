@@ -6,14 +6,21 @@ import Pkg
 Pkg.activate(joinpath(REPO_ROOT, "test"))
 
 using ArchimedLight
+# using KernelAbstractions
+# using Metal
+# metal_backend = KernelAbstractions.get_backend(MtlArray(zeros(Float32, 1)))
+# interception = RaycoreInterceptionBackend(backend=metal_backend)
 
 config_path = joinpath(REPO_ROOT, "example_2", "config.yml")
 
 function run_archimed(config_path)
-    options, scene, meteo, models = read_config(config_path)
-    row = first(prepare_meteo(meteo, options).rows)
-    step = run_light_step(scene, models, row, options)
-    return scene, models, options, step
+    sim, meteo = read_simulation(
+        config_path;
+        # interception_backend=interception,
+        # scattering_backend=RaycoreScatteringBackend(interception),
+    )
+    step = run_light(sim, first(meteo))
+    return step
 end
 
 trial = @benchmark run_archimed($config_path)

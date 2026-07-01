@@ -32,7 +32,7 @@ using Statistics
 const BENCH_BUILD_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_BUILD_SAMPLES", "2"))
 const BENCH_WARM_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_SAMPLES", "3"))
 const BENCH_BACKENDS = split(lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_BACKENDS", "all")), ',')
-const BENCH_WORKLOADS_RAW = get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_WORKLOADS", "coffee,agripv")
+const BENCH_WORKLOADS_RAW = get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_WORKLOADS", "coffee")
 const BENCH_WORKLOADS_EXPLICIT = haskey(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_WORKLOADS")
 const BENCH_WORKLOADS = [strip(lowercase(value)) for value in split(BENCH_WORKLOADS_RAW, ',') if !isempty(strip(value))]
 const BENCH_BREAKDOWN = lowercase(get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_BREAKDOWN", "")) in ("1", "true", "yes", "on")
@@ -47,13 +47,7 @@ const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHU
                                      parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
                                      nothing
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
-const BENCH_VALIDATE = lowercase(
-    get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_VALIDATE",
-        lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_ALLOW_FALLBACK", "")) in ("1", "true", "yes", "on") ? "0" : "1",
-    ),
-) in ("1", "true", "yes", "on")
+const BENCH_VALIDATE = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", "1")) in ("1", "true", "yes", "on")
 
 function _split_symbol_values(raw::AbstractString)
     return [Symbol(strip(value)) for value in split(raw, ',') if !isempty(strip(value))]
@@ -192,7 +186,8 @@ function _coffee_workload()
 end
 
 function _vpalm_modules()
-    xpalm_root = get(ENV, "ARCHIMEDLIGHT_BENCH_XPALM_ROOT", "/Users/rvezy/Documents/dev/XPalm")
+    xpalm_root = get(ENV, "ARCHIMEDLIGHT_BENCH_XPALM_ROOT", "")
+    !isempty(xpalm_root) || error("Set ARCHIMEDLIGHT_BENCH_XPALM_ROOT to the XPalm checkout.")
     isdir(xpalm_root) || error("XPalm checkout not found at $xpalm_root")
     package_dir = dirname(xpalm_root)
 
@@ -299,11 +294,8 @@ function _panel_mesh(width, length, height, inclination_deg)
 end
 
 function _agripv_workload()
-    root = get(
-        ENV,
-        "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT",
-        "/Users/rvezy/Documents/cirad/Articles_Rapports_Communications/Conférences/2026_fspm/coutellier_agripv",
-    )
+    root = get(ENV, "ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT", "")
+    !isempty(root) || error("Set ARCHIMEDLIGHT_BENCH_AGRIPV_ROOT to enable the agrivoltaics workload.")
     opf_path = joinpath(root, "0_simulations", "archicrop", "wheat", "plant_1995-06-24.opf")
     isfile(opf_path) || error("Agrivoltaics wheat OPF not found at $opf_path")
 
