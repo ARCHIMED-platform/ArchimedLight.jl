@@ -2690,10 +2690,13 @@ end
 function _missing_model_pairs(scene::PlantGeom.SceneGeometry, models::LightModels)
     missing = Set{Tuple{String,String}}()
     ignored = _ignored_group_types(models)
-    for nid in unique(scene.face2node)
-        _is_ignored_node(nid, scene, ignored) && continue
-        group = strip(_scene_group(scene, nid, ""))
-        type_name = strip(_scene_type(scene, nid, ""))
+    node_ids = unique(scene.face2node)
+    node_group, node_type = _scene_group_type_maps(scene, node_ids)
+    ignored_nodes = _ignored_node_ids(node_ids, node_group, node_type, ignored)
+    for nid in node_ids
+        nid in ignored_nodes && continue
+        group = strip(get(node_group, nid, ""))
+        type_name = strip(get(node_type, nid, ""))
         _type_model(models, group, type_name) === nothing && push!(missing, (group, type_name))
     end
     return sort!(collect(missing))

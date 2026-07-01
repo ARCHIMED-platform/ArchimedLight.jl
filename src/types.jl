@@ -27,8 +27,8 @@ loaded by users or tests outside ArchimedLight core. `hit_epsilon` is forwarded
 to `Raycore.all_hits!` for stack deduplication; negative values request raw
 hit stacks when the loaded Raycore version supports that sentinel.
 `propagation_backend=:auto` uses the shared CPU dense solver for
-KernelAbstractions CPU and for large GPU graphs; small GPU graphs use device
-propagation. Use `:device` or `:cpu` to force either path.
+KernelAbstractions CPU and device propagation for GPU backends. Use `:device`
+or `:cpu` to force either path.
 `max_prechunk_instances` limits how many BLAS instances non-CPU prechunking can
 create; pass `0` or a negative value to disable the cap.
 `validate=true` compares non-CPU Raycore traces against the CPU reference before

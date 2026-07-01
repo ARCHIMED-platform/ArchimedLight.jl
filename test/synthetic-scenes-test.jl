@@ -1115,6 +1115,13 @@ end
         fake_gpu_sb = ArchimedLight.RaycoreScatteringBackend(
             ArchimedLight.RaycoreBackendConfig(backend=:fake_non_cpu_backend, scattering_eltype=Float32),
         )
+        forced_cpu_fake_sb = ArchimedLight.RaycoreScatteringBackend(
+            ArchimedLight.RaycoreBackendConfig(
+                backend=:fake_non_cpu_backend,
+                propagation_backend=:cpu,
+                scattering_eltype=Float32,
+            ),
+        )
         forced_device_fake_sb = ArchimedLight.RaycoreScatteringBackend(
             ArchimedLight.RaycoreBackendConfig(
                 backend=:fake_non_cpu_backend,
@@ -1122,7 +1129,8 @@ end
                 scattering_eltype=Float32,
             ),
         )
-        @test ArchimedLight._raycore_use_cpu_scattering_propagation(graph, fake_gpu_sb)
+        @test !ArchimedLight._raycore_use_cpu_scattering_propagation(graph, fake_gpu_sb)
+        @test ArchimedLight._raycore_use_cpu_scattering_propagation(graph, forced_cpu_fake_sb)
         @test !ArchimedLight._raycore_use_cpu_scattering_propagation(graph, forced_device_fake_sb)
         @test ArchimedLight._raycore_use_cpu_scattering_propagation(graph, sb)
     finally

@@ -1914,9 +1914,10 @@ function _build_scattering_topology_cache(
     node_index = prepared.geometry.node_index
     node_type = Dict{Int,String}()
     for nid in node_ids
-        g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
+        g = get(prepared.geometry.node_group, nid, "")
         default_type = g == "pavement" ? "Cobblestone" : ""
-        node_type[nid] = _scene_type(scene, nid, default_type)
+        type_name = get(prepared.geometry.node_type, nid, default_type)
+        node_type[nid] = isempty(type_name) ? default_type : type_name
     end
     pair_to_idx, pair_from_idx, _unused_sun_hits =
         _topology_dense_index_arrays(pair_counts, Dict{Int,Int}(), node_ids, node_index)
@@ -1972,9 +1973,10 @@ function _build_scattering_topology_cache_from_indexed_edges(
     node_index = prepared.geometry.node_index
     node_type = Dict{Int,String}()
     for nid in node_ids
-        g = get(prepared.geometry.node_group, nid, _scene_group(scene, nid, ""))
+        g = get(prepared.geometry.node_group, nid, "")
         default_type = g == "pavement" ? "Cobblestone" : ""
-        node_type[nid] = _scene_type(scene, nid, default_type)
+        type_name = get(prepared.geometry.node_type, nid, default_type)
+        node_type[nid] = isempty(type_name) ? default_type : type_name
     end
     _merge_packed_edge_counts_as_indexed!(indexed_edge_counts, packed_edge_counts, node_ids, node_index)
     pair_counts, pair_to_idx, pair_from_idx = _pair_counts_from_indexed_edges(indexed_edge_counts, node_ids)
@@ -3227,24 +3229,12 @@ function _propagate_scattering_two_bands_device(
     )
 end
 
-function _raycore_cpu_propagation_edge_threshold()
-    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_CPU_PROPAGATION_EDGE_THRESHOLD", "200000")
-    threshold = try
-        parse(Int, raw)
-    catch
-        error("ARCHIMEDLIGHT_RAYCORE_CPU_PROPAGATION_EDGE_THRESHOLD must be an integer, got $(repr(raw)).")
-    end
-    return threshold
-end
-
 function _raycore_use_cpu_scattering_propagation(graph::ScatteringTransferGraph, backend::RaycoreScatteringBackend)
     policy = backend.config.propagation_backend
     policy == :cpu && return true
     policy == :device && return false
     backend.config.backend isa KernelAbstractions.CPU && return true
-    threshold = _raycore_cpu_propagation_edge_threshold()
-    threshold > 0 || return false
-    return length(graph.pair_counts) >= threshold
+    return false
 end
 
 function _compute_scattering_band_dense(

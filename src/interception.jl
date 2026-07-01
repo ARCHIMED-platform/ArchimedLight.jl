@@ -116,6 +116,7 @@ struct InterceptionSceneData
     node_type::Dict{Int,String}
     node_type_by_index::Vector{String}
     raycore_instanced_geometry::Any
+    raycore_mesh_cache::Base.RefValue{Any}
 end
 
 struct RaycorePrototypeInstances
@@ -1222,6 +1223,86 @@ function _is_ignored_node(node_id::Int, scene::PlantGeom.SceneGeometry, ignored:
     return haskey(ignored, g) && (t in ignored[g])
 end
 
+function _is_ignored_node_metadata(group::AbstractString, type_name::AbstractString, ignored::Dict{String,Set{String}})
+    isempty(ignored) && return false
+    g = _normalize_group_name_local(group)
+    t = strip(type_name)
+    return haskey(ignored, g) && (t in ignored[g])
+end
+
+function _ignored_node_ids(scene::PlantGeom.SceneGeometry, node_ids, ignored::Dict{String,Set{String}})
+    out = Set{Int}()
+    isempty(ignored) && return out
+    for nid in node_ids
+        _is_ignored_node(nid, scene, ignored) && push!(out, nid)
+    end
+    return out
+end
+
+function _ignored_node_ids(
+    node_ids,
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    ignored::Dict{String,Set{String}},
+)
+    out = Set{Int}()
+    isempty(ignored) && return out
+    for nid in node_ids
+        _is_ignored_node_metadata(get(node_group, nid, ""), get(node_type, nid, ""), ignored) && push!(out, nid)
+    end
+    return out
+end
+
+function _scene_type_from_mtg_node(node, default="")
+    for key in (:type, :Type, :functional_type, :functionalType, :organ_type, :organType)
+        v = _mtg_node_attr(node, key)
+        if v !== nothing
+            s = strip(string(v))
+            isempty(s) || return s
+        end
+    end
+    node === nothing && return default
+    s = string(MultiScaleTreeGraph.symbol(node))
+    isempty(s) ? default : s
+end
+
+function _scene_group_type_maps(scene::PlantGeom.SceneGeometry, node_ids)
+    node_group = Dict{Int,String}()
+    node_type = Dict{Int,String}()
+    wanted = Set{Int}(Int(nid) for nid in node_ids)
+
+    if scene.mtg !== nothing
+        inherited_group = Dict{Int,String}()
+        MultiScaleTreeGraph.traverse!(scene.mtg) do node
+            nid = MultiScaleTreeGraph.node_id(node)
+            local_group = nothing
+            for key in (:group, :functional_group)
+                local_group = _mtg_node_attr(node, key)
+                local_group === nothing || break
+            end
+            parent_group = ""
+            if !MultiScaleTreeGraph.isroot(node)
+                parent_node = MultiScaleTreeGraph.parent(node)
+                parent_node === nothing || (parent_group = get(inherited_group, MultiScaleTreeGraph.node_id(parent_node), ""))
+            end
+            group = local_group === nothing ? parent_group : string(local_group)
+            inherited_group[nid] = group
+            if nid in wanted
+                node_group[nid] = group
+                node_type[nid] = _scene_type_from_mtg_node(node, "")
+            end
+            return nothing
+        end
+    end
+
+    for nid in wanted
+        haskey(node_group, nid) || (node_group[nid] = _scene_group(scene, nid, ""))
+        haskey(node_type, nid) || (node_type[nid] = _scene_type(scene, nid, ""))
+    end
+
+    return node_group, node_type
+end
+
 function _group_light_emitters(models::LightModels)
     out = Dict{Tuple{String,String},NamedTuple{(:par, :nir),Tuple{Float64,Float64}}}()
     for group_model in values(models)
@@ -1340,10 +1421,13 @@ end
 
 function _validate_scene_models(scene::PlantGeom.SceneGeometry, face2node::Vector{Int}, models::LightModels, ignored::Dict{String,Set{String}})
     missing = Set{Tuple{String,String}}()
-    for nid in unique(face2node)
-        _is_ignored_node(nid, scene, ignored) && continue
-        group = strip(_scene_group(scene, nid, ""))
-        type_name = strip(_scene_type(scene, nid, ""))
+    node_ids = unique(face2node)
+    node_group, node_type = _scene_group_type_maps(scene, node_ids)
+    ignored_nodes = _ignored_node_ids(node_ids, node_group, node_type, ignored)
+    for nid in node_ids
+        nid in ignored_nodes && continue
+        group = strip(get(node_group, nid, ""))
+        type_name = strip(get(node_type, nid, ""))
         _type_model(models, group, type_name) === nothing && push!(missing, (group, type_name))
     end
     isempty(missing) && return nothing
@@ -2897,15 +2981,36 @@ function _scene_geometry_for_interception(
     all_face2node = collect(scene.face2node)
 
     ignored = _ignored_group_types(models)
-    _validate_scene_models(scene, all_face2node, models, ignored)
-    faces = PlantGeom.Face3[]
-    face2node = Int[]
-    for i in eachindex(all_faces)
-        node_id = all_face2node[i]
-        _is_ignored_node(node_id, scene, ignored) && continue
-        push!(faces, all_faces[i])
-        push!(face2node, node_id)
+    all_node_ids = unique(all_face2node)
+    all_node_group, all_node_type = _scene_group_type_maps(scene, all_node_ids)
+    missing = Set{Tuple{String,String}}()
+    ignored_nodes = _ignored_node_ids(all_node_ids, all_node_group, all_node_type, ignored)
+    for nid in all_node_ids
+        nid in ignored_nodes && continue
+        group = strip(get(all_node_group, nid, ""))
+        type_name = strip(get(all_node_type, nid, ""))
+        _type_model(models, group, type_name) === nothing && push!(missing, (group, type_name))
     end
+    if !isempty(missing)
+        details = join(["($(repr(g)), $(repr(t)))" for (g, t) in sort!(collect(missing))], ", ")
+        error("Missing models for simulated geometry nodes: $details")
+    end
+    faces, face2node =
+        if isempty(ignored)
+            all_faces, all_face2node
+        else
+            kept_faces = PlantGeom.Face3[]
+            kept_face2node = Int[]
+            sizehint!(kept_faces, length(all_faces))
+            sizehint!(kept_face2node, length(all_face2node))
+            for i in eachindex(all_faces)
+                node_id = all_face2node[i]
+                node_id in ignored_nodes && continue
+                push!(kept_faces, all_faces[i])
+                push!(kept_face2node, node_id)
+            end
+            kept_faces, kept_face2node
+        end
     isempty(face2node) && error("No intercepting geometry left after applying ignore rules.")
 
     plotbox = _plotbox(scene, vertices, options.pixel_size)
@@ -2913,10 +3018,10 @@ function _scene_geometry_for_interception(
     node_ids = unique(face2node)
     node_index = Dict{Int,Int}(nid => i for (i, nid) in enumerate(node_ids))
     face2node_index = [node_index[nid] for nid in face2node]
-    node_group = Dict{Int,String}(nid => _scene_group(scene, nid, "") for nid in node_ids)
+    node_group = Dict{Int,String}(nid => get(all_node_group, nid, "") for nid in node_ids)
     node_group_by_index = [get(node_group, nid, "") for nid in node_ids]
     pavement_node_mask = [group == "pavement" for group in node_group_by_index]
-    node_type = Dict{Int,String}(nid => _scene_type(scene, nid, "") for nid in node_ids)
+    node_type = Dict{Int,String}(nid => get(all_node_type, nid, "") for nid in node_ids)
     node_type_by_index = [get(node_type, nid, "") for nid in node_ids]
     raycore_instanced_geometry =
         include_raycore_instancing ?
@@ -2946,6 +3051,7 @@ function _scene_geometry_for_interception(
         node_type,
         node_type_by_index,
         raycore_instanced_geometry,
+        Ref{Any}(nothing),
     )
 end
 
@@ -3512,23 +3618,31 @@ function _raycore_shifted_transform(transform::GeometryBasics.Mat4f, shift)
     return _raycore_mat4f_from_matrix(shift_mat * _raycore_matrix_from_mat4f(transform))
 end
 
-function _raycore_mesh_from_geometry(geometry::InterceptionSceneData)
-    n_vertices = length(geometry.vertices)
-    n_faces = length(geometry.faces)
+function _raycore_mesh_from_geometry_parts(vertices, faces_in, face2node_index)
+    n_vertices = length(vertices)
+    n_faces = length(faces_in)
     points = Vector{GeometryBasics.Point3f}(undef, n_vertices)
     faces = Vector{GeometryBasics.TriangleFace{Int}}(undef, n_faces)
     face_node_indices = Vector{UInt32}(undef, n_faces)
 
-    @inbounds for (i, p) in pairs(geometry.vertices)
+    @inbounds for (i, p) in pairs(vertices)
         points[i] = GeometryBasics.Point3f(Float32(p[1]), Float32(p[2]), Float32(p[3]))
     end
-    @inbounds for (i, f) in pairs(geometry.faces)
+    @inbounds for (i, f) in pairs(faces_in)
         faces[i] = GeometryBasics.TriangleFace{Int}(f[1], f[2], f[3])
-        face_node_indices[i] = UInt32(geometry.face2node_index[i])
+        face_node_indices[i] = UInt32(face2node_index[i])
     end
 
     face_meta = GeometryBasics.per_face(face_node_indices, faces)
     return GeometryBasics.Mesh(points, faces; face_meta=face_meta)
+end
+
+function _raycore_mesh_from_geometry(geometry::InterceptionSceneData)
+    cached = geometry.raycore_mesh_cache[]
+    cached !== nothing && return cached
+    mesh = _raycore_mesh_from_geometry_parts(geometry.vertices, geometry.faces, geometry.face2node_index)
+    geometry.raycore_mesh_cache[] = mesh
+    return mesh
 end
 
 function _raycore_push_geometry!(tlas, geometry::InterceptionSceneData; toricity::Bool=false)
@@ -3625,7 +3739,7 @@ end
 
 function _raycore_face_chunk_limit()
     raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_FACE_CHUNK_LIMIT", "")
-    isempty(strip(raw)) && return 1536
+    isempty(strip(raw)) && return 4096
     value = parse(Int, raw)
     return value <= 0 ? typemax(Int) : value
 end

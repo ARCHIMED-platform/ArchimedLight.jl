@@ -1,8 +1,8 @@
 # First-Order Interception
 
-First-order interception is the part of the model that answers one question:
+First-order interception is the light interception that occurs when rays of light hit objects in the scene. It is computed using a rasterization approach, by projecting the scene onto a 2D plane and counting the visible hits for each component (*i.e.* the projected area of the object that is visible from the source of light). The intercepted energy is computed from the visible projected area, the optical properties of the component, and the incoming irradiance.
 
-> from each incoming direction, which scene components are actually exposed, and by how much?
+By definition this step does not include any scattering, which is treated in a later step.
 
 This is the `Mir` stage in the historical ARCHIMED software developed by Jean Dauzat (AMAP, CIRAD).
 
@@ -10,17 +10,11 @@ This is the `Mir` stage in the historical ARCHIMED software developed by Jean Da
 
 The canopy is treated as a set of surfaces, implemented as triangle meshes. Each leaf, stem, soil tile, or object contributes through its mesh faces.
 
-Compared to other simpler approaches, this means that:
-
-- visibility is geometric
-- occlusion is explicit, which is important for downstream processes such as photosynthesis, energy balance, and scattering
-- the solver works at the level of surfaces and projected areas
-
 ## Why Projection Instead Of Full Ray Tracing
 
 ARCHIMED’s efficiency comes from a very specific compromise. It:
 
-- uses a finite number of incoming directions (e.g. 46 directions) instead of a continuous angular space
+- uses a finite number of incoming directions (*e.g.* 46 directions) instead of a continuous angular space
 - assumes rays are parallel inside each direction, which makes projection easy and fast
 - infers visibility from the ordered hits inside projected pixels (and scattering uses the same information)
 
@@ -38,7 +32,7 @@ Each pixel stores:
 
 The pixel table is therefore both a visibility structure for first-order interception and a transfer structure reused later by scattering. This makes the model efficient, because it avoids recomputing visibility for each scattering iteration.
 
-When only first-order interception is needed, ARCHIMED only keeps the upper visible hit for each pixel, and discards lower surfaces that will not receive direct light. 
+When only first-order interception is needed, ARCHIMED only keeps the upper visible hit for each pixel, and discards lower surfaces that will not receive direct light.
 
 > Note that this is true even if the upper surface has a non-zero `transparency` value.
 
