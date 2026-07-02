@@ -21,6 +21,9 @@ const BENCH_OUTPUT = get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_OUTPUT", "/tmp/archimed_
 const BENCH_BACKENDS = [strip(lowercase(value)) for value in split(get(ENV, "ARCHIMEDLIGHT_COMPLEXITY_BACKENDS", "normal_cpu,raycore_ka_cpu,raycore_metal_gpu"), ',') if !isempty(strip(value))]
 const BENCH_MAX_HITS = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_MAX_HITS", "32"))
 const BENCH_WORKGROUPSIZE = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE", "256"))
+const BENCH_RASTERGPU_TILE_SIZE = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_SIZE", "1"))
+const BENCH_RASTERGPU_TILE_FACE_CAPACITY =
+    parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_FACE_CAPACITY", "32"))
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
 const BENCH_MAX_PRECHUNK_INSTANCES = haskey(ENV, "ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES") ?
                                      parse(Int, ENV["ARCHIMEDLIGHT_BENCH_MAX_PRECHUNK_INSTANCES"]) :
@@ -67,6 +70,17 @@ function _raycore_interception_backend(backend)
     return ArchimedLight.RaycoreInterceptionBackend(; kwargs...)
 end
 
+function _rastergpu_interception_backend(backend)
+    return ArchimedLight.RasterGPUBackend(
+        backend=backend,
+        max_hits_per_pixel=BENCH_MAX_HITS,
+        workgroupsize=BENCH_WORKGROUPSIZE,
+        tile_size=BENCH_RASTERGPU_TILE_SIZE,
+        tile_face_capacity=BENCH_RASTERGPU_TILE_FACE_CAPACITY,
+        edge_accumulation=BENCH_EDGE_ACCUMULATION,
+    )
+end
+
 function _backend_cases()
     cases = NamedTuple[
         (name="normal_cpu", interception_backend=:raster_cpu, scattering_backend=nothing),
@@ -75,11 +89,22 @@ function _backend_cases()
         ib = _raycore_interception_backend(KernelAbstractions.CPU())
         push!(cases, (name="raycore_ka_cpu", interception_backend=ib, scattering_backend=ArchimedLight.RaycoreScatteringBackend(ib)))
     end
+    if "rastergpu_ka_cpu" in BENCH_BACKENDS || "all" in BENCH_BACKENDS
+        ib = _rastergpu_interception_backend(KernelAbstractions.CPU())
+        push!(cases, (name="rastergpu_ka_cpu", interception_backend=ib, scattering_backend=ArchimedLight.RasterGPUScatteringBackend(ib)))
+    end
     if "raycore_metal_gpu" in BENCH_BACKENDS || "all" in BENCH_BACKENDS
         metal = _optional_metal_backend()
         if metal !== nothing
             ib = _raycore_interception_backend(metal)
             push!(cases, (name="raycore_metal_gpu", interception_backend=ib, scattering_backend=ArchimedLight.RaycoreScatteringBackend(ib)))
+        end
+    end
+    if "rastergpu_metal_gpu" in BENCH_BACKENDS || "all" in BENCH_BACKENDS
+        metal = _optional_metal_backend()
+        if metal !== nothing
+            ib = _rastergpu_interception_backend(metal)
+            push!(cases, (name="rastergpu_metal_gpu", interception_backend=ib, scattering_backend=ArchimedLight.RasterGPUScatteringBackend(ib)))
         end
     end
     selected = Set(BENCH_BACKENDS)
@@ -291,15 +316,65 @@ function _mib(bytes)
     return Float64(bytes) / 1024.0^2
 end
 
+function _reduction_label(caps)
+    caps === nothing && return ""
+    return string(
+        "atomics=", Int(caps.supports_atomics),
+        ",edge=", Int(caps.dense_edge_accumulation),
+        ",count=", Int(caps.node_count_reduction),
+        ",area=", Int(caps.sector_area_reduction),
+        ",fused=", Int(caps.fused_count_area_reduction),
+    )
+end
+
+function _cache_shape_and_reductions(cache)
+    if cache === nothing
+        shape = ArchimedLight._raycore_scene_shape_summary(nothing)
+        return shape, nothing
+    end
+
+    if cache.raycore_data !== nothing
+        shape = ArchimedLight._raycore_scene_shape_summary(cache.raycore_data)
+        caps = ArchimedLight._raycore_device_reduction_capabilities(cache.raycore_data)
+        return shape, caps
+    end
+
+    rastergpu_data = cache.rastergpu_data
+    if rastergpu_data !== nothing
+        face_count = length(rastergpu_data.face_i_dev)
+        shape = (
+            geometry_mode=:raster_gpu,
+            chunked_tlas=false,
+            tlas_instances=0,
+            tlas_geometries=0,
+            node_count=length(rastergpu_data.node_counts_host),
+            expanded_face_count=face_count,
+            expanded_face_instance_upper_bound=face_count,
+            reference_compact_face_count=face_count,
+            dense_edge_pairs=length(rastergpu_data.dense_edge_counts_host),
+            edge_key_capacity=length(rastergpu_data.edge_keys_host),
+        )
+        caps = (
+            supports_atomics=KernelAbstractions.supports_atomics(rastergpu_data.backend),
+            dense_edge_accumulation=ArchimedLight._rastergpu_dense_edge_counts_fits(rastergpu_data),
+            node_count_reduction=true,
+            sector_area_reduction=true,
+            fused_count_area_reduction=true,
+        )
+        return shape, caps
+    end
+
+    shape = ArchimedLight._raycore_scene_shape_summary(nothing)
+    return shape, nothing
+end
+
 function _time_once(workload, options, case)
     sim = _new_simulation(workload, options, case)
     prepare = @timed ArchimedLight._ensure_light_cache!(sim)
     populate = @timed ArchimedLight.run_light(sim, workload.sky; step_duration_seconds=workload.step_seconds)
     reuse = @timed ArchimedLight.run_light(sim, workload.sky; step_duration_seconds=workload.step_seconds)
     cache = sim.cache
-    raycore_data = cache === nothing ? nothing : cache.raycore_data
-    shape = ArchimedLight._raycore_scene_shape_summary(raycore_data)
-    caps = raycore_data === nothing ? nothing : ArchimedLight._raycore_device_reduction_capabilities(raycore_data)
+    shape, caps = _cache_shape_and_reductions(cache)
     totals = _step_totals(reuse.value)
     return (
         status="ok",
@@ -334,13 +409,7 @@ function _time_once(workload, options, case)
         raycore_reference_compact_face_count=shape.reference_compact_face_count,
         raycore_dense_edge_pairs=shape.dense_edge_pairs,
         raycore_edge_key_capacity=shape.edge_key_capacity,
-        reduction_capabilities=caps === nothing ? "" : string(
-            "atomics=", Int(caps.supports_atomics),
-            ",edge=", Int(caps.dense_edge_accumulation),
-            ",count=", Int(caps.node_count_reduction),
-            ",area=", Int(caps.sector_area_reduction),
-            ",fused=", Int(caps.fused_count_area_reduction),
-        ),
+        reduction_capabilities=_reduction_label(caps),
         incident_par=totals.incident_par,
         incident_nir=totals.incident_nir,
     )
@@ -374,7 +443,9 @@ function _error_case_result(err, case)
         populate_mib=NaN,
         reuse_seconds=NaN,
         reuse_mib=NaN,
-        resolved_backend=case.name == "normal_cpu" ? "RasterCPUBackend" : "RaycoreInterceptionBackend",
+        resolved_backend=case.name == "normal_cpu" ? "RasterCPUBackend" :
+                         startswith(case.name, "rastergpu_") ? "RasterGPUBackend" :
+                         "RaycoreInterceptionBackend",
         geometry_mode=:error,
         raycore_chunked=false,
         raycore_tlas_instances=0,
@@ -511,6 +582,8 @@ function main()
     println("sectors: ", join(BENCH_SECTORS, ", "))
     println("samples per row after warmup: ", BENCH_SAMPLES)
     println("backends: ", join((c.name for c in cases), ", "))
+    println("rastergpu tile size: ", BENCH_RASTERGPU_TILE_SIZE)
+    println("rastergpu tile face capacity: ", BENCH_RASTERGPU_TILE_FACE_CAPACITY)
     println("output: ", BENCH_OUTPUT)
     println()
     @printf("%-20s %-16s %-7s %8s %7s %8s %8s %9s %11s %-26s %-24s %10s %10s %10s %10s %10s %10s %10s %9s %9s\n",

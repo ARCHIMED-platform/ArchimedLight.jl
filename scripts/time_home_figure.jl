@@ -6,18 +6,31 @@ import Pkg
 Pkg.activate(joinpath(REPO_ROOT, "test"))
 
 using ArchimedLight
-# using KernelAbstractions
-# using Metal
-# metal_backend = KernelAbstractions.get_backend(MtlArray(zeros(Float32, 1)))
-# interception = RaycoreInterceptionBackend(backend=metal_backend)
+using KernelAbstractions
+using Metal
+metal_backend = KernelAbstractions.get_backend(MtlArray(zeros(Float32, 1)))
+
+# backend = :normal_cpu
+backend = :rasterizer_gpu
+# backend = :raycore_gpu
+if backend == :normal_cpu
+    interception = ArchimedLight.RasterCPUBackend()
+    scattering = ArchimedLight.RaycastScatteringBackend()
+elseif backend == :rasterizer_gpu
+    interception = ArchimedLight.RasterGPUBackend(backend=metal_backend, tile_size=1, tile_face_capacity=64, max_hits_per_pixel=64, edge_accumulation=:auto)
+    scattering = ArchimedLight.RasterGPUScatteringBackend(interception)
+elseif backend == :raycore_gpu
+    interception = RaycoreInterceptionBackend(backend=metal_backend)
+    scattering = ArchimedLight.RaycoreScatteringBackend(interception)
+end
 
 config_path = joinpath(REPO_ROOT, "example_2", "config.yml")
 
 function run_archimed(config_path)
     sim, meteo = read_simulation(
         config_path;
-        # interception_backend=interception,
-        # scattering_backend=RaycoreScatteringBackend(interception),
+        interception_backend=interception,
+        scattering_backend=scattering,
     )
     step = run_light(sim, first(meteo))
     return step
@@ -32,3 +45,9 @@ display(trial)
 # With Julia: 
 # Single result which took 1.6243 s (12.79%) to evaluate,
 #  with a memory estimate of 1.70 GiB, allocs estimate: 12139919.
+# 2.38s using Raycore + Metal backend.
+# 4.626s using Rasterizer + Metal backend.
+# 5.25s with 46 directions on CPU, 6.4 on Raycore + Metal, 5.787s on Rasterizer + Metal
+# 396.882s with 0.1cm pixel size + 46 directions on CPU, 438.106s on Raycore + Metal, don't run on Rasterizer + Metal
+# Without scattering, 46 directions, 0.3cm pixel size:
+# 2.0s on CPU, s on Raycore + Metal, 2.144 on Rasterizer + Metal

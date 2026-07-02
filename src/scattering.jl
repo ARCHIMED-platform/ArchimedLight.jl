@@ -2193,8 +2193,147 @@ end
 function _resolve_scattering_backend(mode::Symbol, backend)
     error(
         "Unsupported scattering backend selector type: $(typeof(backend)). " *
-        "Use `nothing`, `RaycastScatteringBackend()`, `LinksScatteringBackend()`, or `RaycoreScatteringBackend()`.",
+        "Use `nothing`, `RaycastScatteringBackend()`, `LinksScatteringBackend()`, `RasterGPUScatteringBackend()`, or `RaycoreScatteringBackend()`.",
     )
+end
+
+function _rastergpu_dense_edge_counts_fits(data::RasterGPUSceneData)
+    return data.dense_edge_counts_dev !== nothing && data.dense_edge_counts_host !== nothing
+end
+
+function _rastergpu_auto_dense_edge_accumulation_supported(data::RasterGPUSceneData)
+    return _rastergpu_dense_edge_counts_fits(data) && KernelAbstractions.supports_atomics(data.backend)
+end
+
+function _rastergpu_scattering_edge_keys_from_device_stacks(data::RasterGPUSceneData)
+    n_pixels = length(data.overflow_host)
+    max_hits = data.max_hits_per_pixel
+    max_edges = 2 * (max_hits - 1)
+    (n_pixels == 0 || max_edges <= 0) && return (keys=UInt64[], counts=Int32[], max_edges=max_edges)
+
+    edge_keys_dev = data.edge_keys_dev
+    edge_key_counts_dev = data.edge_key_counts_dev
+    if edge_keys_dev === nothing || edge_key_counts_dev === nothing
+        error(
+            "RasterGPU sparse edge-key scratch was not allocated. " *
+            "Use edge_accumulation=:auto or :sparse_host_reduce.",
+        )
+    end
+
+    kernel = _raycore_scattering_edge_keys_kernel!(data.backend, data.workgroupsize)
+    kernel(
+        edge_keys_dev,
+        edge_key_counts_dev,
+        data.counts_dev,
+        data.nodes_dev,
+        data.virtual_node_mask_dev,
+        data.pavement_node_mask_dev,
+        data.node_ids_dev,
+        max_hits;
+        ndrange=n_pixels,
+    )
+    KernelAbstractions.synchronize(data.backend)
+
+    edge_key_len = n_pixels * max_edges
+    length(data.edge_keys_host) < edge_key_len && resize!(data.edge_keys_host, edge_key_len)
+    length(data.edge_key_counts_host) < n_pixels && resize!(data.edge_key_counts_host, n_pixels)
+    copyto!(data.edge_keys_host, edge_keys_dev)
+    copyto!(data.edge_key_counts_host, edge_key_counts_dev)
+
+    return (
+        keys=data.edge_keys_host,
+        counts=data.edge_key_counts_host,
+        max_edges=max_edges,
+    )
+end
+
+function _rastergpu_accumulate_device_scattering_edges!(
+    edge_counts::Dict{UInt64,Int},
+    data::RasterGPUSceneData,
+)
+    dense_supported = _rastergpu_auto_dense_edge_accumulation_supported(data)
+    if data.edge_accumulation == :dense_atomic && !KernelAbstractions.supports_atomics(data.backend)
+        error(
+            "RasterGPU edge_accumulation=:dense_atomic requires a KernelAbstractions backend " *
+            "with atomic support. Use :auto or :sparse_host_reduce for this backend.",
+        )
+    end
+    if data.edge_accumulation == :dense_atomic && !_rastergpu_dense_edge_counts_fits(data)
+        n_nodes = length(data.prepared.geometry.node_ids)
+        error(
+            "RasterGPU edge_accumulation=:dense_atomic requires a dense $n_nodes x $n_nodes edge matrix " *
+            "larger than dense_edge_limit_bytes=$(data.dense_edge_limit_bytes). " *
+            "Increase RasterGPUBackendConfig(dense_edge_limit_bytes=...) or use :sparse_host_reduce.",
+        )
+    end
+
+    if data.edge_accumulation != :dense_atomic && !(data.edge_accumulation == :auto && dense_supported)
+        edge_keys = _rastergpu_scattering_edge_keys_from_device_stacks(data)
+        _merge_counted_packed_edge_keys!(
+            edge_counts,
+            edge_keys.keys,
+            edge_keys.counts,
+            edge_keys.max_edges,
+            data.edge_compact_host,
+        )
+        return edge_counts
+    end
+
+    n_nodes = length(data.prepared.geometry.node_ids)
+    n_pairs = n_nodes * n_nodes
+    n_pairs == 0 && return edge_counts
+
+    clear_kernel = _raycore_clear_dense_counts_kernel!(data.backend, data.workgroupsize)
+    clear_kernel(data.dense_edge_counts_dev; ndrange=n_pairs)
+    KernelAbstractions.synchronize(data.backend)
+
+    n_pixels = data.prepared.geometry.plotbox.nx * data.prepared.geometry.plotbox.ny
+    if n_pixels > 0
+        edge_kernel = _raycore_scattering_dense_counts_kernel!(data.backend, data.workgroupsize)
+        edge_kernel(
+            data.dense_edge_counts_dev,
+            data.counts_dev,
+            data.nodes_dev,
+            data.virtual_node_mask_dev,
+            data.pavement_node_mask_dev,
+            data.max_hits_per_pixel,
+            n_nodes;
+            ndrange=n_pixels,
+        )
+        KernelAbstractions.synchronize(data.backend)
+    end
+
+    copyto!(data.dense_edge_counts_host, data.dense_edge_counts_dev)
+    return _merge_dense_edge_counts!(
+        edge_counts,
+        data.dense_edge_counts_host,
+        data.prepared.geometry.node_ids,
+    )
+end
+
+function _pair_counts_from_rastergpu_projections(
+    data::RasterGPUSceneData,
+    turtle::TurtleGrid,
+    options::LightOptions,
+)
+    prepared = data.prepared
+    geometry = prepared.geometry
+    edge_counts = Dict{UInt64,Int}()
+    sun_hits_by_node = zeros(Int, length(geometry.node_ids))
+
+    for sector in turtle.sectors
+        _rastergpu_project_direction!(data, sector.direction, options)
+        if sector.source == :sun
+            copyto!(data.node_counts_host, data.node_counts_dev)
+            @inbounds for idx in eachindex(sun_hits_by_node)
+                sun_hits_by_node[idx] += Int(data.node_counts_host[idx])
+            end
+        else
+            _rastergpu_accumulate_device_scattering_edges!(edge_counts, data)
+        end
+    end
+
+    return _edge_counts_from_packed(edge_counts), sun_hits_by_node
 end
 
 """
@@ -2203,6 +2342,27 @@ end
 Build the scattering transfer graph (pair links and per-node hit normalization data)
 independently from iterative scattering propagation.
 """
+function build_scattering_transfer_graph(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    data::RasterGPUSceneData,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend,
+)
+    pair_counts, sun_hits_by_node = _pair_counts_from_rastergpu_projections(data, turtle, options)
+    topology = _build_scattering_topology_cache(
+        scene,
+        models,
+        data.prepared,
+        pair_counts,
+        sun_hits_by_node,
+        Dict{Int,Int}(),
+    )
+    return _transfer_graph_from_topology(topology, first, options)
+end
+
 function build_scattering_transfer_graph(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
@@ -2275,6 +2435,19 @@ function build_scattering_transfer_graph(
 )
     # CPU reference currently uses the same transfer-graph construction for both modes.
     return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
+end
+
+function build_scattering_transfer_graph(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend,
+)
+    prepared = _prepare_interception_data(scene, models, options; include_raycore_instancing=false)
+    data = _rastergpu_scene_data(prepared, backend.config)
+    return build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
 end
 
 function build_scattering_transfer_graph(
@@ -2370,6 +2543,15 @@ function build_scattering_transfer_graph(
     ::LinksScatteringBackend,
 )
     return build_scattering_transfer_graph(topology, first, options, RaycastScatteringBackend())
+end
+
+function build_scattering_transfer_graph(
+    topology::ScatteringTopologyCache,
+    first::FirstOrderResult,
+    options::LightOptions,
+    ::RasterGPUScatteringBackend,
+)
+    return _transfer_graph_from_topology(topology, first, options)
 end
 
 function build_scattering_transfer_graph(
@@ -3237,6 +3419,57 @@ function _raycore_use_cpu_scattering_propagation(graph::ScatteringTransferGraph,
     return false
 end
 
+_rastergpu_scattering_eltype(backend::RasterGPUScatteringBackend) =
+    backend.config.backend isa KernelAbstractions.CPU ? Float64 : Float32
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    initial_power::AbstractVector{<:Real},
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend;
+    band::AbstractString="PAR",
+    coeff_by_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    coeffs = isnothing(coeff_by_node) ? _coeff_by_node(graph, String(band), dflt) : coeff_by_node
+    return _propagate_scattering_one_band_device_dense_only(
+        initial_power,
+        graph,
+        coeffs,
+        options,
+        dflt,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        _rastergpu_scattering_eltype(backend),
+    )
+end
+
+function _compute_scattering_band_dense(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    T = _rastergpu_scattering_eltype(backend)
+    initial = _dense_initial_scattering_power(graph, first, initial_power_per_node, band, T)
+    coeffs = _coeff_by_node(graph, String(band), dflt)
+    return _propagate_scattering_one_band_device_dense_only(
+        initial,
+        graph,
+        coeffs,
+        options,
+        dflt,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        T,
+    )
+end
+
 function _compute_scattering_band_dense(
     graph::ScatteringTransferGraph,
     initial_power::AbstractVector{<:Real},
@@ -3471,6 +3704,38 @@ function compute_scattering_band(
     graph::ScatteringTransferGraph,
     first::FirstOrderResult,
     options::LightOptions,
+    backend::RasterGPUScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
+    T = _rastergpu_scattering_eltype(backend)
+    initial = _dense_initial_scattering_power(graph, first, initial_power_per_node, band, T)
+    coeffs = _coeff_by_node(graph, String(band), dflt)
+    added, iterations, converged, dense = _propagate_scattering_one_band_device(
+        initial,
+        graph,
+        coeffs,
+        options,
+        dflt,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        T,
+    )
+    return (
+        added_power_per_node=added,
+        iterations=iterations,
+        converged=converged,
+        node_ids=graph.node_ids,
+        dense_added_power_per_node=dense,
+    )
+end
+
+function compute_scattering_band(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
     ::RaycastScatteringBackend;
     band::AbstractString="PAR",
     initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
@@ -3517,6 +3782,30 @@ function compute_scattering_band(
     first::FirstOrderResult,
     options::LightOptions,
     backend::RaycoreScatteringBackend;
+    band::AbstractString="PAR",
+    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    default_coeff::Union{Nothing,Float64}=nothing,
+)
+    graph = build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
+    return compute_scattering_band(
+        graph,
+        first,
+        options,
+        backend;
+        band=band,
+        initial_power_per_node=initial_power_per_node,
+        default_coeff=default_coeff,
+    )
+end
+
+function compute_scattering_band(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    data::RasterGPUSceneData,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend;
     band::AbstractString="PAR",
     initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     default_coeff::Union{Nothing,Float64}=nothing,
@@ -3691,6 +3980,40 @@ function compute_scattering(
 end
 
 function compute_scattering(
+    graph::ScatteringTransferGraph,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend,
+)
+    T = _rastergpu_scattering_eltype(backend)
+    initial_par = _dense_initial_scattering_power(graph, first, nothing, "PAR", T)
+    initial_nir = _dense_initial_scattering_power(graph, first, nothing, "NIR", T)
+    propagated = _propagate_scattering_two_bands_device(
+        initial_par,
+        graph.coeff_par_by_node,
+        graph.default_coeff_par,
+        initial_nir,
+        graph.coeff_nir_by_node,
+        graph.default_coeff_nir,
+        graph,
+        options,
+        backend.config.backend,
+        backend.config.workgroupsize,
+        T,
+    )
+
+    return ScatteringResult(
+        SpectralNodeValues(propagated.added_par, propagated.added_nir),
+        propagated.iterations,
+        propagated.converged,
+        DenseScatteringResult(
+            graph.node_ids,
+            DenseSpectralNodeValues(propagated.dense_par, propagated.dense_nir),
+        ),
+    )
+end
+
+function compute_scattering(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
     data::RaycoreSceneData,
@@ -3698,6 +4021,19 @@ function compute_scattering(
     first::FirstOrderResult,
     options::LightOptions,
     backend::RaycoreScatteringBackend,
+)
+    graph = build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
+    return compute_scattering(graph, first, options, backend)
+end
+
+function compute_scattering(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    data::RasterGPUSceneData,
+    turtle::TurtleGrid,
+    first::FirstOrderResult,
+    options::LightOptions,
+    backend::RasterGPUScatteringBackend,
 )
     graph = build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
     return compute_scattering(graph, first, options, backend)

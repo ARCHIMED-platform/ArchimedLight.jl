@@ -48,6 +48,317 @@
     @test raw_scene.mtg[:geometry] === nothing
 end
 
+@testitem "RasterGPU backend matches CPU raster fixtures" tags=[:core, :fast, :raster_gpu] begin
+    import KernelAbstractions
+
+    include(joinpath(@__DIR__, "support.jl"))
+
+    function first_order_pair(fixture_name; toricity)
+        fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", fixture_name, "input"))
+        options = ArchimedLight.LightOptions(
+            fixture.options;
+            scattering=false,
+            cache_pixel_table=false,
+            toricity=toricity,
+        )
+        row = first(fixture.meteo.rows)
+        sky = ArchimedLight.compute_sky(row, options)
+        turtle = ArchimedLight.build_turtle(options, sky)
+        fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+        cpu = ArchimedLight.compute_first_order(
+            fixture.scene,
+            fixture.models,
+            turtle,
+            fluxes,
+            options;
+            backend=:raster_cpu,
+        )
+        gpu = ArchimedLight.compute_first_order(
+            fixture.scene,
+            fixture.models,
+            turtle,
+            fluxes,
+            options;
+            backend=ArchimedLight.RasterGPUBackend(
+                backend=KernelAbstractions.CPU(),
+                max_hits_per_pixel=512,
+                tile_size=4,
+                tile_face_capacity=4096,
+            ),
+        )
+        return cpu.dense, gpu.dense
+    end
+
+    for (fixture_name, toricity) in (
+        ("simpleplant_16_notoric", false),
+        ("simpleplant_16_toric", true),
+    )
+        cpu, gpu = first_order_pair(fixture_name; toricity=toricity)
+        @test cpu.node_ids == gpu.node_ids
+        @test cpu.hits_per_node == gpu.hits_per_node
+        @test cpu.projected_area_per_node ≈ gpu.projected_area_per_node atol = 1e-7 rtol = 1e-6
+        @test cpu.incident_power.par ≈ gpu.incident_power.par atol = 1e-6 rtol = 1e-6
+        @test cpu.incident_power.nir ≈ gpu.incident_power.nir atol = 1e-6 rtol = 1e-6
+    end
+end
+
+@testitem "RasterGPU allocation preflight reports actionable diagnostics" tags=[:core, :fast, :raster_gpu] begin
+    config = ArchimedLight.RasterGPUBackendConfig(
+        max_hits_per_pixel=64,
+        tile_size=1,
+        tile_face_capacity=1024,
+    )
+    context = ArchimedLight._rastergpu_config_context(
+        config;
+        n_pixels=100,
+        n_tiles=100,
+        tile_size=1,
+        tile_face_capacity=1024,
+        max_hits=64,
+        edge_key_capacity=12_600,
+        stackless_top_hit=false,
+    )
+
+    err = try
+        ArchimedLight._rastergpu_checked_buffer_count(
+            "RasterGPU edge_keys_dev",
+            UInt64,
+            12_600,
+            config;
+            backend_limit=128,
+            context=context,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test err isa ErrorException
+    msg = sprint(showerror, err)
+    @test occursin("RasterGPU edge_keys_dev", msg)
+    @test occursin("requested_count=12600", msg)
+    @test occursin("eltype=UInt64", msg)
+    @test occursin("requested_bytes=100800", msg)
+    @test occursin("backend_buffer_limit_bytes=128", msg)
+    @test occursin("max_hits_per_pixel=64", msg)
+    @test occursin("tile_face_capacity=1024", msg)
+
+    tile_err = try
+        ArchimedLight._rastergpu_checked_buffer_count(
+            "RasterGPU tile_faces_dev/tile_unwrapped_i_dev/tile_unwrapped_j_dev",
+            Int32,
+            1_000,
+            config;
+            backend_limit=512,
+            context=context,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test tile_err isa ErrorException
+    tile_msg = sprint(showerror, tile_err)
+    @test occursin("tile_faces_dev", tile_msg)
+    @test occursin("tile_unwrapped_i_dev", tile_msg)
+    @test occursin("tile_unwrapped_j_dev", tile_msg)
+
+    overflow_err = try
+        ArchimedLight._rastergpu_checked_buffer_count(
+            "RasterGPU tile_faces_dev",
+            Int32,
+            Int128(typemax(Int)) + 1,
+            config;
+            backend_limit=nothing,
+            context=context,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test overflow_err isa ErrorException
+    @test occursin("element count exceeds typemax(Int)", sprint(showerror, overflow_err))
+
+    aggregate_err = try
+        ArchimedLight._rastergpu_check_total_allocation_bytes(
+            [
+                "tile_faces_dev" => Int128(600),
+                "tile_unwrapped_i_dev" => Int128(600),
+                "nodes_dev" => Int128(400),
+            ],
+            config;
+            memory_info=(working_set=Int128(2000), allocated=Int128(200), free=Int128(1800)),
+            context=context,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test aggregate_err isa ErrorException
+    aggregate_msg = sprint(showerror, aggregate_err)
+    @test occursin("aggregate device allocation preflight failed", aggregate_msg)
+    @test occursin("requested_device_bytes=1600", aggregate_msg)
+    @test occursin("metal_working_set_bytes=2000", aggregate_msg)
+    @test occursin("tile_faces_dev=600", aggregate_msg)
+end
+
+@testitem "RasterGPU top-hit scene data avoids full-stack scratch" tags=[:core, :fast, :raster_gpu] begin
+    import KernelAbstractions
+
+    include(joinpath(@__DIR__, "support.jl"))
+
+    fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
+    options = ArchimedLight.LightOptions(
+        fixture.options;
+        scattering=false,
+        cache_pixel_table=false,
+    )
+    prepared = ArchimedLight._prepare_interception_data(
+        fixture.scene,
+        fixture.models,
+        options;
+        include_budget_maps=true,
+    )
+    @test prepared.upper_hit
+
+    config = ArchimedLight.RasterGPUBackendConfig(
+        backend=KernelAbstractions.CPU(),
+        tile_face_capacity=64,
+    )
+    @test config.top_hit_tile_face_capacity == 64
+    explicit_top_hit_config = ArchimedLight.RasterGPUBackendConfig(
+        backend=KernelAbstractions.CPU(),
+        tile_face_capacity=64,
+        top_hit_tile_face_capacity=17,
+    )
+    @test explicit_top_hit_config.top_hit_tile_face_capacity == 17
+
+    data = ArchimedLight._rastergpu_scene_data(prepared, config)
+    @test data.tile_face_capacity == 64
+    @test length(data.nodes_dev) == 1
+    @test length(data.heights_dev) == 1
+    @test isempty(data.nodes_host)
+    @test isempty(data.heights_host)
+    @test data.edge_keys_dev === nothing
+    @test data.edge_key_counts_dev === nothing
+    @test data.dense_edge_counts_dev === nothing
+end
+
+@testitem "RasterGPU auto edge accumulation avoids sparse scratch when dense is smaller" tags=[:core, :fast, :raster_gpu] begin
+    import KernelAbstractions
+
+    include(joinpath(@__DIR__, "support.jl"))
+
+    fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
+    options = ArchimedLight.LightOptions(
+        fixture.options;
+        scattering=true,
+        cache_pixel_table=false,
+        toricity=false,
+    )
+    prepared = ArchimedLight._prepare_interception_data(
+        fixture.scene,
+        fixture.models,
+        options;
+        include_budget_maps=true,
+    )
+    @test !prepared.upper_hit
+
+    auto_config = ArchimedLight.RasterGPUBackendConfig(
+        backend=KernelAbstractions.CPU(),
+        max_hits_per_pixel=64,
+        tile_size=4,
+        tile_face_capacity=4096,
+        edge_accumulation=:auto,
+    )
+    auto_data = ArchimedLight._rastergpu_scene_data(prepared, auto_config)
+    @test auto_data.dense_edge_counts_dev !== nothing
+    @test auto_data.dense_edge_counts_host !== nothing
+    @test auto_data.edge_keys_dev === nothing
+    @test auto_data.edge_key_counts_dev === nothing
+
+    sparse_config = ArchimedLight.RasterGPUBackendConfig(
+        backend=KernelAbstractions.CPU(),
+        max_hits_per_pixel=64,
+        tile_size=4,
+        tile_face_capacity=4096,
+        edge_accumulation=:sparse_host_reduce,
+    )
+    sparse_data = ArchimedLight._rastergpu_scene_data(prepared, sparse_config)
+    @test sparse_data.dense_edge_counts_dev === nothing
+    @test sparse_data.edge_keys_dev !== nothing
+    @test sparse_data.edge_key_counts_dev !== nothing
+end
+
+@testitem "RasterGPU scattering backend matches CPU raycast fixture" tags=[:core, :fast, :raster_gpu] begin
+    import KernelAbstractions
+
+    include(joinpath(@__DIR__, "support.jl"))
+
+    fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
+    options = ArchimedLight.LightOptions(
+        fixture.options;
+        scattering=true,
+        cache_pixel_table=false,
+        toricity=false,
+        scattering_max_iter=3,
+    )
+    row = first(fixture.meteo.rows)
+    sky = ArchimedLight.compute_sky(row, options)
+    turtle = ArchimedLight.build_turtle(options, sky)
+    fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
+
+    cpu_first = ArchimedLight.compute_first_order(
+        fixture.scene,
+        fixture.models,
+        turtle,
+        fluxes,
+        options;
+        backend=:raster_cpu,
+    )
+    cpu_scattering = ArchimedLight.compute_scattering(
+        fixture.scene,
+        fixture.models,
+        turtle,
+        cpu_first,
+        options;
+        backend=ArchimedLight.RaycastScatteringBackend(),
+    )
+
+    interception_backend = ArchimedLight.RasterGPUBackend(
+        backend=KernelAbstractions.CPU(),
+        max_hits_per_pixel=512,
+        tile_size=4,
+        tile_face_capacity=4096,
+        edge_accumulation=:sparse_host_reduce,
+    )
+    scattering_backend = ArchimedLight.RasterGPUScatteringBackend(interception_backend)
+    gpu_first = ArchimedLight.compute_first_order(
+        fixture.scene,
+        fixture.models,
+        turtle,
+        fluxes,
+        options;
+        backend=interception_backend,
+    )
+    gpu_scattering = ArchimedLight.compute_scattering(
+        fixture.scene,
+        fixture.models,
+        turtle,
+        gpu_first,
+        options;
+        backend=scattering_backend,
+    )
+
+    @test gpu_scattering.dense !== nothing
+    @test gpu_scattering.iterations == cpu_scattering.iterations
+    @test gpu_scattering.converged == cpu_scattering.converged
+    for nid in cpu_first.dense.node_ids
+        @test get(gpu_scattering.added_power.par, nid, 0.0) ≈
+              get(cpu_scattering.added_power.par, nid, 0.0) atol = 1e-8 rtol = 1e-6
+        @test get(gpu_scattering.added_power.nir, nid, 0.0) ≈
+              get(cpu_scattering.added_power.nir, nid, 0.0) atol = 1e-8 rtol = 1e-6
+    end
+end
+
 @testitem "Sky fraction can be stored and attached" tags=[:core, :fast] begin
     import MultiScaleTreeGraph
 

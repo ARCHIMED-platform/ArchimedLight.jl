@@ -13,6 +13,135 @@ Reference interception backend based on CPU raster projection.
 struct RasterCPUBackend <: InterceptionBackend end
 
 """
+    RasterGPUBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=nothing,
+        max_hits_per_pixel=32, tile_size=1, tile_face_capacity=32,
+        top_hit_tile_size=1, top_hit_tile_face_capacity=nothing,
+        edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
+        validate=false)
+
+Configuration for the native KernelAbstractions raster backend. The `backend`
+field is a KernelAbstractions backend; GPU packages are loaded by callers. The
+same device kernels are used for CPU-backed validation and GPU execution.
+"""
+struct RasterGPUBackendConfig{B}
+    backend::B
+    workgroupsize::Int
+    max_hits_per_pixel::Int
+    tile_size::Int
+    tile_face_capacity::Int
+    top_hit_tile_size::Int
+    top_hit_tile_face_capacity::Int
+    edge_accumulation::Symbol
+    dense_edge_limit_bytes::Int
+    validate::Bool
+
+    function RasterGPUBackendConfig(
+        backend::B,
+        workgroupsize::Integer,
+        max_hits_per_pixel::Integer,
+        tile_size::Integer,
+        tile_face_capacity::Integer,
+        top_hit_tile_size::Integer,
+        top_hit_tile_face_capacity::Integer,
+        edge_accumulation::Symbol,
+        dense_edge_limit_bytes::Integer,
+        validate::Bool,
+    ) where {B}
+        workgroupsize > 0 || error("RasterGPUBackendConfig workgroupsize must be positive.")
+        max_hits_per_pixel > 0 || error("RasterGPUBackendConfig max_hits_per_pixel must be positive.")
+        tile_size > 0 || error("RasterGPUBackendConfig tile_size must be positive.")
+        tile_face_capacity > 0 || error("RasterGPUBackendConfig tile_face_capacity must be positive.")
+        top_hit_tile_size > 0 || error("RasterGPUBackendConfig top_hit_tile_size must be positive.")
+        top_hit_tile_face_capacity > 0 ||
+            error("RasterGPUBackendConfig top_hit_tile_face_capacity must be positive.")
+        dense_edge_limit_bytes > 0 || error("RasterGPUBackendConfig dense_edge_limit_bytes must be positive.")
+        edge_accumulation in (:auto, :sparse_host_reduce, :dense_atomic) ||
+            error("Unsupported RasterGPU edge_accumulation: $edge_accumulation (supported: :auto, :sparse_host_reduce, :dense_atomic)")
+        return new{B}(
+            backend,
+            Int(workgroupsize),
+            Int(max_hits_per_pixel),
+            Int(tile_size),
+            Int(tile_face_capacity),
+            Int(top_hit_tile_size),
+            Int(top_hit_tile_face_capacity),
+            edge_accumulation,
+            Int(dense_edge_limit_bytes),
+            validate,
+        )
+    end
+end
+
+function RasterGPUBackendConfig(;
+    backend=KernelAbstractions.CPU(),
+    workgroupsize::Union{Nothing,Integer}=nothing,
+    max_hits_per_pixel::Integer=32,
+    tile_size::Integer=1,
+    tile_face_capacity::Integer=32,
+    top_hit_tile_size::Integer=1,
+    top_hit_tile_face_capacity::Union{Nothing,Integer}=nothing,
+    edge_accumulation::Symbol=:auto,
+    dense_edge_limit_bytes::Integer=512 * 1024^2,
+    validate::Bool=false,
+)
+    effective_top_hit_tile_face_capacity =
+        top_hit_tile_face_capacity === nothing ? tile_face_capacity : top_hit_tile_face_capacity
+    return RasterGPUBackendConfig(
+        backend,
+        workgroupsize === nothing ? 256 : workgroupsize,
+        max_hits_per_pixel,
+        tile_size,
+        tile_face_capacity,
+        top_hit_tile_size,
+        effective_top_hit_tile_face_capacity,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        validate,
+    )
+end
+
+"""
+    RasterGPUBackend(; kwargs...)
+    RasterGPUBackend(config::RasterGPUBackendConfig)
+
+Native GPU-oriented raster interception backend. It keeps projection,
+visibility stacks, visible-area reductions, and scattering-topology stack
+generation in KernelAbstractions kernels.
+"""
+struct RasterGPUBackend{C<:RasterGPUBackendConfig} <: InterceptionBackend
+    config::C
+end
+
+RasterGPUBackend(; kwargs...) = RasterGPUBackend(RasterGPUBackendConfig(; kwargs...))
+
+function _rastergpu_config_with(
+    config::RasterGPUBackendConfig;
+    backend=config.backend,
+    workgroupsize=config.workgroupsize,
+    max_hits_per_pixel=config.max_hits_per_pixel,
+    tile_size=config.tile_size,
+    tile_face_capacity=config.tile_face_capacity,
+    top_hit_tile_size=config.top_hit_tile_size,
+    top_hit_tile_face_capacity=config.top_hit_tile_face_capacity,
+    edge_accumulation=config.edge_accumulation,
+    dense_edge_limit_bytes=config.dense_edge_limit_bytes,
+    validate=config.validate,
+)
+    return RasterGPUBackendConfig(
+        backend,
+        workgroupsize,
+        max_hits_per_pixel,
+        tile_size,
+        tile_face_capacity,
+        top_hit_tile_size,
+        top_hit_tile_face_capacity,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        validate,
+    )
+end
+
+"""
     RaycoreBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=nothing,
         max_hits_per_pixel=32, hit_epsilon=1.0f-4,
         edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
@@ -191,6 +320,38 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 Scattering backend that uses precomputed link-style transfer relationships.
 """
 struct LinksScatteringBackend <: ScatteringBackend end
+
+"""
+    RasterGPUScatteringBackend(interception_backend::RasterGPUBackend; kwargs...)
+    RasterGPUScatteringBackend(; kwargs...)
+
+Scattering backend that builds transfer topology from native raster GPU stacks.
+"""
+struct RasterGPUScatteringBackend{C<:RasterGPUBackendConfig} <: ScatteringBackend
+    config::C
+end
+
+RasterGPUScatteringBackend(; kwargs...) = RasterGPUScatteringBackend(RasterGPUBackendConfig(; kwargs...))
+
+function RasterGPUScatteringBackend(
+    interception_backend::RasterGPUBackend;
+    edge_accumulation::Symbol=interception_backend.config.edge_accumulation,
+    dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
+    tile_size::Integer=interception_backend.config.tile_size,
+    tile_face_capacity::Integer=interception_backend.config.tile_face_capacity,
+    validate::Bool=interception_backend.config.validate,
+)
+    return RasterGPUScatteringBackend(
+        _rastergpu_config_with(
+            interception_backend.config;
+            edge_accumulation=edge_accumulation,
+            dense_edge_limit_bytes=dense_edge_limit_bytes,
+            tile_size=tile_size,
+            tile_face_capacity=tile_face_capacity,
+            validate=validate,
+        ),
+    )
+end
 
 """
     RaycoreScatteringBackend(interception_backend::RaycoreInterceptionBackend; kwargs...)

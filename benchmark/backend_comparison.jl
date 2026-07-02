@@ -47,6 +47,9 @@ const BENCH_WORKGROUPSIZE = haskey(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE") ?
                             parse(Int, ENV["ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE"]) :
                             nothing
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
+const BENCH_RASTERGPU_TILE_SIZE = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_SIZE", "1"))
+const BENCH_RASTERGPU_TILE_FACE_CAPACITY =
+    parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_FACE_CAPACITY", "32"))
 const BENCH_EXECUTION = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_EXECUTION", "oneshot"))
 const BENCH_COMPONENTS = split(lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_COMPONENTS", "first_order,scattering,topology,propagation")), ',')
 const BENCH_VALIDATE = lowercase(get(ENV, "ARCHIMEDLIGHT_BENCH_VALIDATE", "1")) in ("1", "true", "yes", "on")
@@ -187,6 +190,21 @@ function _raycore_interception_backend(backend; max_hits::Int, workgroupsize, ed
     return ArchimedLight.RaycoreInterceptionBackend(; kwargs...)
 end
 
+function _rastergpu_interception_backend(backend; max_hits::Int, workgroupsize, edge_accumulation::Symbol)
+    kwargs = (
+        backend=backend,
+        max_hits_per_pixel=max_hits,
+        tile_size=BENCH_RASTERGPU_TILE_SIZE,
+        tile_face_capacity=BENCH_RASTERGPU_TILE_FACE_CAPACITY,
+        edge_accumulation=edge_accumulation,
+    )
+    if workgroupsize === nothing
+        return ArchimedLight.RasterGPUBackend(; kwargs...)
+    end
+    kwargs = merge(kwargs, (; workgroupsize=workgroupsize))
+    return ArchimedLight.RasterGPUBackend(; kwargs...)
+end
+
 function _backend_cases(;
     max_hits::Int=BENCH_MAX_HITS,
     workgroupsize=BENCH_WORKGROUPSIZE,
@@ -215,6 +233,22 @@ function _backend_cases(;
     ]
     cases[2] = merge(cases[2], (; scattering_backend=ArchimedLight.RaycoreScatteringBackend(cases[2].interception_backend; edge_accumulation=edge_accumulation)))
 
+    rastergpu_cpu = _rastergpu_interception_backend(
+        KernelAbstractions.CPU();
+        max_hits=max_hits,
+        workgroupsize=workgroupsize,
+        edge_accumulation=edge_accumulation,
+    )
+    push!(
+        cases,
+        (
+            name="rastergpu_ka_cpu",
+            backend=KernelAbstractions.CPU(),
+            interception_backend=rastergpu_cpu,
+            scattering_backend=ArchimedLight.RasterGPUScatteringBackend(rastergpu_cpu; edge_accumulation=edge_accumulation),
+        ),
+    )
+
     metal_backend = _optional_metal_backend()
     if metal_backend !== nothing
         ib = _raycore_interception_backend(
@@ -231,6 +265,21 @@ function _backend_cases(;
                 backend=metal_backend,
                 interception_backend=ib,
                 scattering_backend=ArchimedLight.RaycoreScatteringBackend(ib; edge_accumulation=edge_accumulation),
+            ),
+        )
+        rib = _rastergpu_interception_backend(
+            metal_backend;
+            max_hits=max_hits,
+            workgroupsize=workgroupsize,
+            edge_accumulation=edge_accumulation,
+        )
+        push!(
+            cases,
+            (
+                name="rastergpu_metal_gpu",
+                backend=metal_backend,
+                interception_backend=rib,
+                scattering_backend=ArchimedLight.RasterGPUScatteringBackend(rib; edge_accumulation=edge_accumulation),
             ),
         )
     end
@@ -298,7 +347,8 @@ function _backend_cases(;
     filtered = [case for case in cases if lowercase(case.name) in selected]
     isempty(filtered) && error(
         "ARCHIMEDLIGHT_BENCH_BACKENDS selected no backends. " *
-        "Use all, normal_cpu, raycore_ka_cpu, raycore_metal_gpu, raycore_cuda_gpu, raycore_oneapi_gpu, or raycore_amdgpu_gpu. " *
+        "Use all, normal_cpu, raycore_ka_cpu, rastergpu_ka_cpu, raycore_metal_gpu, rastergpu_metal_gpu, " *
+        "raycore_cuda_gpu, raycore_oneapi_gpu, or raycore_amdgpu_gpu. " *
         "GPU backends also require the matching ARCHIMEDLIGHT_BENCH_METAL, ARCHIMEDLIGHT_BENCH_CUDA, " *
         "ARCHIMEDLIGHT_BENCH_ONEAPI, or ARCHIMEDLIGHT_BENCH_AMDGPU flag.",
     )
@@ -443,11 +493,23 @@ function _raycore_reduction_capabilities(raycore_data)
     return ArchimedLight._raycore_device_reduction_capabilities(raycore_data)
 end
 
+function _rastergpu_reduction_capabilities(rastergpu_data)
+    rastergpu_data === nothing && return nothing
+    return (
+        supports_atomics=KernelAbstractions.supports_atomics(rastergpu_data.backend),
+        dense_edge_accumulation=ArchimedLight._rastergpu_dense_edge_counts_fits(rastergpu_data),
+        node_count_reduction=true,
+        sector_area_reduction=true,
+        fused_count_area_reduction=true,
+    )
+end
+
 function _cache_backend_info(cache)
+    rastergpu_data = hasproperty(cache, :rastergpu_data) ? cache.rastergpu_data : nothing
     return (
         resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
-        geometry_mode=cache.raycore_data === nothing ? :none : cache.raycore_data.geometry_mode,
-        reduction_capabilities=_raycore_reduction_capabilities(cache.raycore_data),
+        geometry_mode=cache.raycore_data === nothing ? (rastergpu_data === nothing ? :none : :raster_gpu) : cache.raycore_data.geometry_mode,
+        reduction_capabilities=cache.raycore_data === nothing ? _rastergpu_reduction_capabilities(rastergpu_data) : _raycore_reduction_capabilities(cache.raycore_data),
     )
 end
 
@@ -455,15 +517,22 @@ function _state_backend_info(state)
     state === nothing && return nothing
     return (
         resolved_backend=string(nameof(typeof(state.resolved_interception_backend))),
-        geometry_mode=state.raycore_data === nothing ? :none : state.raycore_data.geometry_mode,
-        reduction_capabilities=_raycore_reduction_capabilities(state.raycore_data),
+        geometry_mode=state.raycore_data === nothing ? (state.rastergpu_data === nothing ? :none : :raster_gpu) : state.raycore_data.geometry_mode,
+        reduction_capabilities=state.raycore_data === nothing ? _rastergpu_reduction_capabilities(state.rastergpu_data) : _raycore_reduction_capabilities(state.raycore_data),
     )
 end
 
 function _backend_result_label(case, backend_info)
     backend_info === nothing && return case.name
     resolved_backend = backend_info.resolved_backend
-    expected = case.name == "normal_cpu" ? "RasterCPUBackend" : "RaycoreInterceptionBackend"
+    expected =
+        if case.name == "normal_cpu"
+            "RasterCPUBackend"
+        elseif startswith(case.name, "rastergpu_")
+            "RasterGPUBackend"
+        else
+            "RaycoreInterceptionBackend"
+        end
     resolved_backend == expected && return case.name
     return "$(case.name)->$(resolved_backend)"
 end
@@ -533,18 +602,34 @@ function _prepared_topology_state(scene, models, meteo_row, options, case)
     backend =
         cache.raycore_data !== nothing && cache.scattering_backend isa ArchimedLight.RaycoreScatteringBackend ?
         cache.scattering_backend :
+        cache.rastergpu_data !== nothing && cache.scattering_backend isa ArchimedLight.RasterGPUScatteringBackend ?
+        cache.scattering_backend :
         nothing
     return (
         turtle=turtle,
         fluxes=fluxes,
         prepared=cache.prepared,
         raycore_data=cache.raycore_data,
+        rastergpu_data=cache.rastergpu_data,
         backend=backend,
         resolved_interception_backend=cache.resolved_interception_backend,
     )
 end
 
 function _build_first_topology(scene, models, options, state, case)
+    if state.rastergpu_data !== nothing
+        first = ArchimedLight.compute_first_order(state.rastergpu_data, state.turtle, state.fluxes, options)
+        topology = ArchimedLight.build_scattering_transfer_graph(
+            scene,
+            models,
+            state.rastergpu_data,
+            state.turtle,
+            first,
+            options,
+            state.backend,
+        )
+        return first, topology
+    end
     if state.raycore_data === nothing
         return ArchimedLight._stream_first_order_with_scattering_topology(
             state.prepared,
@@ -742,6 +827,7 @@ end
 
 function _stack_profile_pass(state, options)
     state === nothing && return nothing
+    state.raycore_data === nothing && return nothing
     return ArchimedLight._raycore_stack_profile(state.raycore_data, state.directions, options)
 end
 
@@ -1070,6 +1156,8 @@ function main()
         "max_hit_values=$(join(BENCH_MAX_HIT_VALUES, ',')), " *
         "max_prechunk_instance_values=$(_max_prechunk_instances_values_label(BENCH_MAX_PRECHUNK_INSTANCE_VALUES)), " *
         "workgroupsize_values=$(_workgroupsize_values_label(BENCH_WORKGROUPSIZE_VALUES)), " *
+        "rastergpu_tile_size=$(BENCH_RASTERGPU_TILE_SIZE), " *
+        "rastergpu_tile_face_capacity=$(BENCH_RASTERGPU_TILE_FACE_CAPACITY), " *
         "edge_accumulation_values=$(join(string.(BENCH_EDGE_ACCUMULATION_VALUES), ',')), " *
         "execution=$(BENCH_EXECUTION), " *
         "components=$(join(sort!(collect(components)), ','))",

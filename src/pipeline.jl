@@ -2096,6 +2096,7 @@ function _compute_scattering_with_flags(
     nir_scattering::Bool=true,
     responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
     scattering_topology::Union{Nothing,ScatteringTopologyCache}=nothing,
+    rastergpu_data::Union{Nothing,RasterGPUSceneData}=nothing,
     raycore_data::Union{Nothing,RaycoreSceneData}=nothing,
 )
     options.scattering || return nothing
@@ -2103,6 +2104,9 @@ function _compute_scattering_with_flags(
         scattering_topology !== nothing && return compute_scattering(scattering_topology, first, options; mode=mode, backend=backend)
         if responses_cache !== nothing && responses_cache.scattering_topology !== nothing
             return compute_scattering(responses_cache.scattering_topology, first, options; mode=mode, backend=backend)
+        end
+        if rastergpu_data !== nothing && backend isa RasterGPUScatteringBackend
+            return compute_scattering(scene, models, rastergpu_data, turtle, first, options, backend)
         end
         if raycore_data !== nothing && backend isa RaycoreScatteringBackend
             return compute_scattering(scene, models, raycore_data, turtle, first, options, backend)
@@ -2136,6 +2140,18 @@ function _compute_scattering_with_flags(
                 scene,
                 models,
                 raycore_data,
+                turtle,
+                first,
+                options,
+                backend;
+                band="PAR",
+                default_coeff=options.scattering_coeff_par,
+            )
+        elseif rastergpu_data !== nothing && backend isa RasterGPUScatteringBackend
+            compute_scattering_band(
+                scene,
+                models,
+                rastergpu_data,
                 turtle,
                 first,
                 options,
@@ -2325,6 +2341,7 @@ mutable struct LightSimulationCache
     scattering_mode::Symbol
     scattering_backend::Union{Nothing,ScatteringBackend}
     prepared::Union{Nothing,PreparedInterceptionData}
+    rastergpu_data::Union{Nothing,RasterGPUSceneData}
     raycore_data::Union{Nothing,RaycoreSceneData}
     render_geometry::LightRenderGeometry
     mode::Symbol
@@ -2424,7 +2441,7 @@ function prepare_light_cache(
 )
     ib = _resolve_interception_backend(interception_backend)
     prepared =
-        if ib isa RasterCPUBackend || ib isa RaycoreInterceptionBackend
+        if ib isa RasterCPUBackend || ib isa RasterGPUBackend || ib isa RaycoreInterceptionBackend
             _prepare_interception_data(
                 scene,
                 models,
@@ -2444,6 +2461,10 @@ function prepare_light_cache(
     limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
     limit = max(limit, 1)
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
+    rastergpu_data = nothing
+    if ib isa RasterGPUBackend && prepared !== nothing
+        rastergpu_data = _rastergpu_scene_data(prepared, ib.config)
+    end
     raycore_data = nothing
     raycore_data_was_chunked = false
     if ib isa RaycoreInterceptionBackend && prepared !== nothing
@@ -2521,6 +2542,7 @@ function prepare_light_cache(
         scattering_mode,
         scattering_backend,
         prepared,
+        rastergpu_data,
         raycore_data,
         render_geometry,
         mode,
@@ -3365,6 +3387,7 @@ function _run_light_step_cached(
     prepared = cache.prepared
     responses_cache = nothing
     scattering_topology = nothing
+    rastergpu_data = nothing
     raycore_data = nothing
     extra_irr = _extra_band_irradiance(meteo_row)
     first = nothing
@@ -3384,6 +3407,18 @@ function _run_light_step_cached(
             prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
             responses_cache = _build_sector_responses(prepared, scene, models, turtle, options)
             first = _combine_sector_responses(responses_cache, fluxes)
+        elseif ib isa RasterGPUBackend
+            prepared === nothing && (prepared = _prepare_interception_data(
+                scene,
+                models,
+                options;
+                include_budget_maps=true,
+                include_raycore_instancing=false,
+            ))
+            rastergpu_data = cache.rastergpu_data === nothing ?
+                             _rastergpu_scene_data(prepared, ib.config) :
+                             cache.rastergpu_data
+            first = compute_first_order(rastergpu_data, turtle, fluxes, options)
         elseif ib isa RaycoreInterceptionBackend
             prepared === nothing && (prepared = _prepare_interception_data(
                 scene,
@@ -3417,10 +3452,13 @@ function _run_light_step_cached(
             first,
             options;
             mode=cache.scattering_mode,
-            backend=cache.scattering_backend,
+            backend=(rastergpu_data !== nothing && cache.scattering_backend === nothing) ?
+                    RasterGPUScatteringBackend(ib) :
+                    cache.scattering_backend,
             nir_scattering=nir_scattering,
             responses_cache=responses_cache,
             scattering_topology=scattering_topology,
+            rastergpu_data=rastergpu_data,
             raycore_data=raycore_data,
         )
         extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
@@ -3432,7 +3470,9 @@ function _run_light_step_cached(
             options;
             interception_backend=ib,
             scattering_mode=cache.scattering_mode,
-            scattering_backend=cache.scattering_backend,
+            scattering_backend=(rastergpu_data !== nothing && cache.scattering_backend === nothing) ?
+                               RasterGPUScatteringBackend(ib) :
+                               cache.scattering_backend,
             responses_cache=responses_cache,
         )
     end
@@ -3481,6 +3521,7 @@ function _run_light_sky_cached(
     prepared = cache.prepared
     responses_cache = nothing
     scattering_topology = nothing
+    rastergpu_data = nothing
     first = nothing
     scat = nothing
     extra_irr = Dict{String,Float64}()
@@ -3495,6 +3536,18 @@ function _run_light_sky_cached(
             prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
             first, scattering_topology =
                 _stream_first_order_with_scattering_topology(prepared, scene, models, turtle, fluxes, options)
+        elseif ib isa RasterGPUBackend
+            prepared === nothing && (prepared = _prepare_interception_data(
+                scene,
+                models,
+                options;
+                include_budget_maps=true,
+                include_raycore_instancing=false,
+            ))
+            rastergpu_data = cache.rastergpu_data === nothing ?
+                             _rastergpu_scene_data(prepared, ib.config) :
+                             cache.rastergpu_data
+            first = compute_first_order(rastergpu_data, turtle, fluxes, options)
         elseif ib isa RaycoreInterceptionBackend
             prepared === nothing && (prepared = _prepare_interception_data(
                 scene,
@@ -3522,10 +3575,13 @@ function _run_light_sky_cached(
             first,
             options;
             mode=cache.scattering_mode,
-            backend=cache.scattering_backend,
+            backend=(rastergpu_data !== nothing && cache.scattering_backend === nothing) ?
+                    RasterGPUScatteringBackend(ib) :
+                    cache.scattering_backend,
             nir_scattering=nir_scattering,
             responses_cache=responses_cache,
             scattering_topology=scattering_topology,
+            rastergpu_data=rastergpu_data,
             raycore_data=cache.raycore_data,
         )
     end
