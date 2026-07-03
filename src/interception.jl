@@ -319,13 +319,47 @@ struct RasterGPUSceneData{P,B,VX,VY,VZ,F,N,T,M,I,C,S,H,O,G,A,D,K,KC,TC,TF,TO,E}
     validate::Bool
 end
 
+struct RasterGPUFusedProjectionParams
+    dirx::Float32
+    diry::Float32
+    dirz::Float32
+    origin_x::Float32
+    origin_y::Float32
+    pix_x::Float32
+    pix_y::Float32
+    pixel_area::Float32
+    nx::Int
+    ny::Int
+    n_tiles_x::Int
+    tile_size::Int
+    tile_face_capacity::Int
+    toricity::Bool
+    area_ratio::Bool
+    max_hits::Int
+    n_nodes::Int
+    accumulate_dense_edges::Bool
+end
+
 const RAYCORE_INVALID_NODE = UInt32(0xffffffff)
 const RAYCORE_SOFTWARE_TRAVERSAL_STACK_CAPACITY =
     isdefined(Raycore, :SOFTWARE_TRAVERSAL_STACK_CAPACITY) ?
     Int(getfield(Raycore, :SOFTWARE_TRAVERSAL_STACK_CAPACITY)) :
     32
+const RASTERGPU_FUSED_DENSE_MAX_HITS = 128
 
 _raycore_software_traversal_stack_capacity() = RAYCORE_SOFTWARE_TRAVERSAL_STACK_CAPACITY
+_rastergpu_fused_dense_supported(config::RasterGPUBackendConfig) =
+    !(config.backend isa KernelAbstractions.CPU) &&
+    config.max_hits_per_pixel <= RASTERGPU_FUSED_DENSE_MAX_HITS
+
+function _rastergpu_use_fused_dense_edges(data::RasterGPUSceneData)
+    return !data.prepared.upper_hit &&
+           data.dense_edge_counts_dev !== nothing &&
+           data.tile_size == 1 &&
+           data.max_hits_per_pixel <= RASTERGPU_FUSED_DENSE_MAX_HITS &&
+           length(data.nodes_dev) == 1 &&
+           length(data.heights_dev) == 1
+end
 
 function _raycore_bvh_depth(nodes)
     isempty(nodes) && return 0
@@ -2999,6 +3033,228 @@ KernelAbstractions.@kernel function _rastergpu_sort_and_reduce_kernel!(
                         @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction * ratio
                     end
                     area_active = transparency > 0.0f0
+                end
+            end
+        end
+    end
+end
+
+KernelAbstractions.@kernel function _rastergpu_clear_dense_counts_kernel!(dense_counts)
+    pair_idx = @index(Global, Linear)
+    @inbounds dense_counts[pair_idx] = Int32(0)
+end
+
+KernelAbstractions.@kernel function _rastergpu_project_tile_bins_fused_dense_kernel!(
+    counts,
+    overflow,
+    node_counts,
+    sector_area,
+    dense_edge_counts,
+    projected_mesh_area,
+    projected_pixels_area,
+    tile_counts,
+    tile_faces,
+    tile_unwrapped_i,
+    tile_unwrapped_j,
+    vertex_x,
+    vertex_y,
+    vertex_z,
+    face_i,
+    face_j,
+    face_k,
+    face2node_index,
+    virtual_node_mask,
+    pavement_node_mask,
+    node_transparency,
+    params::RasterGPUFusedProjectionParams,
+)
+    work_idx = @index(Global, Linear)
+    local_nodes = StaticArrays.MVector{RASTERGPU_FUSED_DENSE_MAX_HITS,UInt32}(undef)
+    local_heights = StaticArrays.MVector{RASTERGPU_FUSED_DENSE_MAX_HITS,Float32}(undef)
+    @inbounds begin
+        dirx = params.dirx
+        diry = params.diry
+        dirz = params.dirz
+        origin_x = params.origin_x
+        origin_y = params.origin_y
+        pix_x = params.pix_x
+        pix_y = params.pix_y
+        pixel_area = params.pixel_area
+        nx = params.nx
+        ny = params.ny
+        n_tiles_x = params.n_tiles_x
+        tile_size = params.tile_size
+        tile_face_capacity = params.tile_face_capacity
+        toricity = params.toricity
+        area_ratio = params.area_ratio
+        max_hits = params.max_hits
+        n_nodes = params.n_nodes
+        accumulate_dense_edges = params.accumulate_dense_edges
+        tile_area = tile_size * tile_size
+        tile_idx = fld(work_idx - 1, tile_area) + 1
+        local_idx = (work_idx - 1) - (tile_idx - 1) * tile_area
+        local_i = local_idx - fld(local_idx, tile_size) * tile_size
+        local_j = fld(local_idx, tile_size)
+        tile_i_base = (tile_idx - 1) - fld(tile_idx - 1, n_tiles_x) * n_tiles_x
+        tile_j_base = fld(tile_idx - 1, n_tiles_x)
+        output_i = tile_i_base * tile_size + local_i
+        output_j = tile_j_base * tile_size + local_j
+
+        output_pixel_in_bounds = (0 <= output_i) && (output_i < nx) && (0 <= output_j) && (output_j < ny)
+        pixel_idx = output_pixel_in_bounds ? output_i + 1 + output_j * nx : 0
+
+        n_hits = 0
+        observed_hits = 0
+        if pixel_idx != 0 && dirz != 0.0f0
+            candidate_count = Int(tile_counts[tile_idx])
+            candidate_count > tile_face_capacity && (candidate_count = tile_face_capacity)
+            candidate_base = (tile_idx - 1) * tile_face_capacity
+            for candidate in 1:candidate_count
+                candidate_idx = candidate_base + candidate
+                fi = Int(tile_faces[candidate_idx])
+                tile_i = Int(tile_unwrapped_i[candidate_idx])
+                tile_j = Int(tile_unwrapped_j[candidate_idx])
+                i = tile_i * tile_size + local_i
+                j = tile_j * tile_size + local_j
+                ii = i
+                jj = j
+                if toricity
+                    ii = _rastergpu_wrap_index(i, nx)
+                    jj = _rastergpu_wrap_index(j, ny)
+                end
+                ((0 <= ii) && (ii < nx) && (0 <= jj) && (jj < ny)) || continue
+                ii + 1 + jj * nx == pixel_idx || continue
+
+                vi = Int(face_i[fi])
+                vj = Int(face_j[fi])
+                vk = Int(face_k[fi])
+                node_idx = Int(face2node_index[fi])
+
+                x1 = vertex_x[vi]
+                y1 = vertex_y[vi]
+                z1 = vertex_z[vi]
+                x2 = vertex_x[vj]
+                y2 = vertex_y[vj]
+                z2 = vertex_z[vj]
+                x3 = vertex_x[vk]
+                y3 = vertex_y[vk]
+                z3 = vertex_z[vk]
+
+                _, _, pix1x, pix1y, pix1z =
+                    _rastergpu_project_vertex(x1, y1, z1, dirx, diry, dirz, origin_x, origin_y, pix_x, pix_y)
+                _, _, pix2x, pix2y, pix2z =
+                    _rastergpu_project_vertex(x2, y2, z2, dirx, diry, dirz, origin_x, origin_y, pix_x, pix_y)
+                _, _, pix3x, pix3y, pix3z =
+                    _rastergpu_project_vertex(x3, y3, z3, dirx, diry, dirz, origin_x, origin_y, pix_x, pix_y)
+
+                i_min = min(floor(Int, pix1x), floor(Int, pix2x), floor(Int, pix3x))
+                i_max = max(ceil(Int, pix1x), ceil(Int, pix2x), ceil(Int, pix3x))
+                j_min = min(floor(Int, pix1y), floor(Int, pix2y), floor(Int, pix3y))
+                j_max = max(ceil(Int, pix1y), ceil(Int, pix2y), ceil(Int, pix3y))
+                k_min = min(floor(Int, pix1z), floor(Int, pix2z), floor(Int, pix3z))
+                k_max = max(ceil(Int, pix1z), ceil(Int, pix2z), ceil(Int, pix3z))
+
+                if i_max > i_min && j_max > j_min &&
+                   (i_min <= i) && (i <= i_max - 1) && (j_min <= j) && (j <= j_max - 1)
+                    normal_x, normal_y, normal_z =
+                        _rastergpu_normal(pix1x, pix1y, pix1z, pix2x, pix2y, pix2z, pix3x, pix3y, pix3z)
+                    slope_x, slope_y =
+                        if abs(normal_z) > 1.0f-5
+                            normal_x / normal_z, normal_y / normal_z
+                        else
+                            dirz * normal_x, dirz * normal_y
+                        end
+                    z0 = pix1z + slope_x * (pix1x - Float32(i_min)) + slope_y * (pix1y - Float32(j_min))
+                    ymin_i = j_max
+                    ymax_i = j_min
+                    ymin_i, ymax_i = _rastergpu_edge_bounds(i, ymin_i, ymax_i, pix1x, pix1y, pix2x, pix2y)
+                    ymin_i, ymax_i = _rastergpu_edge_bounds(i, ymin_i, ymax_i, pix2x, pix2y, pix3x, pix3y)
+                    ymin_i, ymax_i = _rastergpu_edge_bounds(i, ymin_i, ymax_i, pix3x, pix3y, pix1x, pix1y)
+
+                    if (ymin_i <= j) && (j <= ymax_i - 1)
+                        ni = i - i_min
+                        zi = z0 - slope_x * Float32(ni)
+                        nj = j - j_min
+                        zpix = zi - slope_y * Float32(nj)
+                        zpix = clamp(zpix, Float32(k_min), Float32(k_max))
+                        @atomic :monotonic node_counts[node_idx] += Int32(1)
+                        observed_hits += 1
+                        if n_hits < max_hits
+                            n_hits += 1
+                            insert_at = n_hits
+                            while insert_at > 1 &&
+                                  (local_heights[insert_at-1] < zpix ||
+                                   (local_heights[insert_at-1] == zpix && local_nodes[insert_at-1] > UInt32(node_idx)))
+                                local_heights[insert_at] = local_heights[insert_at-1]
+                                local_nodes[insert_at] = local_nodes[insert_at-1]
+                                insert_at -= 1
+                            end
+                            local_heights[insert_at] = zpix
+                            local_nodes[insert_at] = UInt32(node_idx)
+                        else
+                            overflow[pixel_idx] = true
+                        end
+                    end
+                end
+            end
+
+            counts[pixel_idx] = Int32(observed_hits)
+            if n_hits > 0
+                area_active = true
+                for h in 1:n_hits
+                    node_idx = Int(local_nodes[h])
+                    1 <= node_idx <= n_nodes || continue
+                    area_active || continue
+
+                    ratio = 1.0f0
+                    if area_ratio
+                        pixels_area = projected_pixels_area[node_idx]
+                        ratio = pixels_area > 0.0f0 ? projected_mesh_area[node_idx] / pixels_area : 1.0f0
+                    end
+
+                    if virtual_node_mask[node_idx]
+                        @atomic :monotonic sector_area[node_idx] += pixel_area * ratio
+                        continue
+                    end
+
+                    transparency = node_transparency[node_idx]
+                    intercepted_fraction = 1.0f0 - transparency
+                    if intercepted_fraction > 0.0f0
+                        @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction * ratio
+                    end
+                    area_active = transparency > 0.0f0
+                end
+            end
+
+            if accumulate_dense_edges && n_hits > 1
+                nearest_above_idx = 0
+                for h in 1:(n_hits - 1)
+                    current_idx = Int(local_nodes[h])
+                    if !virtual_node_mask[current_idx]
+                        nearest_above_idx = current_idx
+                    end
+
+                    from_below_idx = 0
+                    for k in (h + 1):n_hits
+                        candidate_idx = Int(local_nodes[k])
+                        if !virtual_node_mask[candidate_idx]
+                            from_below_idx = candidate_idx
+                            break
+                        end
+                    end
+
+                    if from_below_idx != 0 &&
+                       !(pavement_node_mask[current_idx] && pavement_node_mask[from_below_idx])
+                        dense_idx = (current_idx - 1) * n_nodes + from_below_idx
+                        @atomic :monotonic dense_edge_counts[dense_idx] += 1
+                    end
+
+                    next_idx = Int(local_nodes[h+1])
+                    if nearest_above_idx != 0 &&
+                       !(pavement_node_mask[next_idx] && pavement_node_mask[nearest_above_idx])
+                        dense_idx = (next_idx - 1) * n_nodes + nearest_above_idx
+                        @atomic :monotonic dense_edge_counts[dense_idx] += 1
+                    end
                 end
             end
         end
@@ -7327,6 +7583,7 @@ function _rastergpu_config_context(
     edge_key_capacity=nothing,
     dense_pairs=nothing,
     stackless_top_hit=nothing,
+    fused_dense_edges=nothing,
 )
     fields = String[
         "max_hits_per_pixel=$(config.max_hits_per_pixel)",
@@ -7345,6 +7602,7 @@ function _rastergpu_config_context(
     edge_key_capacity === nothing || push!(fields, "edge_key_capacity=$edge_key_capacity")
     dense_pairs === nothing || push!(fields, "dense_edge_pairs=$dense_pairs")
     stackless_top_hit === nothing || push!(fields, "stackless_top_hit=$stackless_top_hit")
+    fused_dense_edges === nothing || push!(fields, "fused_dense_edges=$fused_dense_edges")
     return join(fields, ", ")
 end
 
@@ -7530,23 +7788,6 @@ function _rastergpu_scene_data(
         context=_rastergpu_config_context(config; n_pixels=n_pixels, tile_size=tile_size, tile_face_capacity=tile_face_capacity),
     )
     stackless_top_hit = prepared.upper_hit && tile_size == 1
-    stack_len = stackless_top_hit ? 0 : _rastergpu_checked_product(
-        "RasterGPU nodes_dev/heights_dev",
-        UInt32,
-        (n_pixels, max_hits),
-        config;
-        backend_limit=buffer_limit,
-        context=_rastergpu_config_context(
-            config;
-            n_pixels=n_pixels,
-            n_tiles=n_tiles,
-            tile_size=tile_size,
-            tile_face_capacity=tile_face_capacity,
-            max_hits=max_hits,
-            stackless_top_hit=stackless_top_hit,
-        ),
-    )
-    stack_alloc_len = stackless_top_hit ? 1 : stack_len
     tile_candidate_len = _rastergpu_checked_product(
         "RasterGPU tile_faces_dev/tile_unwrapped_i_dev/tile_unwrapped_j_dev",
         Int32,
@@ -7649,6 +7890,28 @@ function _rastergpu_scene_data(
         !dense_enabled &&
         config.edge_accumulation != :dense_atomic &&
         edge_key_capacity > 0
+    fused_dense_enabled = dense_enabled && tile_size == 1 && _rastergpu_fused_dense_supported(config)
+    stackless_projection = stackless_top_hit || fused_dense_enabled
+    stack_len = stackless_projection ? 0 : _rastergpu_checked_product(
+        "RasterGPU nodes_dev/heights_dev",
+        UInt32,
+        (n_pixels, max_hits),
+        config;
+        backend_limit=buffer_limit,
+        context=_rastergpu_config_context(
+            config;
+            n_pixels=n_pixels,
+            n_tiles=n_tiles,
+            tile_size=tile_size,
+            tile_face_capacity=tile_face_capacity,
+            max_hits=max_hits,
+            edge_key_capacity=edge_key_capacity,
+            dense_pairs=dense_pairs,
+            stackless_top_hit=stackless_top_hit,
+            fused_dense_edges=fused_dense_enabled,
+        ),
+    )
+    stack_alloc_len = stackless_projection ? 1 : stack_len
 
     device_buffers = Pair{String,Int128}[
         "vertex_x_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
@@ -7699,6 +7962,7 @@ function _rastergpu_scene_data(
             edge_key_capacity=edge_key_capacity,
             dense_pairs=dense_pairs,
             stackless_top_hit=stackless_top_hit,
+            fused_dense_edges=fused_dense_enabled,
         ),
     )
 
@@ -7854,9 +8118,13 @@ function _rastergpu_throw_on_overflow!(data::RasterGPUSceneData)
     copyto!(data.overflow_host, data.overflow_dev)
     pixel = findfirst(data.overflow_host)
     pixel === nothing && return nothing
+    copyto!(data.counts_host, data.counts_dev)
+    observed_count = Int(data.counts_host[pixel])
+    max_count, max_pixel = findmax(data.counts_host)
     error(
         "RasterGPU max_hits_per_pixel=$(data.max_hits_per_pixel) exceeded for pixel $pixel. " *
-        "Increase RasterGPUBackendConfig(max_hits_per_pixel=...).",
+        "Observed $observed_count hits at that pixel; observed_max_hits_per_pixel=$(Int(max_count)) " *
+        "at pixel $max_pixel. Increase RasterGPUBackendConfig(max_hits_per_pixel=...).",
     )
 end
 
@@ -7864,15 +8132,25 @@ function _rastergpu_throw_on_tile_overflow!(data::RasterGPUSceneData)
     copyto!(data.tile_overflow_host, data.tile_overflow_dev)
     tile = findfirst(data.tile_overflow_host)
     tile === nothing && return nothing
+    copyto!(data.tile_counts_host, data.tile_counts_dev)
+    observed_count = Int(data.tile_counts_host[tile])
+    max_count, max_tile = findmax(data.tile_counts_host)
     capacity_field = data.prepared.upper_hit ? "top_hit_tile_face_capacity" : "tile_face_capacity"
     tile_size_field = data.prepared.upper_hit ? "top_hit_tile_size" : "tile_size"
     error(
         "RasterGPU $capacity_field=$(data.tile_face_capacity) exceeded for tile $tile. " *
+        "Observed $observed_count candidate faces at that tile; observed_max_tile_face_capacity=$(Int(max_count)) " *
+        "at tile $max_tile. " *
         "Increase RasterGPUBackendConfig($capacity_field=...) or use a smaller $tile_size_field.",
     )
 end
 
-function _rastergpu_project_direction!(data::RasterGPUSceneData, direction, options::LightOptions)
+function _rastergpu_project_direction!(
+    data::RasterGPUSceneData,
+    direction,
+    options::LightOptions;
+    accumulate_dense_edges::Bool=false,
+)
     geometry = data.prepared.geometry
     plotbox = geometry.plotbox
     n_faces = length(geometry.faces)
@@ -7889,6 +8167,7 @@ function _rastergpu_project_direction!(data::RasterGPUSceneData, direction, opti
             data.prepared.upper_hit &&
             (!options.toricity ||
              (plotbox.nx % data.tile_size == 0 && plotbox.ny % data.tile_size == 0))
+        use_fused_dense_kernel = _rastergpu_use_fused_dense_edges(data)
 
         if data.tile_size == 1
             bin_kernel = _rastergpu_bin_faces_to_covered_pixel_tiles_kernel!(data.backend, data.workgroupsize)
@@ -7959,7 +8238,64 @@ function _rastergpu_project_direction!(data::RasterGPUSceneData, direction, opti
         KernelAbstractions.synchronize(data.backend)
         _rastergpu_throw_on_tile_overflow!(data)
 
-        if use_top_hit_kernel
+        if use_fused_dense_kernel
+            if accumulate_dense_edges
+                dense_pairs = length(data.dense_edge_counts_dev)
+                if dense_pairs > 0
+                    clear_dense_kernel = _rastergpu_clear_dense_counts_kernel!(data.backend, data.workgroupsize)
+                    clear_dense_kernel(data.dense_edge_counts_dev; ndrange=dense_pairs)
+                    KernelAbstractions.synchronize(data.backend)
+                end
+            end
+            project_kernel = _rastergpu_project_tile_bins_fused_dense_kernel!(data.backend, data.workgroupsize)
+            params = RasterGPUFusedProjectionParams(
+                Float32(direction[1]),
+                Float32(direction[2]),
+                Float32(direction[3]),
+                Float32(plotbox.origin_x),
+                Float32(plotbox.origin_y),
+                Float32(plotbox.pix_x),
+                Float32(plotbox.pix_y),
+                Float32(plotbox.pixel_area),
+                plotbox.nx,
+                plotbox.ny,
+                n_tiles_x,
+                data.tile_size,
+                data.tile_face_capacity,
+                options.toricity,
+                options.area_ratio,
+                data.max_hits_per_pixel,
+                n_nodes,
+                accumulate_dense_edges,
+            )
+            project_kernel(
+                data.counts_dev,
+                data.overflow_dev,
+                data.node_counts_dev,
+                data.sector_area_dev,
+                data.dense_edge_counts_dev,
+                data.projected_mesh_area_dev,
+                data.projected_pixels_area_dev,
+                data.tile_counts_dev,
+                data.tile_faces_dev,
+                data.tile_unwrapped_i_dev,
+                data.tile_unwrapped_j_dev,
+                data.vertex_x_dev,
+                data.vertex_y_dev,
+                data.vertex_z_dev,
+                data.face_i_dev,
+                data.face_j_dev,
+                data.face_k_dev,
+                data.face2node_index_dev,
+                data.virtual_node_mask_dev,
+                data.pavement_node_mask_dev,
+                data.node_transparency_dev,
+                params;
+                ndrange=n_tiles * data.tile_size * data.tile_size,
+            )
+            KernelAbstractions.synchronize(data.backend)
+            _rastergpu_throw_on_overflow!(data)
+        elseif use_top_hit_kernel
             project_kernel = _rastergpu_project_tile_bins_top_hit_kernel!(data.backend, data.workgroupsize)
             project_kernel(
                 data.node_counts_dev,

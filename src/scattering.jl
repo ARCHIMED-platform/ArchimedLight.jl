@@ -2282,6 +2282,14 @@ function _rastergpu_accumulate_device_scattering_edges!(
     n_nodes = length(data.prepared.geometry.node_ids)
     n_pairs = n_nodes * n_nodes
     n_pairs == 0 && return edge_counts
+    if _rastergpu_use_fused_dense_edges(data)
+        copyto!(data.dense_edge_counts_host, data.dense_edge_counts_dev)
+        return _merge_dense_edge_counts!(
+            edge_counts,
+            data.dense_edge_counts_host,
+            data.prepared.geometry.node_ids,
+        )
+    end
 
     clear_kernel = _raycore_clear_dense_counts_kernel!(data.backend, data.workgroupsize)
     clear_kernel(data.dense_edge_counts_dev; ndrange=n_pairs)
@@ -2322,13 +2330,14 @@ function _pair_counts_from_rastergpu_projections(
     sun_hits_by_node = zeros(Int, length(geometry.node_ids))
 
     for sector in turtle.sectors
-        _rastergpu_project_direction!(data, sector.direction, options)
         if sector.source == :sun
+            _rastergpu_project_direction!(data, sector.direction, options)
             copyto!(data.node_counts_host, data.node_counts_dev)
             @inbounds for idx in eachindex(sun_hits_by_node)
                 sun_hits_by_node[idx] += Int(data.node_counts_host[idx])
             end
         else
+            _rastergpu_project_direction!(data, sector.direction, options; accumulate_dense_edges=true)
             _rastergpu_accumulate_device_scattering_edges!(edge_counts, data)
         end
     end

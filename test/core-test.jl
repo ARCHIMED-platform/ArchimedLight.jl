@@ -265,15 +265,33 @@ end
     auto_config = ArchimedLight.RasterGPUBackendConfig(
         backend=KernelAbstractions.CPU(),
         max_hits_per_pixel=64,
-        tile_size=4,
+        tile_size=1,
         tile_face_capacity=4096,
         edge_accumulation=:auto,
     )
     auto_data = ArchimedLight._rastergpu_scene_data(prepared, auto_config)
+    @test !ArchimedLight._rastergpu_use_fused_dense_edges(auto_data)
+    @test length(auto_data.nodes_dev) > 1
+    @test length(auto_data.heights_dev) > 1
     @test auto_data.dense_edge_counts_dev !== nothing
     @test auto_data.dense_edge_counts_host !== nothing
     @test auto_data.edge_keys_dev === nothing
     @test auto_data.edge_key_counts_dev === nothing
+    @test !ArchimedLight._rastergpu_fused_dense_supported(auto_config)
+    @test ArchimedLight._rastergpu_fused_dense_supported(
+        ArchimedLight.RasterGPUBackendConfig(
+            backend=:fake_gpu_backend,
+            max_hits_per_pixel=128,
+            edge_accumulation=:auto,
+        ),
+    )
+    @test !ArchimedLight._rastergpu_fused_dense_supported(
+        ArchimedLight.RasterGPUBackendConfig(
+            backend=:fake_gpu_backend,
+            max_hits_per_pixel=129,
+            edge_accumulation=:auto,
+        ),
+    )
 
     sparse_config = ArchimedLight.RasterGPUBackendConfig(
         backend=KernelAbstractions.CPU(),
