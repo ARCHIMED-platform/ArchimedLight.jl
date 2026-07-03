@@ -1,3 +1,7 @@
+[archimedlight-benchmark-scenes]
+git-tree-sha1 = "0fe06e0ad6ecab2e7db5f97aff7d0ee11bb34555"
+lazy = true
+
 [archimedlight-release-fixtures]
 git-tree-sha1 = "5963e97b555116d6f2d9270b2333e29642f4649e"
 lazy = true

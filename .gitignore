@@ -11,6 +11,10 @@ java_implementation/*
 /test/regression_matrix/reports/
 /benchmark/results/
 /benchmark/.asv/
+/benchmark/benchmark_scenes/
+/benchmark/benchmark_scenes.zip
+/benchmark/benchmark-scenes*.tar.gz
+/benchmark-scenes*.tar.gz
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
