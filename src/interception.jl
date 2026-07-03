@@ -263,6 +263,7 @@ struct RaycoreSceneData{P,T,K,B,N,C,S,J,H,O,E,F,D,G,Q,A,V,M,I,U,R}
     vertical_span::Float64
     chunked_tlas::Bool
     geometry_mode::Symbol
+    toric_traversal::Symbol
 end
 
 struct RasterGPUSceneData{P,B,VX,VY,VZ,F,N,T,M,I,C,S,H,O,G,A,D,K,KC,TC,TF,TO,E}
@@ -3932,9 +3933,10 @@ function _raycore_reference_instancing_stats_from_counts(;
     fallback_present::Bool,
     metadata_stride::Int,
     toricity::Bool=false,
+    toric_traversal::Symbol=:replicated,
     prototype_count::Int=0,
 )
-    toric_copies = _raycore_toric_copy_count(toricity)
+    toric_copies = _raycore_toric_copy_count(toricity; toric_traversal=toric_traversal)
     fallback_instance_count = fallback_present ? 1 : 0
     instance_count = (prototype_node_count + fallback_instance_count) * toric_copies
     compact_face_count = prototype_face_count + fallback_face_count
@@ -4484,6 +4486,7 @@ function _raycore_reference_instancing_stats(
     instanced::RaycoreInstancedSceneGeometry,
     geometry::InterceptionSceneData;
     toricity::Bool=false,
+    toric_traversal::Symbol=:replicated,
 )
     return _raycore_reference_instancing_stats_from_counts(;
         expanded_face_count=length(geometry.faces),
@@ -4493,6 +4496,7 @@ function _raycore_reference_instancing_stats(
         fallback_present=instanced.fallback_mesh !== nothing,
         metadata_stride=instanced.metadata_stride,
         toricity=toricity,
+        toric_traversal=toric_traversal,
         prototype_count=length(instanced.prototypes),
     )
 end
@@ -4501,8 +4505,14 @@ function _raycore_should_use_reference_instancing(
     instanced::RaycoreInstancedSceneGeometry,
     geometry::InterceptionSceneData;
     toricity::Bool=false,
+    toric_traversal::Symbol=:replicated,
 )
-    stats = _raycore_reference_instancing_stats(instanced, geometry; toricity=toricity)
+    stats = _raycore_reference_instancing_stats(
+        instanced,
+        geometry;
+        toricity=toricity,
+        toric_traversal=toric_traversal,
+    )
     return _raycore_reference_instancing_stats_pass(stats)
 end
 
@@ -4520,18 +4530,35 @@ function _raycore_prechunk_face_threshold()
     return value <= 0 ? typemax(Int) : value
 end
 
-_raycore_toric_copy_count(toricity::Bool) = toricity ? 9 : 1
+function _raycore_toric_copy_count(toricity::Bool; toric_traversal::Symbol=:replicated)
+    return toricity && toric_traversal == :replicated ? 9 : 1
+end
 
-function _raycore_effective_face_count(prepared::PreparedInterceptionData; toricity::Bool=false)
-    return length(prepared.geometry.faces) * _raycore_toric_copy_count(toricity)
+_raycore_toric_tlas_replication(config::RaycoreBackendConfig; toricity::Bool=false) =
+    toricity && config.toric_traversal == :replicated
+
+_raycore_toric_periodic_traversal(config::RaycoreBackendConfig; toricity::Bool=false) =
+    toricity && config.toric_traversal == :periodic
+
+_raycore_toric_periodic_traversal(data::RaycoreSceneData; toricity::Bool=false) =
+    toricity && data.toric_traversal == :periodic
+
+function _raycore_effective_face_count(
+    prepared::PreparedInterceptionData,
+    config::RaycoreBackendConfig;
+    toricity::Bool=false,
+)
+    return length(prepared.geometry.faces) *
+           _raycore_toric_copy_count(toricity; toric_traversal=config.toric_traversal)
 end
 
 function _raycore_estimated_prechunk_instances(
     prepared::PreparedInterceptionData;
+    config::RaycoreBackendConfig,
     toricity::Bool=false,
     face_chunk_limit::Int=_raycore_face_chunk_limit(),
 )
-    effective_faces = _raycore_effective_face_count(prepared; toricity=toricity)
+    effective_faces = _raycore_effective_face_count(prepared, config; toricity=toricity)
     face_chunk_limit == typemax(Int) && return effective_faces == 0 ? 0 : 1
     return cld(effective_faces, max(face_chunk_limit, 1))
 end
@@ -4553,7 +4580,7 @@ function _raycore_should_prechunk_scene(
     _raycore_face_chunk_limit() == typemax(Int) && return false
     threshold = _raycore_prechunk_face_threshold()
     threshold == typemax(Int) && return false
-    return _raycore_effective_face_count(prepared; toricity=toricity) > threshold
+    return _raycore_effective_face_count(prepared, config; toricity=toricity) > threshold
 end
 
 function _raycore_prechunk_instance_limit_status(
@@ -4564,7 +4591,12 @@ function _raycore_prechunk_instance_limit_status(
     face_chunk_limit = _raycore_face_chunk_limit()
     max_instances = config.max_prechunk_instances
     estimated_instances =
-        _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=face_chunk_limit)
+        _raycore_estimated_prechunk_instances(
+            prepared;
+            config=config,
+            toricity=toricity,
+            face_chunk_limit=face_chunk_limit,
+        )
     should_prechunk = _raycore_should_prechunk_scene(prepared, config; toricity=toricity)
     exceeded =
         should_prechunk &&
@@ -4576,7 +4608,7 @@ function _raycore_prechunk_instance_limit_status(
         estimated_instances=estimated_instances,
         max_instances=max_instances,
         face_chunk_limit=face_chunk_limit,
-        effective_faces=_raycore_effective_face_count(prepared; toricity=toricity),
+        effective_faces=_raycore_effective_face_count(prepared, config; toricity=toricity),
     )
 end
 
@@ -4672,7 +4704,12 @@ function _raycore_stack_safe_scene_data(
     status.exceeds || return data, false
 
     for limit in _raycore_retry_chunk_limits(skip_face_chunk_limit)
-        estimated_instances = _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=limit)
+        estimated_instances = _raycore_estimated_prechunk_instances(
+            prepared;
+            config=config,
+            toricity=toricity,
+            face_chunk_limit=limit,
+        )
         if config.max_prechunk_instances != typemax(Int) && estimated_instances > config.max_prechunk_instances
             @info "Skipping Raycore proactive BLAS chunking because the chunk limit would exceed max_prechunk_instances." face_chunk_limit=limit estimated_instances max_prechunk_instances=config.max_prechunk_instances max_blas_depth=status.blas_depth traversal_stack_capacity=status.capacity
             continue
@@ -4698,7 +4735,7 @@ function _raycore_initial_scene_data(
     if _raycore_should_prechunk_scene(prepared, config; toricity=toricity)
         face_chunk_limit = _raycore_face_chunk_limit()
         data = _raycore_scene_data(prepared, config; toricity=toricity, face_chunk_limit=face_chunk_limit)
-        @info "Raycore backend prechunked BLAS geometry for stack-safe GPU traversal." face_chunk_limit effective_faces=_raycore_effective_face_count(prepared; toricity=toricity)
+        @info "Raycore backend prechunked BLAS geometry for stack-safe GPU traversal." face_chunk_limit effective_faces=_raycore_effective_face_count(prepared, config; toricity=toricity)
         safe_data, safe_chunked = _raycore_stack_safe_scene_data(
             prepared,
             config,
@@ -4722,19 +4759,21 @@ function _raycore_scene_data(
     tlas = Raycore.TLAS(config.backend)
     chunked_tlas = face_chunk_limit !== nothing
     geometry_mode = :merged_mesh
+    tlas_toricity = _raycore_toric_tlas_replication(config; toricity=toricity)
     instanced_build =
         if face_chunk_limit === nothing &&
            prepared.geometry.raycore_instanced_geometry !== nothing &&
            _raycore_should_use_reference_instancing(
                prepared.geometry.raycore_instanced_geometry,
                prepared.geometry;
-               toricity=toricity,
+               toricity=tlas_toricity,
+               toric_traversal=config.toric_traversal,
            )
             _raycore_push_instanced_geometry!(
                 tlas,
                 prepared.geometry.raycore_instanced_geometry,
                 prepared.geometry;
-                toricity=toricity,
+                toricity=tlas_toricity,
             )
         else
             nothing
@@ -4744,16 +4783,16 @@ function _raycore_scene_data(
             geometry_mode = :reference_instances
             instanced_build.instance_count, instanced_build.metadata_stride, instanced_build.decoder_table
         elseif face_chunk_limit === nothing
-            _raycore_push_geometry!(tlas, prepared.geometry; toricity=toricity),
+            _raycore_push_geometry!(tlas, prepared.geometry; toricity=tlas_toricity),
             length(prepared.geometry.node_ids) + 1,
             UInt32[]
         else
             geometry_mode = :chunked_merged_mesh
-            transforms = _raycore_toric_transforms(prepared.geometry; toricity=toricity)
+            transforms = _raycore_toric_transforms(prepared.geometry; toricity=tlas_toricity)
             count = _raycore_foreach_mesh_chunk_from_geometry(
-                mesh -> (toricity ? push!(tlas, mesh, transforms) : push!(tlas, mesh)),
+                mesh -> (tlas_toricity ? push!(tlas, mesh, transforms) : push!(tlas, mesh)),
                 prepared.geometry;
-                toricity=toricity,
+                toricity=tlas_toricity,
                 face_chunk_limit=face_chunk_limit,
             )
             count, length(prepared.geometry.node_ids) + 1, UInt32[]
@@ -4876,6 +4915,7 @@ function _raycore_scene_data(
         vertical_span,
         chunked_tlas,
         geometry_mode,
+        config.toric_traversal,
     )
 end
 
@@ -4981,6 +5021,10 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_hits_kernel!(
     dir_y::Float32,
     dir_z::Float32,
     far::Float32,
+    toricity::Bool,
+    xdim::Float32,
+    ydim::Float32,
+    hit_epsilon::Float32,
 )
     pixel_idx = @index(Global, Linear)
     @inbounds begin
@@ -4989,17 +5033,36 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_hits_kernel!(
         iy = zero_idx ÷ nx
         ground_x = origin_x + (Float32(ix) + 0.5f0) * pix_x
         ground_y = origin_y + (Float32(iy) + 0.5f0) * pix_y
-        ray = Raycore.Ray(;
-            o=GeometryBasics.Point3f(
-                ground_x + dir_x * far,
-                ground_y + dir_y * far,
-                dir_z * far,
-            ),
-            d=GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z),
-            t_min=0.0f0,
-            t_max=2.0f0 * far,
+        base_origin = GeometryBasics.Point3f(
+            ground_x + dir_x * far,
+            ground_y + dir_y * far,
+            dir_z * far,
         )
-        hit, tri, distance, _bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+        base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
+        ray_t_max = 2.0f0 * far
+        hit, tri, distance, _bary, instance_idx, hit_point =
+            if _raycore_trace_periodic(toricity, xdim, ydim)
+                _raycore_trace_periodic_closest_hit(
+                    static_tlas,
+                    base_origin,
+                    base_direction,
+                    origin_x,
+                    origin_y,
+                    xdim,
+                    ydim,
+                    ray_t_max,
+                    hit_epsilon,
+                )
+            else
+                ray = Raycore.Ray(;
+                    o=base_origin,
+                    d=base_direction,
+                    t_min=0.0f0,
+                    t_max=ray_t_max,
+                )
+                hit, tri, distance, bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+                hit, tri, distance, bary, instance_idx, ray.o + ray.d * distance
+            end
         if hit
             instance_indices[pixel_idx] = UInt32(instance_idx)
             nodes[pixel_idx] = _raycore_decode_node_index(
@@ -5008,7 +5071,6 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_hits_kernel!(
                 UInt32(tri.metadata),
                 UInt32(instance_idx),
             )
-            hit_point = ray.o + ray.d * distance
             heights[pixel_idx] = hit_point[3]
             distances[pixel_idx] = distance
         else
@@ -5034,6 +5096,10 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_nodes_kernel!(
     dir_y::Float32,
     dir_z::Float32,
     far::Float32,
+    toricity::Bool,
+    xdim::Float32,
+    ydim::Float32,
+    hit_epsilon::Float32,
 )
     pixel_idx = @index(Global, Linear)
     @inbounds begin
@@ -5042,17 +5108,36 @@ KernelAbstractions.@kernel function _raycore_trace_direction_top_nodes_kernel!(
         iy = zero_idx ÷ nx
         ground_x = origin_x + (Float32(ix) + 0.5f0) * pix_x
         ground_y = origin_y + (Float32(iy) + 0.5f0) * pix_y
-        ray = Raycore.Ray(;
-            o=GeometryBasics.Point3f(
-                ground_x + dir_x * far,
-                ground_y + dir_y * far,
-                dir_z * far,
-            ),
-            d=GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z),
-            t_min=0.0f0,
-            t_max=2.0f0 * far,
+        base_origin = GeometryBasics.Point3f(
+            ground_x + dir_x * far,
+            ground_y + dir_y * far,
+            dir_z * far,
         )
-        hit, tri, _distance, _bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+        base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
+        ray_t_max = 2.0f0 * far
+        hit, tri, _distance, _bary, instance_idx, _hit_point =
+            if _raycore_trace_periodic(toricity, xdim, ydim)
+                _raycore_trace_periodic_closest_hit(
+                    static_tlas,
+                    base_origin,
+                    base_direction,
+                    origin_x,
+                    origin_y,
+                    xdim,
+                    ydim,
+                    ray_t_max,
+                    hit_epsilon,
+                )
+            else
+                ray = Raycore.Ray(;
+                    o=base_origin,
+                    d=base_direction,
+                    t_min=0.0f0,
+                    t_max=ray_t_max,
+                )
+                hit, tri, distance, bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+                hit, tri, distance, bary, instance_idx, ray.o + ray.d * distance
+            end
         nodes[pixel_idx] = hit ? _raycore_decode_node_index(
             node_index_by_instance_metadata,
             metadata_stride,
@@ -5123,6 +5208,193 @@ function _raycore_trace_top_hits(
     )
 end
 
+@inline function _raycore_trace_periodic(toricity::Bool, xdim::Float32, ydim::Float32)
+    return toricity && xdim > 0.0f0 && ydim > 0.0f0
+end
+
+@inline function _raycore_wrap_periodic_coord(x::Float32, origin::Float32, extent::Float32)
+    extent <= 0.0f0 && return x
+    wrapped = origin + (x - origin) - floor((x - origin) / extent) * extent
+    upper = origin + extent
+    wrapped >= upper && (wrapped -= extent)
+    wrapped < origin && (wrapped += extent)
+    return wrapped
+end
+
+@inline function _raycore_wrap_periodic_origin(
+    origin::GeometryBasics.Point3f,
+    origin_x::Float32,
+    origin_y::Float32,
+    xdim::Float32,
+    ydim::Float32,
+)
+    return GeometryBasics.Point3f(
+        _raycore_wrap_periodic_coord(origin[1], origin_x, xdim),
+        _raycore_wrap_periodic_coord(origin[2], origin_y, ydim),
+        origin[3],
+    )
+end
+
+@inline function _raycore_axis_boundary_t(
+    coord::Float32,
+    direction::Float32,
+    origin::Float32,
+    extent::Float32,
+    eps::Float32,
+)
+    (extent <= 0.0f0 || abs(direction) <= eps) && return Inf32
+    boundary = direction > 0.0f0 ? origin + extent : origin
+    t = (boundary - coord) / direction
+    return t > eps ? t : extent / abs(direction)
+end
+
+@inline function _raycore_periodic_boundary_t(
+    origin::GeometryBasics.Point3f,
+    direction::GeometryBasics.Vec3f,
+    origin_x::Float32,
+    origin_y::Float32,
+    xdim::Float32,
+    ydim::Float32,
+    eps::Float32,
+)
+    tx = _raycore_axis_boundary_t(origin[1], direction[1], origin_x, xdim, eps)
+    ty = _raycore_axis_boundary_t(origin[2], direction[2], origin_y, ydim, eps)
+    return min(tx, ty)
+end
+
+@inline function _raycore_periodic_guard(
+    direction::GeometryBasics.Vec3f,
+    far::Float32,
+    xdim::Float32,
+    ydim::Float32,
+    max_hits::Int,
+)
+    x_steps = (xdim > 0.0f0 && isfinite(far)) ? Int32(ceil(abs(direction[1]) * far / xdim)) : Int32(0)
+    y_steps = (ydim > 0.0f0 && isfinite(far)) ? Int32(ceil(abs(direction[2]) * far / ydim)) : Int32(0)
+    return max(Int32(1), x_steps + y_steps + Int32(max_hits) + Int32(8))
+end
+
+@inline function _raycore_segment_epsilon(hit_epsilon::Float32)
+    return max(hit_epsilon >= 0.0f0 ? hit_epsilon : 0.0f0, 1.0f-5)
+end
+
+@inline function _raycore_trace_periodic_all_hits!(
+    metadata_out,
+    distances_out,
+    instance_indices_out,
+    static_tlas,
+    base_origin::GeometryBasics.Point3f,
+    base_direction::GeometryBasics.Vec3f,
+    out_base::Int,
+    max_hits::Int,
+    duplicate_epsilon::Float32,
+    origin_x::Float32,
+    origin_y::Float32,
+    xdim::Float32,
+    ydim::Float32,
+    far::Float32,
+)
+    eps = _raycore_segment_epsilon(duplicate_epsilon)
+    direction = base_direction
+    local_origin = _raycore_wrap_periodic_origin(base_origin, origin_x, origin_y, xdim, ydim)
+    t_global = 0.0f0
+    count = Int32(0)
+    overflow = false
+    guard = _raycore_periodic_guard(direction, far, xdim, ydim, max_hits)
+    @inbounds while t_global < far && guard > Int32(0)
+        remaining = far - t_global
+        boundary_t = _raycore_periodic_boundary_t(local_origin, direction, origin_x, origin_y, xdim, ydim, eps)
+        segment_t = min(remaining, boundary_t)
+        if segment_t > eps
+            segment_base = out_base + Int(count)
+            segment_capacity = max_hits - Int(count)
+            ray = Raycore.Ray(;
+                o=local_origin,
+                d=direction,
+                t_min=0.0f0,
+                t_max=segment_t,
+            )
+            segment_count, segment_overflow = Raycore.all_hits!(
+                metadata_out,
+                distances_out,
+                instance_indices_out,
+                static_tlas,
+                ray,
+                segment_base,
+                segment_capacity,
+                duplicate_epsilon,
+            )
+            for slot in 1:Int(segment_count)
+                distances_out[segment_base+slot] += t_global
+            end
+            count += segment_count
+            overflow |= segment_overflow
+            overflow && break
+        end
+        remaining <= boundary_t && break
+        advance = min(remaining, max(boundary_t, eps) + eps)
+        t_global += advance
+        local_origin = _raycore_wrap_periodic_origin(
+            local_origin + direction * advance,
+            origin_x,
+            origin_y,
+            xdim,
+            ydim,
+        )
+        guard -= Int32(1)
+    end
+    overflow |= t_global < far && guard <= Int32(0)
+    return count, overflow
+end
+
+@inline function _raycore_trace_periodic_closest_hit(
+    static_tlas,
+    base_origin::GeometryBasics.Point3f,
+    base_direction::GeometryBasics.Vec3f,
+    origin_x::Float32,
+    origin_y::Float32,
+    xdim::Float32,
+    ydim::Float32,
+    far::Float32,
+    hit_epsilon::Float32,
+)
+    eps = _raycore_segment_epsilon(hit_epsilon)
+    direction = base_direction
+    local_origin = _raycore_wrap_periodic_origin(base_origin, origin_x, origin_y, xdim, ydim)
+    t_global = 0.0f0
+    guard = _raycore_periodic_guard(direction, far, xdim, ydim, 1)
+    @inbounds while t_global < far && guard > Int32(0)
+        remaining = far - t_global
+        boundary_t = _raycore_periodic_boundary_t(local_origin, direction, origin_x, origin_y, xdim, ydim, eps)
+        segment_t = min(remaining, boundary_t)
+        if segment_t > eps
+            ray = Raycore.Ray(;
+                o=local_origin,
+                d=direction,
+                t_min=0.0f0,
+                t_max=segment_t,
+            )
+            hit, tri, distance, bary, instance_idx = Raycore.closest_hit(static_tlas, ray)
+            hit && return true, tri, t_global + distance, bary, instance_idx, ray.o + ray.d * distance
+        end
+        remaining <= boundary_t && break
+        advance = min(remaining, max(boundary_t, eps) + eps)
+        t_global += advance
+        local_origin = _raycore_wrap_periodic_origin(
+            local_origin + direction * advance,
+            origin_x,
+            origin_y,
+            xdim,
+            ydim,
+        )
+        guard -= Int32(1)
+    end
+    hit_point = GeometryBasics.Point3f(0.0f0, 0.0f0, -Inf32)
+    dummy_tri = Raycore.empty_triangle(eltype(static_tlas.all_blas_prims))
+    bary = StaticArrays.SVector{3,Float32}(0.0f0, 0.0f0, 0.0f0)
+    return false, dummy_tri, Inf32, bary, UInt32(0), hit_point
+end
+
 function _raycore_trace_direction_top_hits_direct(
     data::RaycoreSceneData,
     direction,
@@ -5159,7 +5431,11 @@ function _raycore_trace_direction_top_hits_direct(
         Float32(dir[1]),
         Float32(dir[2]),
         Float32(dir[3]),
-        far;
+        far,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim),
+        data.hit_epsilon;
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -5201,7 +5477,11 @@ function _raycore_trace_direction_top_nodes_direct(
         Float32(dir[1]),
         Float32(dir[2]),
         Float32(dir[3]),
-        far;
+        far,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim),
+        data.hit_epsilon;
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -5373,6 +5653,7 @@ function _raycore_stack_validation_cpu_data(data::RaycoreSceneData, options::Lig
         edge_accumulation=data.edge_accumulation,
         dense_edge_limit_bytes=data.dense_edge_limit_bytes,
         max_prechunk_instances=0,
+        toric_traversal=data.toric_traversal,
         validate=false,
     )
     return _raycore_scene_data(data.prepared, config; toricity=options.toricity)
@@ -5531,7 +5812,12 @@ function _raycore_retry_chunked_scene_data(
 
     last_validation = validation
     for limit in candidate_limits
-        estimated_instances = _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=limit)
+        estimated_instances = _raycore_estimated_prechunk_instances(
+            prepared;
+            config=config,
+            toricity=toricity,
+            face_chunk_limit=limit,
+        )
         if config.max_prechunk_instances != typemax(Int) && estimated_instances > config.max_prechunk_instances
             @info "Skipping Raycore validation retry because the chunk limit would exceed max_prechunk_instances." face_chunk_limit=limit estimated_instances max_prechunk_instances=config.max_prechunk_instances
             continue
@@ -5560,7 +5846,12 @@ function _raycore_retry_stack_chunked_scene_data(
 
     last_validation = validation
     for limit in candidate_limits
-        estimated_instances = _raycore_estimated_prechunk_instances(prepared; toricity=toricity, face_chunk_limit=limit)
+        estimated_instances = _raycore_estimated_prechunk_instances(
+            prepared;
+            config=config,
+            toricity=toricity,
+            face_chunk_limit=limit,
+        )
         if config.max_prechunk_instances != typemax(Int) && estimated_instances > config.max_prechunk_instances
             @info "Skipping Raycore full-stack validation retry because the chunk limit would exceed max_prechunk_instances." face_chunk_limit=limit estimated_instances max_prechunk_instances=config.max_prechunk_instances
             continue
@@ -5652,6 +5943,9 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
     far::Float32,
     max_hits::Int,
     hit_epsilon::Float32,
+    toricity::Bool,
+    xdim::Float32,
+    ydim::Float32,
 )
     pixel_idx = @index(Global, Linear)
     @inbounds begin
@@ -5667,23 +5961,43 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
         )
         base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
         t_max = 2.0f0 * far
-        ray = Raycore.Ray(;
-            o=base_origin,
-            d=base_direction,
-            t_min=0.0f0,
-            t_max=t_max,
-        )
         offset = (pixel_idx - 1) * max_hits
-        n_unique, overflow_hit = Raycore.all_hits!(
-            nodes,
-            heights,
-            instance_indices,
-            static_tlas,
-            ray,
-            offset,
-            max_hits,
-            hit_epsilon,
-        )
+        n_unique, overflow_hit =
+            if _raycore_trace_periodic(toricity, xdim, ydim)
+                _raycore_trace_periodic_all_hits!(
+                    nodes,
+                    heights,
+                    instance_indices,
+                    static_tlas,
+                    base_origin,
+                    base_direction,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                    origin_x,
+                    origin_y,
+                    xdim,
+                    ydim,
+                    t_max,
+                )
+            else
+                ray = Raycore.Ray(;
+                    o=base_origin,
+                    d=base_direction,
+                    t_min=0.0f0,
+                    t_max=t_max,
+                )
+                Raycore.all_hits!(
+                    nodes,
+                    heights,
+                    instance_indices,
+                    static_tlas,
+                    ray,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                )
+            end
         for slot in 1:Int(n_unique)
             out_idx = offset + slot
             distance = heights[out_idx]
@@ -5693,7 +6007,7 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stacks_kernel!(
                 nodes[out_idx],
                 instance_indices[out_idx],
             )
-            hit_point = ray.o + ray.d * distance
+            hit_point = base_origin + base_direction * distance
             heights[out_idx] = hit_point[3]
         end
         counts[pixel_idx] = n_unique
@@ -5721,6 +6035,9 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!
     far::Float32,
     max_hits::Int,
     hit_epsilon::Float32,
+    toricity::Bool,
+    xdim::Float32,
+    ydim::Float32,
 )
     pixel_idx = @index(Global, Linear)
     @inbounds begin
@@ -5736,23 +6053,43 @@ KernelAbstractions.@kernel function _raycore_trace_direction_stack_nodes_kernel!
         )
         base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
         t_max = 2.0f0 * far
-        ray = Raycore.Ray(;
-            o=base_origin,
-            d=base_direction,
-            t_min=0.0f0,
-            t_max=t_max,
-        )
         offset = (pixel_idx - 1) * max_hits
-        n_unique, overflow_hit = Raycore.all_hits!(
-            nodes,
-            distances,
-            instance_indices,
-            static_tlas,
-            ray,
-            offset,
-            max_hits,
-            hit_epsilon,
-        )
+        n_unique, overflow_hit =
+            if _raycore_trace_periodic(toricity, xdim, ydim)
+                _raycore_trace_periodic_all_hits!(
+                    nodes,
+                    distances,
+                    instance_indices,
+                    static_tlas,
+                    base_origin,
+                    base_direction,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                    origin_x,
+                    origin_y,
+                    xdim,
+                    ydim,
+                    t_max,
+                )
+            else
+                ray = Raycore.Ray(;
+                    o=base_origin,
+                    d=base_direction,
+                    t_min=0.0f0,
+                    t_max=t_max,
+                )
+                Raycore.all_hits!(
+                    nodes,
+                    distances,
+                    instance_indices,
+                    static_tlas,
+                    ray,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                )
+            end
         for slot in 1:Int(n_unique)
             out_idx = offset + slot
             nodes[out_idx] = _raycore_decode_node_index(
@@ -5785,6 +6122,9 @@ KernelAbstractions.@kernel function _raycore_trace_direction_raw_stacks_kernel!(
     far::Float32,
     max_hits::Int,
     hit_epsilon::Float32,
+    toricity::Bool,
+    xdim::Float32,
+    ydim::Float32,
 )
     pixel_idx = @index(Global, Linear)
     @inbounds begin
@@ -5799,23 +6139,44 @@ KernelAbstractions.@kernel function _raycore_trace_direction_raw_stacks_kernel!(
             dir_z * far,
         )
         base_direction = GeometryBasics.Vec3f(-dir_x, -dir_y, -dir_z)
-        ray = Raycore.Ray(;
-            o=base_origin,
-            d=base_direction,
-            t_min=0.0f0,
-            t_max=2.0f0 * far,
-        )
         offset = (pixel_idx - 1) * max_hits
-        n_unique, overflow_hit = Raycore.all_hits!(
-            metadata,
-            distances,
-            instance_indices,
-            static_tlas,
-            ray,
-            offset,
-            max_hits,
-            hit_epsilon,
-        )
+        t_max = 2.0f0 * far
+        n_unique, overflow_hit =
+            if _raycore_trace_periodic(toricity, xdim, ydim)
+                _raycore_trace_periodic_all_hits!(
+                    metadata,
+                    distances,
+                    instance_indices,
+                    static_tlas,
+                    base_origin,
+                    base_direction,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                    origin_x,
+                    origin_y,
+                    xdim,
+                    ydim,
+                    t_max,
+                )
+            else
+                ray = Raycore.Ray(;
+                    o=base_origin,
+                    d=base_direction,
+                    t_min=0.0f0,
+                    t_max=t_max,
+                )
+                Raycore.all_hits!(
+                    metadata,
+                    distances,
+                    instance_indices,
+                    static_tlas,
+                    ray,
+                    offset,
+                    max_hits,
+                    hit_epsilon,
+                )
+            end
         counts[pixel_idx] = n_unique
         overflow[pixel_idx] = overflow_hit
     end
@@ -5931,7 +6292,10 @@ function _raycore_trace_direction_stack_nodes(
         Float32(dir[3]),
         far,
         max_hits,
-        data.hit_epsilon;
+        data.hit_epsilon,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim);
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -5995,7 +6359,10 @@ function _raycore_trace_direction_stack_nodes_device(
         Float32(dir[3]),
         far,
         max_hits,
-        data.hit_epsilon;
+        data.hit_epsilon,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim);
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -6050,7 +6417,10 @@ function _raycore_trace_direction_raw_stacks(
         Float32(dir[3]),
         far,
         max_hits,
-        data.hit_epsilon;
+        data.hit_epsilon,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim);
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -6358,7 +6728,10 @@ function _raycore_trace_direction_stacks_direct(
         Float32(dir[3]),
         far,
         max_hits,
-        data.hit_epsilon;
+        data.hit_epsilon,
+        _raycore_toric_periodic_traversal(data; toricity=options.toricity),
+        Float32(plotbox.xdim),
+        Float32(plotbox.ydim);
         ndrange=n_pixels,
     )
     KernelAbstractions.synchronize(backend)
@@ -6667,13 +7040,12 @@ function _raycore_toric_copy_radius_needed(
 end
 
 function _raycore_use_raster_compat_projection(data::RaycoreSceneData, direction, options::LightOptions)
+    if _raycore_toric_periodic_traversal(data; toricity=options.toricity) &&
+       !(data.backend isa KernelAbstractions.CPU)
+        return false
+    end
     _raycore_use_raster_compat_projection(data) && return true
     options.toricity || return false
-    # Raycore currently represents toricity with a finite 3x3 copy of the scene.
-    # Low-elevation rays can cross more than one plot width/height while moving
-    # through the canopy, which the CPU rasterizer handles by wrapping projected
-    # pixels. Use the raster projection for those directions to preserve periodic
-    # full-stack semantics.
     return _raycore_toric_copy_radius_needed(data.prepared.geometry, direction, data.vertical_span) > 1
 end
 

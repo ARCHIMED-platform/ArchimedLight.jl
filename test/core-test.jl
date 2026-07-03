@@ -443,9 +443,12 @@ end
     @test ib.config.propagation_backend == :auto
     @test ib.config.max_prechunk_instances == ArchimedLight._raycore_default_max_prechunk_instances()
     @test ib.config.scattering_eltype == Float64
+    @test ib.config.toric_traversal == :replicated
     @test !ib.config.validate
     no_cap_config = ArchimedLight.RaycoreBackendConfig(max_prechunk_instances=0)
     @test no_cap_config.max_prechunk_instances == typemax(Int)
+    periodic_config = ArchimedLight.RaycoreBackendConfig(toric_traversal=:periodic)
+    @test periodic_config.toric_traversal == :periodic
     validating_config = ArchimedLight.RaycoreBackendConfig(validate=true)
     @test validating_config.validate
 
@@ -555,6 +558,7 @@ end
     @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(workgroupsize=0)
     @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(edge_accumulation=:unsupported)
     @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(propagation_backend=:unsupported)
+    @test_throws ErrorException ArchimedLight.RaycoreBackendConfig(toric_traversal=:unsupported)
 
     dense_counts = Int32[1]
     dense_area = Float32[1.0]
@@ -603,6 +607,106 @@ end
     ]
     @test projected_area_active_indices == [2, 3, 1, 3]
     @test projected_area_active_offsets == [1, 3, 5]
+
+    function periodic_multiboundary_scene()
+        mesh = ArchimedLight.GeometryBasics.Mesh(
+            ArchimedLight.GeometryBasics.Point3f[
+                ArchimedLight.GeometryBasics.Point3f(0.20, 0.20, 1.0),
+                ArchimedLight.GeometryBasics.Point3f(0.30, 0.20, 1.0),
+                ArchimedLight.GeometryBasics.Point3f(0.30, 0.80, 1.0),
+                ArchimedLight.GeometryBasics.Point3f(0.20, 0.80, 1.0),
+            ],
+            ArchimedLight.GeometryBasics.TriangleFace{Int}[(1, 2, 3), (1, 3, 4)],
+        )
+        return ArchimedLight.PlantGeom.make_scene(domain=(0.0, 0.0, 1.0, 1.0), source_path="raycore_periodic_multiboundary") do builder
+            ArchimedLight.PlantGeom.add_object!(
+                builder,
+                mesh;
+                group="plate",
+                type="plate",
+                id=1,
+                source_topology_id=1,
+            )
+        end
+    end
+
+    function periodic_multiboundary_models()
+        return ArchimedLight.prepare_models([
+            ArchimedLight.GroupModel(
+                "*";
+                types=ArchimedLight.OrderedDict(
+                    "*" => ArchimedLight.TypeModel(
+                        interception=ArchimedLight.InterceptionModel(
+                            model="Translucent",
+                            transparency=0.0,
+                            optical_properties=ArchimedLight.OpticalProperties(0.15, 0.30),
+                        ),
+                    ),
+                ),
+            ),
+        ])
+    end
+
+    scene = periodic_multiboundary_scene()
+    models = periodic_multiboundary_models()
+    toric_options = ArchimedLight.LightOptions(
+        turtle_sectors=1,
+        all_in_turtle=false,
+        scattering=false,
+        pixel_size=0.5,
+        toricity=true,
+    )
+    toric_backend = ArchimedLight.RaycoreInterceptionBackend(
+        backend=ArchimedLight.KernelAbstractions.CPU(),
+        max_hits_per_pixel=8,
+        hit_epsilon=-1.0f0,
+        toric_traversal=:periodic,
+    )
+    toric_data = ArchimedLight._prepare_raycore_interception_data(scene, models, toric_options, toric_backend)
+    toric_shape = ArchimedLight._raycore_scene_shape_summary(toric_data)
+    @test toric_shape.tlas_instances == 1
+    @test toric_shape.tlas_geometries == 1
+
+    replicated_data = ArchimedLight._prepare_raycore_interception_data(
+        scene,
+        models,
+        toric_options,
+        ArchimedLight.RaycoreInterceptionBackend(
+            backend=ArchimedLight.KernelAbstractions.CPU(),
+            max_hits_per_pixel=8,
+            hit_epsilon=-1.0f0,
+            toric_traversal=:replicated,
+        ),
+    )
+    @test ArchimedLight._raycore_scene_shape_summary(replicated_data).tlas_instances == 9
+
+    metadata = zeros(UInt32, 8)
+    distances = zeros(Float32, 8)
+    instance_indices = zeros(UInt32, 8)
+    invnorm = Float32(inv(sqrt(10.0)))
+    origin = ArchimedLight.GeometryBasics.Point3f(3.25f0, 0.25f0, 2.0f0)
+    direction = ArchimedLight.GeometryBasics.Vec3f(-3.0f0 * invnorm, 0.0f0, -invnorm)
+    count, overflow = ArchimedLight._raycore_trace_periodic_all_hits!(
+        metadata,
+        distances,
+        instance_indices,
+        toric_data.kernel_tlas,
+        origin,
+        direction,
+        0,
+        length(metadata),
+        -1.0f0,
+        0.0f0,
+        0.0f0,
+        1.0f0,
+        1.0f0,
+        Float32(sqrt(10.0) + 0.1),
+    )
+    @test count == 1
+    @test !overflow
+    @test metadata[1] == UInt32(1)
+    @test instance_indices[1] == UInt32(1)
+    @test isapprox(distances[1], Float32(sqrt(10.0)); atol=1.0f-5, rtol=0.0f0)
 
     backend = ArchimedLight.KernelAbstractions.CPU()
     node_counts = fill(Int32(-1), 4)

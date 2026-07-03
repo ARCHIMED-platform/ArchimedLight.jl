@@ -146,7 +146,7 @@ end
         max_hits_per_pixel=32, hit_epsilon=1.0f-4,
         edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
         propagation_backend=:auto, max_prechunk_instances=nothing,
-        scattering_eltype=nothing, validate=false)
+        scattering_eltype=nothing, toric_traversal=:replicated, validate=false)
 
 Shared configuration for Raycore-based interception and scattering backends.
 When `workgroupsize` is omitted, ArchimedLight uses a default of `256`. The
@@ -160,6 +160,9 @@ KernelAbstractions CPU and device propagation for GPU backends. Use `:device`
 or `:cpu` to force either path.
 `max_prechunk_instances` limits how many BLAS instances non-CPU prechunking can
 create; pass `0` or a negative value to disable the cap.
+`toric_traversal=:replicated` uses the historical finite 3x3 toric TLAS copy.
+`toric_traversal=:periodic` builds one fundamental-cell TLAS and wraps ray
+traversal through the periodic domain in the Raycore kernels.
 `validate=true` compares non-CPU Raycore traces against the CPU reference before
 running and throws `RaycoreValidationError` on mismatch. Validation is disabled
 by default, and Raycore backends never implicitly fall back to `RasterCPUBackend`.
@@ -174,6 +177,7 @@ struct RaycoreBackendConfig{B}
     propagation_backend::Symbol
     max_prechunk_instances::Int
     scattering_eltype::DataType
+    toric_traversal::Symbol
     validate::Bool
 
     function RaycoreBackendConfig(
@@ -186,6 +190,7 @@ struct RaycoreBackendConfig{B}
         propagation_backend::Symbol,
         max_prechunk_instances::Integer,
         scattering_eltype::Type{<:AbstractFloat},
+        toric_traversal::Symbol,
         validate::Bool,
     ) where {B}
         workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
@@ -198,6 +203,8 @@ struct RaycoreBackendConfig{B}
             error("Unsupported Raycore propagation_backend: $propagation_backend (supported: :auto, :device, :cpu)")
         scattering_eltype in (Float32, Float64) ||
             error("RaycoreBackendConfig scattering_eltype must be Float32 or Float64.")
+        toric_traversal in (:replicated, :periodic) ||
+            error("Unsupported Raycore toric_traversal: $toric_traversal (supported: :replicated, :periodic)")
         max_prechunk_instances_value = Int(max_prechunk_instances)
         return new{B}(
             backend,
@@ -209,6 +216,7 @@ struct RaycoreBackendConfig{B}
             propagation_backend,
             max_prechunk_instances_value <= 0 ? typemax(Int) : max_prechunk_instances_value,
             scattering_eltype,
+            toric_traversal,
             validate,
         )
     end
@@ -244,6 +252,7 @@ function RaycoreBackendConfig(;
     propagation_backend::Symbol=:auto,
     max_prechunk_instances::Union{Nothing,Integer}=nothing,
     scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
+    toric_traversal::Symbol=:replicated,
     validate::Bool=false,
 )
     return RaycoreBackendConfig(
@@ -256,6 +265,7 @@ function RaycoreBackendConfig(;
         propagation_backend,
         max_prechunk_instances === nothing ? _raycore_default_max_prechunk_instances() : max_prechunk_instances,
         scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
+        toric_traversal,
         validate,
     )
 end
@@ -283,6 +293,7 @@ function _raycore_config_with(
     propagation_backend=config.propagation_backend,
     max_prechunk_instances=config.max_prechunk_instances,
     scattering_eltype=config.scattering_eltype,
+    toric_traversal=config.toric_traversal,
     validate=config.validate,
 )
     return RaycoreBackendConfig(
@@ -295,6 +306,7 @@ function _raycore_config_with(
         propagation_backend,
         max_prechunk_instances,
         scattering_eltype,
+        toric_traversal,
         validate,
     )
 end
@@ -371,6 +383,7 @@ function RaycoreScatteringBackend(
     dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
     propagation_backend::Symbol=interception_backend.config.propagation_backend,
     max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
+    toric_traversal::Symbol=interception_backend.config.toric_traversal,
     validate::Bool=interception_backend.config.validate,
 )
     return RaycoreScatteringBackend(
@@ -380,6 +393,7 @@ function RaycoreScatteringBackend(
             dense_edge_limit_bytes=dense_edge_limit_bytes,
             propagation_backend=propagation_backend,
             max_prechunk_instances=max_prechunk_instances,
+            toric_traversal=toric_traversal,
             validate=validate,
         ),
     )
