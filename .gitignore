@@ -4,6 +4,7 @@
 /test/Manifest*.toml
 /docs/build/
 *.DS_Store
+*.mp4
 java_implementation/*
 .juliaup
 .julia_depot
