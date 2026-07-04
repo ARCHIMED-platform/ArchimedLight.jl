@@ -273,6 +273,26 @@ julia --project=test test/regression_matrix/runtests.jl
 The repository includes a separate benchmark project for `AirspeedVelocity.jl` under
 `benchmark/`.
 
+Large benchmark OPS scenes are kept as a Julia artifact. The Zenodo source file is a ZIP,
+so it must first be converted to a tarball that Julia's artifact installer can unpack:
+
+```bash
+julia --project=. scripts/build_benchmark_scenes_artifact.jl \
+  --zip benchmark/benchmark_scenes.zip \
+  --tarball /tmp/archimedlight-benchmark-scenes.tar.gz
+```
+
+Omit `--zip` to download the default Zenodo source ZIP directly.
+
+After uploading the generated tarball somewhere stable, bind the downloadable artifact:
+
+```bash
+julia --project=. scripts/build_benchmark_scenes_artifact.jl \
+  --zip benchmark/benchmark_scenes.zip \
+  --tarball /tmp/archimedlight-benchmark-scenes.tar.gz \
+  --url https://example.org/archimedlight-benchmark-scenes.tar.gz
+```
+
 ## How to Cite
 
 If you use ArchimedLight.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/ARCHIMED-platform/ArchimedLight.jl/blob/main/CITATION.cff).
