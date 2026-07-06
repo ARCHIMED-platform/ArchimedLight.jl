@@ -18,7 +18,7 @@ makedocs(;
     sitename="ArchimedLight.jl",
     format=Documenter.HTML(
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://archimed-platform.github.io/ArchimedLight.jl",
+        canonical="https://VEZY/ArchimedLight.jl",
         edit_link="main",
         assets=String[],
         size_threshold=700000,
@@ -54,4 +54,4 @@ makedocs(;
 )
 
 deploydocs(; repo="github.com/VEZY/ArchimedLight.jl.git", devbranch="main", push_preview=true)
-# Visit https://archimed-platform.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
+# Visit https://VEZY/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
