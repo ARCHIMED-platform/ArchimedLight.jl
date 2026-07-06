@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Model Files · ArchimedLight.jl</title><meta name="title" content="Model Files · ArchimedLight.jl"/><meta property="og:title" content="Model Files · ArchimedLight.jl"/><meta property="twitter:title" content="Model Files · ArchimedLight.jl"/><meta name="description" content="Documentation for ArchimedLight.jl."/><meta property="og:description" content="Documentation for ArchimedLight.jl."/><meta property="twitter:description" content="Documentation for ArchimedLight.jl."/><meta property="og:url" content="https://archimed-platform.github.io/ArchimedLight.jl/reference_models/"/><meta property="twitter:url" content="https://archimed-platform.github.io/ArchimedLight.jl/reference_models/"/><link rel="canonical" href="https://archimed-platform.github.io/ArchimedLight.jl/reference_models/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">ArchimedLight.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../getting_started/">Getting Started</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../tutorial_beginner_workflows/">Beginner Workflows</a></li><li><a class="tocitem" href="../tutorial_files/">File-Based Workflow</a></li><li><a class="tocitem" href="../tutorial_interactive/">Interactive Workflow</a></li><li><a class="tocitem" href="../onboarding_templates/">Copy-Paste Templates</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../reference_config/">Configuration And Options</a></li><li><a class="tocitem" href="../reference_scene/">Scene Files And Semantics</a></li><li class="is-active"><a class="tocitem" href>Model Files</a><ul class="internal"><li><a class="tocitem" href="#What-Matters-In-A-Model"><span>What Matters In A Model</span></a></li><li><a class="tocitem" href="#1.-Group-And-Type-Matching"><span>1. Group And Type Matching</span></a></li><li><a class="tocitem" href="#2.-File-Based-Representation"><span>2. File-Based Representation</span></a></li><li><a class="tocitem" href="#3.-Dynamically-In-Julia"><span>3. Dynamically In Julia</span></a></li><li><a class="tocitem" href="#4.-Interception-Behavior"><span>4. Interception Behavior</span></a></li><li><a class="tocitem" href="#5.-Virtual-Sensors"><span>5. Virtual Sensors</span></a></li><li><a class="tocitem" href="#6.-Multiple-Named-Variants"><span>6. Multiple Named Variants</span></a></li><li><a class="tocitem" href="#7.-Light-Emitters"><span>7. Light Emitters</span></a></li><li><a class="tocitem" href="#8.-Wildcard-Models"><span>8. Wildcard Models</span></a></li><li><a class="tocitem" href="#9.-Soil-And-Paving"><span>9. Soil And Paving</span></a></li><li><a class="tocitem" href="#10.-Missing-Bands-And-Fallbacks"><span>10. Missing Bands And Fallbacks</span></a></li><li><a class="tocitem" href="#11.-Historical-Blocks-Not-Used-By-The-Light-Package"><span>11. Historical Blocks Not Used By The Light Package</span></a></li></ul></li><li><a class="tocitem" href="../reference_meteo/">Meteo Inputs</a></li></ul></li><li><a class="tocitem" href="../outputs/">Outputs</a></li><li><span class="tocitem">Under The Hood</span><ul><li><a class="tocitem" href="../theory_pipeline/">Pipeline Overview</a></li><li><a class="tocitem" href="../theory_interception/">First-Order Interception</a></li><li><a class="tocitem" href="../theory_scattering/">Scattering And Assumptions</a></li></ul></li><li><span class="tocitem">Advanced Usage</span><ul><li><a class="tocitem" href="../full_example/">Full Example</a></li><li><a class="tocitem" href="../stages/">Composable Stages</a></li><li><a class="tocitem" href="../gpu_backends/">GPU Backends And Benchmarks</a></li><li><a class="tocitem" href="../archimed_reference/">Historical ARCHIMED Reference</a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Reference</a></li><li class="is-active"><a href>Model Files</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Model Files</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/VEZY/ArchimedLight.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/VEZY/ArchimedLight.jl/blob/main/docs/src/reference_models.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Model-Reference"><a class="docs-heading-anchor" href="#Model-Reference">Model Reference</a><a id="Model-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Reference" title="Permalink"></a></h1><p>The light solver does not fundamentally need a model <em>file</em>. It needs a mapping from scene components to radiative behavior.</p><p>Concretely, a model description must answer these questions:</p><ul><li>given a scene node <code>(group, type)</code>, which radiative model applies?</li><li>how transparent is that component at first interception?</li><li>how strongly does it scatter light in each waveband?</li><li>is it a virtual sensor?</li><li>does it emit light itself?</li></ul><p>Historically this information often comes from YAML model files. In interactive workflows, the same semantics are built directly with <a href="../api/#ArchimedLight.GroupModel"><code>GroupModel</code></a>, <a href="../api/#ArchimedLight.TypeModel"><code>TypeModel</code></a>, <a href="../api/#ArchimedLight.InterceptionModel"><code>InterceptionModel</code></a>, and <a href="../api/#ArchimedLight.EmitterModel"><code>EmitterModel</code></a>.</p><h2 id="What-Matters-In-A-Model"><a class="docs-heading-anchor" href="#What-Matters-In-A-Model">What Matters In A Model</a><a id="What-Matters-In-A-Model-1"></a><a class="docs-heading-anchor-permalink" href="#What-Matters-In-A-Model" title="Permalink"></a></h2><p>Whatever the source format, the runtime ultimately wants a <a href="../api/#ArchimedLight.LightModels"><code>LightModels</code></a> object that maps scene <code>(group, type)</code> pairs to model behavior.</p><p>The rest of this page is organized around those semantics rather than around the YAML syntax.</p><h2 id="1.-Group-And-Type-Matching"><a class="docs-heading-anchor" href="#1.-Group-And-Type-Matching">1. Group And Type Matching</a><a id="1.-Group-And-Type-Matching-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Group-And-Type-Matching" title="Permalink"></a></h2><p>Model matching is driven by the scene node <code>(group, type)</code> pair.</p><p>The runtime resolves a node with this precedence:</p><ol><li>exact group and exact type</li><li>exact group and wildcard type <code>*</code></li><li>wildcard group <code>*</code> and exact type</li><li>wildcard group <code>*</code> and wildcard type <code>*</code></li></ol><p>This is true whether models come from files or from Julia objects.</p><p>Only nodes with geometry need a model. Non-geometric topology nodes such as plant, axis, phytomer, or grouping nodes are ignored by model validation.</p><p>For interactive workflows, the compact constructor is usually easiest:</p><pre><code class="language-julia hljs">models = models_for(
+    &quot;coffee&quot; =&gt; (
+        &quot;Leaf&quot; =&gt; translucent(par=0.15, nir=0.90),
+        &quot;Stem&quot; =&gt; translucent(par=0.20, nir=0.50),
+    ),
+    &quot;soil&quot; =&gt; (
+        &quot;ground&quot; =&gt; translucent(par=0.10, nir=0.40),
+    ),
+)</code></pre><p>Use <code>&quot;*&quot;</code> as a type fallback:</p><pre><code class="language-julia hljs">models = models_for(
+    &quot;coffee&quot; =&gt; (
+        &quot;*&quot; =&gt; translucent(par=0.15, nir=0.90),
+        &quot;Stem&quot; =&gt; translucent(par=0.20, nir=0.50),
+    ),
+)</code></pre><h2 id="2.-File-Based-Representation"><a class="docs-heading-anchor" href="#2.-File-Based-Representation">2. File-Based Representation</a><a id="2.-File-Based-Representation-1"></a><a class="docs-heading-anchor-permalink" href="#2.-File-Based-Representation" title="Permalink"></a></h2><p>Historically, one YAML file usually describes one functional group:</p><pre><code class="language-yaml hljs">---
+Group: coffee
+Type:
+  Metamer:
+    Interception:
+      model: Translucent
+      transparency: 0.1
+      optical_properties:
+        PAR: 0.15
+        NIR: 0.9
+  Leaf:
+    Interception:
+      model: Translucent
+      transparency: 0.0
+      optical_properties:
+        PAR: 0.15
+        NIR: 0.9
+...</code></pre><p>The correspondences are:</p><ul><li><code>Group</code> -&gt; functional group name</li><li><code>Type</code> -&gt; mapping from component types to model definitions</li><li><code>Interception</code> -&gt; first-order interception and scattering behavior</li><li><code>LightEmitter</code> -&gt; optional emitted radiance</li></ul><h2 id="3.-Dynamically-In-Julia"><a class="docs-heading-anchor" href="#3.-Dynamically-In-Julia">3. Dynamically In Julia</a><a id="3.-Dynamically-In-Julia-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Dynamically-In-Julia" title="Permalink"></a></h2><p>The same model can be built directly in memory:</p><pre><code class="language-julia hljs">models = prepare_models([
+    GroupModel(
+        &quot;coffee&quot;;
+        types=OrderedDict(
+            &quot;Leaf&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+            &quot;Metamer&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.1,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+        ),
+    ),
+])</code></pre><p>This is the direct equivalent of the YAML file above.</p><p>The dynamic correspondences are:</p><ul><li><code>Group: coffee</code> -&gt; <code>GroupModel(&quot;coffee&quot;; ...)</code></li><li><code>Type: Leaf: ...</code> -&gt; <code>&quot;Leaf&quot; =&gt; TypeModel(...)</code></li><li><code>Interception: ...</code> -&gt; <code>InterceptionModel(...)</code></li><li><code>LightEmitter: ...</code> -&gt; <code>EmitterModel(...)</code></li></ul><h2 id="4.-Interception-Behavior"><a class="docs-heading-anchor" href="#4.-Interception-Behavior">4. Interception Behavior</a><a id="4.-Interception-Behavior-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Interception-Behavior" title="Permalink"></a></h2><p>The core light package mainly uses the <code>Interception</code> block.</p><h3 id="model"><a class="docs-heading-anchor" href="#model"><code>model</code></a><a id="model-1"></a><a class="docs-heading-anchor-permalink" href="#model" title="Permalink"></a></h3><p>The standard historical model is <code>Translucent</code>:</p><pre><code class="language-yaml hljs">Interception:
+  model: Translucent</code></pre><p>and dynamically:</p><pre><code class="language-julia hljs">InterceptionModel(model=&quot;Translucent&quot;)</code></pre><p>This is the ordinary case for plant organs, soil, paving, and many geometric objects.</p><h3 id="transparency"><a class="docs-heading-anchor" href="#transparency"><code>transparency</code></a><a id="transparency-1"></a><a class="docs-heading-anchor-permalink" href="#transparency" title="Permalink"></a></h3><p><code>transparency</code> is the transmitted fraction used when the solver needs a full per-pixel hit stack, for example during scattering, virtual-sensor calculations, or explicit light-emitter transfer.</p><p>For first-order-only interception, ArchimedLight follows the historical ARCHIMED upper-hit rule: the first visible surface receives the direct light for that pixel, and lower surfaces are not lit through it. In that mode a non-zero <code>transparency</code> does not create direct first-order flux on lower objects.</p><p>File-based:</p><pre><code class="language-yaml hljs">Interception:
+  transparency: 0.1</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">InterceptionModel(transparency=0.1)</code></pre><p>Typical values are in <code>[0, 1]</code>:</p><ul><li><code>0.0</code> for a fully intercepting component</li><li>larger values for partially transmitting components</li></ul><h3 id="optical_properties"><a class="docs-heading-anchor" href="#optical_properties"><code>optical_properties</code></a><a id="optical_properties-1"></a><a class="docs-heading-anchor-permalink" href="#optical_properties" title="Permalink"></a></h3><p><code>optical_properties</code> stores waveband-dependent scattering coefficients.</p><p>File-based:</p><pre><code class="language-yaml hljs">Interception:
+  optical_properties:
+    PAR: 0.15
+    NIR: 0.90</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">InterceptionModel(
+    optical_properties=OpticalProperties(0.15, 0.90),
+)</code></pre><p>For the current package:</p><ul><li><code>PAR</code> and <code>NIR</code> are the built-in bands</li><li>extra shortwave bands are also supported</li></ul><p>Example with one custom band in YAML:</p><pre><code class="language-yaml hljs">optical_properties:
+  PAR: 0.15
+  NIR: 0.90
+  custom: 0.15</code></pre><p>The optical coefficient is the scattered fraction. When no more detailed information is available, absorptance is then derived approximately as:</p><pre><code class="language-text hljs">absorptance = 1 - scattering_coefficient</code></pre><p><img src="../assets/optical_properties_reflectance_transmittance.jpg" alt="Reflectance, transmittance, absorptance"/></p><h2 id="5.-Virtual-Sensors"><a class="docs-heading-anchor" href="#5.-Virtual-Sensors">5. Virtual Sensors</a><a id="5.-Virtual-Sensors-1"></a><a class="docs-heading-anchor-permalink" href="#5.-Virtual-Sensors" title="Permalink"></a></h2><p>Virtual sensors receive light but remain transparent in the transfer logic.</p><p>File-based:</p><pre><code class="language-yaml hljs">Interception:
+  model: VirtualSensor</code></pre><p>or</p><pre><code class="language-yaml hljs">Interception:
+  sensor: true</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">InterceptionModel(model=&quot;VirtualSensor&quot;)</code></pre><p>or</p><pre><code class="language-julia hljs">InterceptionModel(sensor=true)</code></pre><p>Use this for diagnostic surfaces that should observe the radiative field without perturbing it like an opaque object.</p><h2 id="6.-Multiple-Named-Variants"><a class="docs-heading-anchor" href="#6.-Multiple-Named-Variants">6. Multiple Named Variants</a><a id="6.-Multiple-Named-Variants-1"></a><a class="docs-heading-anchor-permalink" href="#6.-Multiple-Named-Variants" title="Permalink"></a></h2><p>Historical ARCHIMED files sometimes store several named parameter sets under one process block and select one with <code>use</code>.</p><p>File-based example:</p><pre><code class="language-yaml hljs">Interception:
+  use: Translucent_1
+  Translucent_1:
+    model: Translucent
+    transparency: 0.0
+    optical_properties:
+      PAR: 0.15
+      NIR: 0.90
+  Translucent_2:
+    model: Translucent
+    transparency: 0.2
+    optical_properties:
+      PAR: 0.20
+      NIR: 0.85</code></pre><p>The dynamic equivalent is not usually written by hand, but the runtime preserves the same structure internally through the <code>use</code> and <code>variants</code> fields of <a href="../api/#ArchimedLight.InterceptionModel"><code>InterceptionModel</code></a>.</p><h2 id="7.-Light-Emitters"><a class="docs-heading-anchor" href="#7.-Light-Emitters">7. Light Emitters</a><a id="7.-Light-Emitters-1"></a><a class="docs-heading-anchor-permalink" href="#7.-Light-Emitters" title="Permalink"></a></h2><p>Components can also emit light.</p><p>File-based:</p><pre><code class="language-yaml hljs">LightEmitter:
+  model: LambertianEmitter
+  radiance: 20.0
+  gamma:
+    PAR: 0.48
+    NIR: 0.52</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">TypeModel(
+    light_emitter=EmitterModel(
+        model=&quot;LambertianEmitter&quot;,
+        radiance=20.0,
+        gamma=OpticalProperties(0.48, 0.52),
+    ),
+)</code></pre><p>This is useful for artificial lighting or diagnostic scenes. Most canopy workflows still rely mainly on meteo forcing. For the source notation and how emitters enter the light algorithm, see <a href="../theory_scattering/#artificial-light-emitters">Artificial Light Emitters</a>.</p><h2 id="8.-Wildcard-Models"><a class="docs-heading-anchor" href="#8.-Wildcard-Models">8. Wildcard Models</a><a id="8.-Wildcard-Models-1"></a><a class="docs-heading-anchor-permalink" href="#8.-Wildcard-Models" title="Permalink"></a></h2><p>Wildcards are often the most useful part of interactive model construction, because they let you start from a broad fallback and refine only the important cases.</p><h3 id="Wildcard-Type-Inside-One-Group"><a class="docs-heading-anchor" href="#Wildcard-Type-Inside-One-Group">Wildcard Type Inside One Group</a><a id="Wildcard-Type-Inside-One-Group-1"></a><a class="docs-heading-anchor-permalink" href="#Wildcard-Type-Inside-One-Group" title="Permalink"></a></h3><p>File-based:</p><pre><code class="language-yaml hljs">Group: coffee
+Type:
+  &quot;*&quot;:
+    Interception:
+      model: Translucent
+      transparency: 0.0
+      optical_properties:
+        PAR: 0.15
+        NIR: 0.90</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">GroupModel(
+    &quot;coffee&quot;;
+    types=OrderedDict(
+        &quot;*&quot; =&gt; TypeModel(
+            interception=InterceptionModel(
+                model=&quot;Translucent&quot;,
+                transparency=0.0,
+                optical_properties=OpticalProperties(0.15, 0.90),
+            ),
+        ),
+    ),
+)</code></pre><p>This means: any type inside the <code>coffee</code> group uses this fallback unless a more specific type is declared.</p><h3 id="Global-Wildcard-Group-And-Type"><a class="docs-heading-anchor" href="#Global-Wildcard-Group-And-Type">Global Wildcard Group And Type</a><a id="Global-Wildcard-Group-And-Type-1"></a><a class="docs-heading-anchor-permalink" href="#Global-Wildcard-Group-And-Type" title="Permalink"></a></h3><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">models = prepare_models([
+    GroupModel(
+        &quot;*&quot;;
+        types=OrderedDict(
+            &quot;*&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.30),
+                ),
+            ),
+        ),
+    ),
+])</code></pre><p>This is useful for:</p><ul><li>synthetic scenes</li><li>tests</li><li>progressive setup before writing exact <code>(group, type)</code> rules</li></ul><h2 id="9.-Soil-And-Paving"><a class="docs-heading-anchor" href="#9.-Soil-And-Paving">9. Soil And Paving</a><a id="9.-Soil-And-Paving-1"></a><a class="docs-heading-anchor-permalink" href="#9.-Soil-And-Paving" title="Permalink"></a></h2><p>Soil and paving are not special cases from the model point of view. They are ordinary functional groups:</p><pre><code class="language-yaml hljs">Group: pavement
+Type:
+  Cobblestone:
+    Interception:
+      model: Translucent
+      transparency: 0
+      optical_properties:
+        PAR: 0.15
+        NIR: 0.9
+    plot_paving: 80</code></pre><p>Dynamic equivalent:</p><pre><code class="language-julia hljs">GroupModel(
+    &quot;pavement&quot;;
+    types=OrderedDict(
+        &quot;Cobblestone&quot; =&gt; TypeModel(
+            interception=InterceptionModel(
+                model=&quot;Translucent&quot;,
+                transparency=0.0,
+                optical_properties=OpticalProperties(0.15, 0.90),
+            ),
+        ),
+    ),
+)</code></pre><p>The <code>plot_paving</code> hint belongs to the file-based convenience layer used by <code>read_simulation</code>; the radiative behavior itself is still just an ordinary interception model.</p><h2 id="10.-Missing-Bands-And-Fallbacks"><a class="docs-heading-anchor" href="#10.-Missing-Bands-And-Fallbacks">10. Missing Bands And Fallbacks</a><a id="10.-Missing-Bands-And-Fallbacks-1"></a><a class="docs-heading-anchor-permalink" href="#10.-Missing-Bands-And-Fallbacks" title="Permalink"></a></h2><p>When a model omits a waveband in <code>optical_properties</code>, the runtime falls back to the corresponding option in <a href="../api/#ArchimedLight.LightOptions"><code>LightOptions</code></a>:</p><ul><li>missing PAR -&gt; <code>options.scattering_coeff_par</code></li><li>missing NIR -&gt; <code>options.scattering_coeff_nir</code></li></ul><p>That is why the global scattering coefficients still matter even when most groups are explicitly parameterized.</p><h2 id="11.-Historical-Blocks-Not-Used-By-The-Light-Package"><a class="docs-heading-anchor" href="#11.-Historical-Blocks-Not-Used-By-The-Light-Package">11. Historical Blocks Not Used By The Light Package</a><a id="11.-Historical-Blocks-Not-Used-By-The-Light-Package-1"></a><a class="docs-heading-anchor-permalink" href="#11.-Historical-Blocks-Not-Used-By-The-Light-Package" title="Permalink"></a></h2><p>Historical model files may still contain:</p><ul><li><code>Photosynthesis</code></li><li><code>StomatalConductance</code></li><li>many energy-balance parameters</li></ul><p>Those sections remain useful archival context, but they are not part of the active light API of <code>ArchimedLight.jl</code>. For light simulations, the important parts are the group/type mapping, interception behavior, optional emitters, and wildcard rules.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../reference_scene/">« Scene Files And Semantics</a><a class="docs-footer-nextpage" href="../reference_meteo/">Meteo Inputs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 6 July 2026 09:15">Monday 6 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
