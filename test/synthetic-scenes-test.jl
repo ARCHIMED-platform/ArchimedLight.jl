@@ -197,7 +197,6 @@ end
 @testitem "Synthetic case Raycore hit decoder mapping" tags = [:synthetic, :fast, :raycore_backend] setup = [HelperModule] begin
     using LinearAlgebra
     using GeometryBasics
-    using Raycore
     using StaticArrays
 
     scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
@@ -619,7 +618,7 @@ end
     for pixel_idx in eachindex(traced_direction_stack.counts)
         count = Int(traced_direction_stack.counts[pixel_idx])
         count == 0 && continue
-        append!(occupied_slots, ((pixel_idx - 1) * traced_direction_stack.max_hits + 1):((pixel_idx - 1) * traced_direction_stack.max_hits + count))
+        append!(occupied_slots, ((pixel_idx-1)*traced_direction_stack.max_hits+1):((pixel_idx-1)*traced_direction_stack.max_hits+count))
     end
     @test !isempty(occupied_slots)
     @test all(idx -> traced_direction_stack.instance_indices[idx] == UInt32(1), occupied_slots)

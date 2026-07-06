@@ -22,6 +22,28 @@ The figure above is generated from the bundled coffee fixture with `scripts/gene
 
 Energy balance, transpiration and photosynthesis are intentionally out of scope for now.
 
+## GPU branch installation
+
+Install this branch:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/VEZY/ArchimedLight.jl", rev="gpu")
+```
+
+If you are on MacOS and want to use the Metal backend, you also need to install `Atomix` and `Metal` branches that contain bug fixes (atomic-ordering changes):
+
+```julia
+using Pkg
+
+Pkg.add(url="https://github.com/VEZY/Atomix.jl", rev="codex/metal-atomic-ordering")
+Pkg.add(url="https://github.com/VEZY/Metal.jl", rev="codex/atomic-order-refit")
+Pkg.add(url="https://github.com/VEZY/ArchimedLight.jl", rev="gpu")
+```
+
+If ArchimedLight is already installed in the active environment, run the `Atomix` command
+above and then `Pkg.resolve()` so Julia records the compatible Atomix source in the manifest.
+
 ## Core API
 ```julia
 using ArchimedLight
@@ -110,6 +132,40 @@ fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
 first_order = ArchimedLight.compute_first_order(scene, models, turtle, fluxes, options)
 scat = ArchimedLight.compute_scattering(scene, models, turtle, first_order, options)
 budget = ArchimedLight.integrate_light(scene, models, first_order, scat, options; meteo_row=row)
+```
+
+To use the GPU rasterizer, keep the same code, but pass a RasterGPU backend:
+
+```julia
+using KernelAbstractions
+using Metal # Could be any GPU backend supported by KernelAbstractions.jl, e.g. CUDA, AMDGPU, oneAPI, etc.
+
+metal_backend = KernelAbstractions.get_backend(MtlArray(zeros(Float32, 1)))
+# Replace MtlArray by CuArray, ROCArray, or oneAPIArray for other GPU backends.
+raster_gpu = ArchimedLight.RasterGPUBackend(
+    backend=metal_backend,
+    tile_size=1,
+    tile_face_capacity=128,
+    max_hits_per_pixel=128,
+    edge_accumulation=:auto,
+)
+
+first_order = ArchimedLight.compute_first_order(
+    scene,
+    models,
+    turtle,
+    fluxes,
+    options;
+    backend=raster_gpu,
+)
+scat = ArchimedLight.compute_scattering(
+    scene,
+    models,
+    turtle,
+    first_order,
+    options;
+    backend=ArchimedLight.RasterGPUScatteringBackend(raster_gpu),
+)
 ```
 
 For ordinary simulations prefer `LightSimulation` and `run_light`.

@@ -26,7 +26,6 @@ using KernelAbstractions
 using MultiScaleTreeGraph
 using PlantGeom
 using Printf
-using Raycore
 using Statistics
 
 const BENCH_BUILD_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_LOCAL_BENCH_BUILD_SAMPLES", "2"))
@@ -339,7 +338,7 @@ function _agripv_workload()
     scene = PlantGeom.make_scene(domain=(0.0, 0.0, width, scene_length)) do s
         PlantGeom.add_object!(s, panel; group="panel", type="Panel", id=1, at=(0.0, scene_length / 2, 0.0))
         id = 2
-        for row in 0:(n_rows - 1), col in 0:(plants_per_row - 1)
+        for row in 0:(n_rows-1), col in 0:(plants_per_row-1)
             PlantGeom.add_plant!(
                 s,
                 wheat;
@@ -861,7 +860,7 @@ function _stack_profile_selftest()
     )
     _local_bench_assert(
         raycore_prepare.stack_validation_hit_ratio == 1.0 &&
-        raycore_prepare.stack_validation_occupied_ratio == 1.0,
+            raycore_prepare.stack_validation_occupied_ratio == 1.0,
         "strict Raycore prepare breakdown should report passing stack validation",
     )
     _local_bench_assert(
@@ -1528,28 +1527,28 @@ function _print_stage_split_result(workload_name, case_name, timing)
         ),
         _stage_split_profile_fields(
             (
-                trace_ms=timing.profile_trace_ms,
-                count_area_ms=timing.profile_count_area_ms,
-                edge_ms=timing.profile_edge_ms,
-                copy_ms=timing.profile_copy_ms,
-                total_ms=timing.profile_total_ms,
-                trace_ms_per_dir=timing.profile_trace_ms_per_dir,
-                copy_ms_per_dir=timing.profile_copy_ms_per_dir,
-                traced_dirs=timing.profile_traced_dirs,
-                reduced_dirs=timing.profile_reduced_dirs,
-                edge_dirs=timing.profile_edge_dirs,
-                copied_dirs=timing.profile_copied_dirs,
-                copy_required_dirs=timing.profile_copy_required_dirs,
-                copy_skippable_dirs=timing.profile_copy_skippable_dirs,
-                total_hits=timing.profile_total_hits,
-                total_pixels=timing.profile_total_pixels,
-                occupied_pixels=timing.profile_occupied_pixels,
-                hit_util=timing.profile_hit_util,
-                occupied=timing.profile_occupied,
-                max_seen=timing.profile_max_seen,
-                hits_per_dir=timing.profile_hits_per_dir,
-                overflow=timing.profile_overflow,
-            ),
+            trace_ms=timing.profile_trace_ms,
+            count_area_ms=timing.profile_count_area_ms,
+            edge_ms=timing.profile_edge_ms,
+            copy_ms=timing.profile_copy_ms,
+            total_ms=timing.profile_total_ms,
+            trace_ms_per_dir=timing.profile_trace_ms_per_dir,
+            copy_ms_per_dir=timing.profile_copy_ms_per_dir,
+            traced_dirs=timing.profile_traced_dirs,
+            reduced_dirs=timing.profile_reduced_dirs,
+            edge_dirs=timing.profile_edge_dirs,
+            copied_dirs=timing.profile_copied_dirs,
+            copy_required_dirs=timing.profile_copy_required_dirs,
+            copy_skippable_dirs=timing.profile_copy_skippable_dirs,
+            total_hits=timing.profile_total_hits,
+            total_pixels=timing.profile_total_pixels,
+            occupied_pixels=timing.profile_occupied_pixels,
+            hit_util=timing.profile_hit_util,
+            occupied=timing.profile_occupied,
+            max_seen=timing.profile_max_seen,
+            hits_per_dir=timing.profile_hits_per_dir,
+            overflow=timing.profile_overflow,
+        ),
         ),
     )
 end

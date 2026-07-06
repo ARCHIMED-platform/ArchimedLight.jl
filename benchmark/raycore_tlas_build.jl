@@ -8,7 +8,6 @@ end
 using ArchimedLight
 using Adapt
 using KernelAbstractions
-using Raycore
 
 const TLAS_BENCH_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_TLAS_BENCH_SAMPLES", "5"))
 const TLAS_BENCH_WARMUPS = parse(Int, get(ENV, "ARCHIMEDLIGHT_TLAS_BENCH_WARMUPS", "2"))

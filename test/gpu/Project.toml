@@ -8,16 +8,11 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
 MultiScaleTreeGraph = "dd4a991b-8a45-4075-bede-262ee62d5583"
 PlantGeom = "5edaa67e-25db-4eb9-bf81-05d793b2238d"
-Raycore = "afc56b53-c9a9-482a-a956-d1d800e05559"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
 ArchimedLight = {path = "../.."}
-Atomix = {path = "/Users/rvezy/Documents/dev/Atomix"}
-KernelAbstractions = {path = "/Users/rvezy/Documents/dev/KernelAbstractions"}
-Metal = {path = "/Users/rvezy/Documents/dev/Metal"}
-Raycore = {path = "/Users/rvezy/Documents/dev/Raycore"}
 
 [compat]
 Metal = "1"
