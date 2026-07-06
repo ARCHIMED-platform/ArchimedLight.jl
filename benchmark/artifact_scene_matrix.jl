@@ -980,12 +980,12 @@ end
 
 function _huge_case_skip_reason(directions::Int, scattering::Bool, cache_radiation::Bool, step_count::Int)
     BENCH_SKIP_HUGE_CASES || return ""
-    scattering && cache_radiation || return ""
     directions >= BENCH_SKIP_HUGE_MIN_DIRECTIONS || return ""
     simulated_hours = step_count * BENCH_STEP_SECONDS / 3600.0
     simulated_hours >= BENCH_SKIP_HUGE_MIN_HOURS || return ""
+    (scattering && cache_radiation) || !cache_radiation || return ""
     return "skipped by ARCHIMEDLIGHT_ARTIFACT_BENCH_SKIP_HUGE_CASES: " *
-           "scattering=true, cache_radiation=true, directions=$directions, " *
+           "scattering=$scattering, cache_radiation=$cache_radiation, directions=$directions, " *
            "simulated_hours=$(round(simulated_hours; digits=3))"
 end
 
