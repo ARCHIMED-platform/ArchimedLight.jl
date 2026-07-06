@@ -182,8 +182,8 @@ SUITE["Run light"]["step"]["simpleplant toric + coarse pixels"] =
         row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options).rows)
     ) evals = 1
 
-SUITE["Run light"]["step"]["simpleplant scattering links"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options; scattering_mode=:links) setup = (
+SUITE["Run light"]["step"]["simpleplant scattering raycast"] =
+    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options; scattering_mode=:raycast) setup = (
         scene = SIMPLEPLANT.scene;
         models = SIMPLEPLANT.models;
         options = _override_options(SIMPLEPLANT.options; scattering=true, pixel_size_m=0.05);

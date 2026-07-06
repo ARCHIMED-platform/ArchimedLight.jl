@@ -34,7 +34,7 @@ export EmitterModel
 export OpticalProperties
 export LightOptions
 export InterceptionBackend, RasterCPUBackend
-export ScatteringBackend, RaycastScatteringBackend, LinksScatteringBackend
+export ScatteringBackend, RaycastScatteringBackend
 export SkyState
 export TurtleSector, TurtleGrid
 export DirectionalFluxes

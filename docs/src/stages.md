@@ -77,6 +77,6 @@ step = run_light(
 ## Backends and Modes
 
 - `ArchimedLight.compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
-- `ArchimedLight.compute_scattering(...; mode=:raycast)` and `ArchimedLight.compute_scattering(...; mode=:links)` are available.
-- `ArchimedLight.compute_scattering(...; backend=RaycastScatteringBackend())` and `ArchimedLight.compute_scattering(...; backend=LinksScatteringBackend())` are also available.
+- `ArchimedLight.compute_scattering(...; mode=:raycast)` is the current scattering mode.
+- `ArchimedLight.compute_scattering(...; backend=RaycastScatteringBackend())` is also available.
 - `PlantGeom.add_ground!(scene; ...)` is the explicit scene-editing step when you want inspectable paving or soil geometry in the MTG.

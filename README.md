@@ -130,7 +130,7 @@ julia --project=. example_1/full_featured_example.jl
 - `compute_sky` uses substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend (`RasterCPUBackend()` also available).
-- `compute_scattering(...; mode=:raycast)` / `compute_scattering(...; mode=:links)` expose the two supported scattering modes; backend objects are also available (`RaycastScatteringBackend()`, `LinksScatteringBackend()`).
+- `compute_scattering(...; mode=:raycast)` is the current scattering mode; `RaycastScatteringBackend()` can also be passed explicitly.
 - `pixel_size` is validated with ARCHIMED-compatible bounds (`0 < pixel_size <= 0.5` meters).
 - `cache_pixel_table=true` enables an on-disk direction projection cache under the interception cache directory.
 - `build_turtle` follows the canonical ARCHIMED sector counts `1, 6, 16, 46, 136, 406`.

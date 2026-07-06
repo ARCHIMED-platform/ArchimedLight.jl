@@ -182,15 +182,14 @@ function main()
     # The fixture contains an extra band (RI_custom_f).
     @assert haskey(step.extra_band_irradiance, "CUSTOM")
 
-    # Series execution (same inputs) with links backend selection.
+    # Series execution (same inputs) with explicit scattering backend selection.
     series = run_light_series(
         scene,
         models,
         meteo,
         options;
         interception_backend=RasterCPUBackend(),
-        scattering_mode=:links,
-        scattering_backend=LinksScatteringBackend(),
+        scattering_backend=RaycastScatteringBackend(),
     )
 
     par_vals = collect(values(step.budget.incident_energy.total.par))

@@ -258,7 +258,6 @@ The current public backend selectors are:
 ```julia
 RasterCPUBackend()
 RaycastScatteringBackend()
-LinksScatteringBackend()
 ```
 
 They can be passed explicitly to the pipeline helpers when you want to control the implementation used for interception or scattering.

@@ -164,7 +164,6 @@ function _targeted_option_sets()
         OrderedDict("radiation_timestep" => 5),
         OrderedDict("radiation_timestep" => 30),
         OrderedDict("java_logged_turtle_dirs" => true, "sky_mode" => "16_all_in_turtle"),
-        OrderedDict("scattering" => true, "scattering_mode" => :links),
         OrderedDict("scattering" => true, "scattering_mode" => :raycast),
         OrderedDict("sky_mode" => "1_direct", "cache_pixel_table" => true, "toricity" => true),
     ]

@@ -28,13 +28,6 @@ ray-visibility stacks.
 struct RaycastScatteringBackend <: ScatteringBackend end
 
 """
-    LinksScatteringBackend()
-
-Scattering backend that uses precomputed link-style transfer relationships.
-"""
-struct LinksScatteringBackend <: ScatteringBackend end
-
-"""
     OpticalProperties(par=0.0, nir=0.0)
 
 Per-waveband scattering coefficients for a component or emitter.

@@ -617,8 +617,7 @@ end
 
 function _scattering_backend_from_mode(mode::Symbol)
     mode == :raycast && return RaycastScatteringBackend()
-    mode == :links && return LinksScatteringBackend()
-    error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+    error("Unsupported scattering mode: $mode (supported: :raycast)")
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend::Nothing)
@@ -626,14 +625,14 @@ function _resolve_scattering_backend(mode::Symbol, backend::Nothing)
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend::ScatteringBackend)
-    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+    mode == :raycast || error("Unsupported scattering mode: $mode (supported: :raycast)")
     return backend
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend)
     error(
         "Unsupported scattering backend selector type: $(typeof(backend)). " *
-        "Use `nothing`, `RaycastScatteringBackend()`, or `LinksScatteringBackend()`.",
+        "Use `nothing` or `RaycastScatteringBackend()`.",
     )
 end
 
@@ -670,18 +669,6 @@ function build_scattering_transfer_graph(
 end
 
 function build_scattering_transfer_graph(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    # CPU reference currently uses the same transfer-graph construction for both modes.
-    return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
-end
-
-function build_scattering_transfer_graph(
     topology::ScatteringTopologyCache,
     first::FirstOrderResult,
     options::LightOptions;
@@ -699,15 +686,6 @@ function build_scattering_transfer_graph(
     ::RaycastScatteringBackend,
 )
     return _transfer_graph_from_topology(topology, first, options)
-end
-
-function build_scattering_transfer_graph(
-    topology::ScatteringTopologyCache,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    return build_scattering_transfer_graph(topology, first, options, RaycastScatteringBackend())
 end
 
 function _default_band_coeff(options::LightOptions, band_key::String)
@@ -918,27 +896,6 @@ function compute_scattering_band(
 end
 
 function compute_scattering_band(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend;
-    band::AbstractString="PAR",
-    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    # CPU reference currently shares the same iterative propagation path.
-    return compute_scattering_band(
-        graph,
-        first,
-        options,
-        RaycastScatteringBackend();
-        band=band,
-        initial_power_per_node=initial_power_per_node,
-        default_coeff=default_coeff,
-    )
-end
-
-function compute_scattering_band(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
@@ -1030,16 +987,6 @@ function compute_scattering(
     )
 
     ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
-end
-
-function compute_scattering(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    # CPU reference currently shares the same iterative propagation path.
-    return compute_scattering(graph, first, options, RaycastScatteringBackend())
 end
 
 function compute_scattering(
