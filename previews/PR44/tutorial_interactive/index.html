@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Interactive Workflow · ArchimedLight.jl</title><meta name="title" content="Interactive Workflow · ArchimedLight.jl"/><meta property="og:title" content="Interactive Workflow · ArchimedLight.jl"/><meta property="twitter:title" content="Interactive Workflow · ArchimedLight.jl"/><meta name="description" content="Documentation for ArchimedLight.jl."/><meta property="og:description" content="Documentation for ArchimedLight.jl."/><meta property="twitter:description" content="Documentation for ArchimedLight.jl."/><meta property="og:url" content="https://VEZY/ArchimedLight.jl/tutorial_interactive/"/><meta property="twitter:url" content="https://VEZY/ArchimedLight.jl/tutorial_interactive/"/><link rel="canonical" href="https://VEZY/ArchimedLight.jl/tutorial_interactive/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">ArchimedLight.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../getting_started/">Getting Started</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../tutorial_beginner_workflows/">Beginner Workflows</a></li><li><a class="tocitem" href="../tutorial_files/">File-Based Workflow</a></li><li class="is-active"><a class="tocitem" href>Interactive Workflow</a><ul class="internal"><li><a class="tocitem" href="#When-To-Use-This-Workflow"><span>When To Use This Workflow</span></a></li><li><a class="tocitem" href="#Creating-a-Plant-With-PlantGeom&#39;s-Growth-API"><span>Creating a Plant With PlantGeom&#39;s Growth API</span></a></li><li><a class="tocitem" href="#Convert-To-SceneGeometry"><span>Convert To SceneGeometry</span></a></li><li><a class="tocitem" href="#Add-Models"><span>Add Models</span></a></li><li><a class="tocitem" href="#Add-Ground-Explicitly"><span>Add Ground Explicitly</span></a></li><li><a class="tocitem" href="#Run-One-Simulation-And-Visualize-It"><span>Run One Simulation And Visualize It</span></a></li><li><a class="tocitem" href="#Practical-Advice"><span>Practical Advice</span></a></li></ul></li><li><a class="tocitem" href="../onboarding_templates/">Copy-Paste Templates</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../reference_config/">Configuration And Options</a></li><li><a class="tocitem" href="../reference_scene/">Scene Files And Semantics</a></li><li><a class="tocitem" href="../reference_models/">Model Files</a></li><li><a class="tocitem" href="../reference_meteo/">Meteo Inputs</a></li></ul></li><li><a class="tocitem" href="../outputs/">Outputs</a></li><li><span class="tocitem">Under The Hood</span><ul><li><a class="tocitem" href="../theory_pipeline/">Pipeline Overview</a></li><li><a class="tocitem" href="../theory_interception/">First-Order Interception</a></li><li><a class="tocitem" href="../theory_scattering/">Scattering And Assumptions</a></li></ul></li><li><span class="tocitem">Advanced Usage</span><ul><li><a class="tocitem" href="../full_example/">Full Example</a></li><li><a class="tocitem" href="../stages/">Composable Stages</a></li><li><a class="tocitem" href="../archimed_reference/">Historical ARCHIMED Reference</a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Interactive Workflow</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Interactive Workflow</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/VEZY/ArchimedLight.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/VEZY/ArchimedLight.jl/blob/main/docs/src/tutorial_interactive.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-Interactive-Workflow"><a class="docs-heading-anchor" href="#Tutorial:-Interactive-Workflow">Tutorial: Interactive Workflow</a><a id="Tutorial:-Interactive-Workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-Interactive-Workflow" title="Permalink"></a></h1><p>This tutorial shows the in-memory workflow: build or modify a plant directly in Julia, convert it to a <code>PlantGeom.SceneGeometry</code>, then run the same light pipeline as in the file-based workflow.</p><p>The key bridge is:</p><ul><li><code>PlantGeom</code> builds or edits an MTG with geometry</li><li><code>PlantGeom.prepare_scene</code> turns that MTG into the dense scene representation used by <code>ArchimedLight.jl</code></li></ul><h2 id="When-To-Use-This-Workflow"><a class="docs-heading-anchor" href="#When-To-Use-This-Workflow">When To Use This Workflow</a><a id="When-To-Use-This-Workflow-1"></a><a class="docs-heading-anchor-permalink" href="#When-To-Use-This-Workflow" title="Permalink"></a></h2><ul><li>you generate plants procedurally</li><li>you grow or prune plants in a simulation loop</li><li>you want to test light behavior on synthetic scenes without writing files first</li><li>you want to couple light with a geometry-building API such as the <code>PlantGeom</code> growth API</li></ul><h2 id="Creating-a-Plant-With-PlantGeom&#39;s-Growth-API"><a class="docs-heading-anchor" href="#Creating-a-Plant-With-PlantGeom&#39;s-Growth-API">Creating a Plant With PlantGeom&#39;s Growth API</a><a id="Creating-a-Plant-With-PlantGeom&#39;s-Growth-API-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-a-Plant-With-PlantGeom&#39;s-Growth-API" title="Permalink"></a></h2><p>First we import the necessary packages:</p><pre><code class="language-julia hljs">using ArchimedLight
+using CairoMakie # For plotting
+using Colors # For color definitions
+using GeometryBasics # For geometry
+using MultiScaleTreeGraph # For the MTG data structure
+using OrderedCollections: OrderedDict
+using PlantGeom # For the growth and visualization API</code></pre><p>Then we build a simple plant with two phytomers, each with an internode and a leaf. The internodes are cylinders and the leaves are laminae with a midrib.</p><p>First, we define mesh prototypes for the internode and leaf shapes:</p><pre><code class="language-julia hljs">stem_ref = RefMesh(
+    &quot;stem&quot;,
+    GeometryBasics.mesh(
+        GeometryBasics.Cylinder(
+            Point(0.0, 0.0, 0.0),
+            Point(1.0, 0.0, 0.0),
+            0.5,
+        ),
+    ),
+    RGB(0.48, 0.36, 0.25),
+)
+
+leaf_ref = lamina_refmesh(
+    &quot;leaf&quot;;
+    length=1.0,
+    max_width=1.0,
+    n_long=36,
+    n_half=7,
+    material=RGB(0.19, 0.61, 0.29),
+)
+
+prototypes = Dict(
+    :Internode =&gt; RefMeshPrototype(stem_ref, true),
+    :Leaf =&gt; PointMapPrototype(
+        leaf_ref;
+        defaults=(base_angle_deg=42.0, bend=0.30, tip_drop=0.08),
+        intrinsic_shape=params -&gt; LaminaMidribMap(
+            base_angle_deg=params.base_angle_deg,
+            bend=params.bend,
+            tip_drop=params.tip_drop,
+        ),
+    ),
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Dict{Symbol, PlantGeom.AbstractMeshPrototype} with 2 entries:
+  :Leaf      =&gt; PointMapPrototype{RefMesh{String, Mesh{3, Float64, TriangleFace…
+  :Internode =&gt; RefMeshPrototype{RefMesh{String, Mesh{3, Float64, NgonFace{3, O…</code></pre><p>Then, we build the MTG with two phytomers and two leaves:</p><pre><code class="language-julia hljs">scene_mtg = Node(NodeMTG(:/, :Scene, 1, 1))
+small_plant = Node(scene_mtg, NodeMTG(:/, :Plant, 1, 1))
+small_plant[:functional_group] = &quot;example_plant&quot;
+small_plant[:object_id] = 1
+
+first_phy = emit_phytomer!(
+    small_plant;
+    internode=(link=:/, index=1, length=0.20, width=0.022),
+    leaf=(index=1, offset=0.15, length=0.22, width=0.05, thickness=0.02, y_insertion_angle=52.0),
+)
+
+second_phy = emit_phytomer!(
+    first_phy.internode;
+    internode=(index=2, length=0.18, width=0.020),
+    leaf=(index=2, offset=0.14, length=0.24, width=0.055, thickness=0.02, phyllotaxy=180.0, y_insertion_angle=54.0),
+)
+
+scene_mtg</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">/ 1: Scene
+└─ / 2: Plant
+   └─ / 3: Internode
+      ├─ + 4: Leaf
+      └─ &lt; 5: Internode
+         └─ + 6: Leaf
+</code></pre><p>By default, the growth API from <code>PlantGeom</code> uses <code>:Internode</code> and <code>:Leaf</code> symbols for the component types. The component type names are important because they link the geometry to the optical models later on.</p><p>This example is taken from PlantGeom&#39;s documentation, and annotated with ARCHIMED metadata (<code>functional_group</code>, <code>object_id</code>) so it can be passed to <code>ArchimedLight.jl</code>.</p><p>The only addition we had to make was to declare the <code>functional_group</code> of the plant as an attribute, because <code>ArchimedLight.jl</code> uses the functional group to link the geometry to the models. The <code>object_id</code> is not mandatory, it is used to identify the plants in the scene. If not specified, the plants are numbered by their order as scene children.</p><p>We can now visualize the MTG with <code>plantviz</code>:</p><pre><code class="language-julia hljs">rebuild_geometry!(scene_mtg, prototypes)
+plantviz(scene_mtg, figure=(size=(820, 560),))</code></pre><img src="24c61a58.png" alt="Example block output"/><h2 id="Convert-To-SceneGeometry"><a class="docs-heading-anchor" href="#Convert-To-SceneGeometry">Convert To SceneGeometry</a><a id="Convert-To-SceneGeometry-1"></a><a class="docs-heading-anchor-permalink" href="#Convert-To-SceneGeometry" title="Permalink"></a></h2><p>The MTG is not yet in the format needed by <code>ArchimedLight.jl</code>. We need to convert it to a <code>PlantGeom.SceneGeometry</code> with the <code>PlantGeom.prepare_scene</code> function:</p><pre><code class="language-julia hljs">scene = PlantGeom.prepare_scene(scene_mtg;scene_xy_bounds=(-0.8, -0.8, 0.8, 0.8))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">PlantGeom.SceneGeometry{MultiScaleTreeGraph.Node{MultiScaleTreeGraph.NodeMTG, MultiScaleTreeGraph.ColumnarAttrs}, GeometryBasics.Mesh{3, Float64, GeometryBasics.TriangleFace{Int64}, (:position,), Tuple{Vector{Point{3, Float64}}}, Vector{GeometryBasics.TriangleFace{Int64}}}, Float64}(/ 1: Scene
+└─ / 2: Plant
+   └─ / 3: Internode
+      ├─ + 4: Leaf
+      └─ &lt; 5: Internode
+         └─ + 6: Leaf
+, Mesh{3, Float64, GeometryBasics.TriangleFace{Int64}}(...), [3, 3, 3, 3, 3, 3, 3, 3, 3, 3  …  6, 6, 6, 6, 6, 6, 6, 6, 6, 6], Dict{Int64, PlantGeom.SceneNodeData{Float64}}(5 =&gt; PlantGeom.SceneNodeData{Float64}(0.011837336268772699, (1.654342180468932e-17, -1.095701913871222e-19, 0.29000000000000004), 5), 4 =&gt; PlantGeom.SceneNodeData{Float64}(0.007817598115745169, (0.09404229655567382, 5.819553911166995e-20, 0.21735299503467223), 4), 6 =&gt; PlantGeom.SceneNodeData{Float64}(0.00938078495996715, (-0.10426201051805005, 1.234873787408184e-17, 0.4101334094996882), 6), 3 =&gt; PlantGeom.SceneNodeData{Float64}(0.014460398601154693, (6.0873323407844364e-18, 4.246763202712342e-19, 0.1000000000000001), 3)), &quot;interactive.scene&quot;, (-0.8, -0.8, 0.8, 0.8))</code></pre><p><code>PlantGeom.prepare_scene</code> computes the merged mesh, node areas, barycentres, and node-to-face mapping needed by the light solver. The <code>scene_xy_bounds</code> are used for the rasterization stage, so they should be chosen to fit the plant geometry.</p><h2 id="Add-Models"><a class="docs-heading-anchor" href="#Add-Models">Add Models</a><a id="Add-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Add-Models" title="Permalink"></a></h2><p>ArchimedLight.jl needs optical models to compute light interception. We can define them directly in Julia as <code>GroupModel</code> and <code>TypeModel</code> objects, then prepare them with <code>prepare_models</code>. The example below defines two group models: one for the plant and one for the pavement. Each group model has one type model with <code>Translucent</code> interception and specific optical properties.</p><p>The pavement model is included here because we will add an explicit ground later on, and we want it to have different optical properties from the plant. Optical properties are defined as <code>(scattering_coeff_par, scattering_coeff_nir)</code>, where the absorbed fraction is <code>1 - scattering_coeff</code>.</p><pre><code class="language-julia hljs">models = prepare_models([
+    GroupModel(
+        &quot;example_plant&quot;;
+        types=OrderedDict(
+            &quot;Internode&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+            &quot;Leaf&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.15, 0.90),
+                ),
+            ),
+        ),
+    ),
+    GroupModel(
+        &quot;pavement&quot;;
+        types=OrderedDict(
+            &quot;Cobblestone&quot; =&gt; TypeModel(
+                interception=InterceptionModel(
+                    model=&quot;Translucent&quot;,
+                    transparency=0.0,
+                    optical_properties=OpticalProperties(0.12, 0.60),
+                ),
+            ),
+        ),
+    ),
+])
+
+keys(models.groups) |&gt; collect</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">2-element Vector{String}:
+ &quot;example_plant&quot;
+ &quot;pavement&quot;</code></pre><p>That pattern is convenient for synthetic scenes, tests, and gradual model setup.</p><h2 id="Add-Ground-Explicitly"><a class="docs-heading-anchor" href="#Add-Ground-Explicitly">Add Ground Explicitly</a><a id="Add-Ground-Explicitly-1"></a><a class="docs-heading-anchor-permalink" href="#Add-Ground-Explicitly" title="Permalink"></a></h2><p>The ground can be added as a special case of scene geometry with <code>PlantGeom.add_ground!</code>. This is useful when:</p><ul><li>you want to include the ground in the directional visibility and scattering calculations for better realism near the soil</li><li>you want to visualize the soil interception with an explicit ground patch</li></ul><pre><code class="language-julia hljs">add_ground!(
+    scene;
+    nx=60,
+    ny=60,
+    xy_bounds=(-0.8, -0.8, 0.8, 0.8),
+    group=&quot;pavement&quot;,
+    type=&quot;Cobblestone&quot;,
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">PlantGeom.SceneGeometry{MultiScaleTreeGraph.Node{MultiScaleTreeGraph.NodeMTG, MultiScaleTreeGraph.ColumnarAttrs}, GeometryBasics.Mesh{3, Float64, GeometryBasics.TriangleFace{Int64}, (:position,), Tuple{Vector{Point{3, Float64}}}, Vector{GeometryBasics.TriangleFace{Int64}}}, Float64}(/ 1: Scene
+├─ / 2: Plant
+│  └─ / 3: Internode
+│     ├─ + 4: Leaf
+│     └─ &lt; 5: Internode
+│        └─ + 6: Leaf
+├─ + 7: Cobblestone
+├─ + 8: Cobblestone
+├─ + 9: Cobblestone
+├─ + 10: Cobblestone
+├─ + 11: Cobblestone
+├─ + 12: Cobblestone
+├─ + 13: Cobblestone
+├─ + 14: Cobblestone
+├─ + 15: Cobblestone
+├─ + 16: Cobblestone
+├─ + 17: Cobblestone
+├─ + 18: Cobblestone
+├─ + 19: Cobblestone
+├─ + 20: Cobblestone
+├─ + 21: Cobblestone
+├─ + 22: Cobblestone
+├─ + 23: Cobblestone
+├─ + 24: Cobblestone
+…, Mesh{3, Float64, GeometryBasics.TriangleFace{Int64}}(...), [3, 3, 3, 3, 3, 3, 3, 3, 3, 3  …  3602, 3602, 3603, 3603, 3604, 3604, 3605, 3605, 3606, 3606], Dict{Int64, PlantGeom.SceneNodeData{Float64}}(2288 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111101521388719, (0.22666666656732562, -0.7599999904632568, 0.0), 2288), 1703 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111112448904278, (-0.04000000096857548, -0.3599999994039535, 0.0), 1703), 1956 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111110462082737, (0.06666666641831397, -0.013333333656191826, 0.0), 1956), 2350 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111125363250537, (0.2533333376049995, -0.7066666781902313, 0.0), 2350), 3406 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111125363250537, (0.7066666781902313, 0.2533333376049995, 0.0), 3406), 2841 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111105495027914, (0.4666666686534881, -0.41333334147930145, 0.0), 2841), 2876 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111113442306305, (0.46666666865348816, 0.5200000107288361, 0.0), 2876), 687 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111117415958823, (-0.4933333247900009, -0.25333333760499954, 0.0), 687), 185 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111097547749523, (-0.7333333492279053, 0.7599999904632568, 0.0), 185), 1090 =&gt; PlantGeom.SceneNodeData{Float64}(0.0007111121389602459, (-0.30666665732860565, -0.7066666781902313, 0.0), 1090)…), &quot;interactive.scene&quot;, (-0.8, -0.8, 0.8, 0.8))</code></pre><p>We can now visualize the plant and the ground together:</p><pre><code class="language-julia hljs">plantviz(scene.mtg, figure=(size=(820, 560),))</code></pre><img src="c32fe735.png" alt="Example block output"/><h2 id="Run-One-Simulation-And-Visualize-It"><a class="docs-heading-anchor" href="#Run-One-Simulation-And-Visualize-It">Run One Simulation And Visualize It</a><a id="Run-One-Simulation-And-Visualize-It-1"></a><a class="docs-heading-anchor-permalink" href="#Run-One-Simulation-And-Visualize-It" title="Permalink"></a></h2><p>The example below runs a single light simulation on that plant, and visualizes the result directly in 3D.</p><p>First, we define the sky conditions with a <code>SkyState</code>:</p><pre><code class="language-julia hljs">sky = SkyState(
+    135.0,  # sun azimuth in degrees
+    60.0,   # sun elevation in degrees
+    350.0,  # PAR irradiance on horizontal ground, W m^-2
+    250.0,  # NIR irradiance on horizontal ground, W m^-2
+    0.95,   # direct fraction
+    0.05,   # diffuse fraction
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">SkyState(135.0, 60.0, 600.0, 350.0, 250.0, 0.95, 0.05)</code></pre><p>This can be replaced with a row from a <code>MeteoTable</code>, and ArchimedLight.jl will compute the <code>SkyState</code> from the solar geometry and irradiance values in the meteo file.</p><p>Then we define the <code>LightOptions</code>, which defines simulations parameters such as the number of turtle sectors, pixel size, toricity, and scattering behavior:</p><pre><code class="language-julia hljs">options = LightOptions(
+    turtle_sectors=16,
+    pixel_size=0.01,
+    toricity=true,
+    scattering=false,
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">LightOptions(false, 16, 0.01, true, false, 20, 0.01, 0.15, 0.3, false, false, false, &quot;auto&quot;, true, 15.0, false, true, true, false, nothing, false, false, nothing)</code></pre><p>Finally, we create a <code>LightSimulation</code> and run one light step:</p><pre><code class="language-julia hljs">sim = LightSimulation(scene, models; options=options)
+step = run_light(sim, sky; step_duration_seconds=1800.0)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi"><span class="sgr36"><span class="sgr1">LightStepResult</span></span>
+<span class="sgr90">  ------------------------------------------------------------</span>
+  <span class="sgr94"><span class="sgr1">sky        </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 350 W m^-2  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 250 W m^-2
+  <span class="sgr94"><span class="sgr1">sun        </span></span>azimuth 135°  |  elevation 60°
+  <span class="sgr94"><span class="sgr1">mix        </span></span>direct 95%  |  diffuse 5%  |  SW 600 W m^-2
+  <span class="sgr94"><span class="sgr1">turtle     </span></span>17 sectors (sky=16, sun=1)
+<span class="sgr90">  ------------------------------------------------------------</span>
+  <span class="sgr94"><span class="sgr1">incident   </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 1.612 MJ  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 1.152 MJ
+  <span class="sgr94"><span class="sgr1">absorbed   </span></span><span class="sgr1"><span class="sgr32">PAR</span></span> 1.419 MJ  |  <span class="sgr33"><span class="sgr1">NIR</span></span> 458.082 kJ
+  <span class="sgr94"><span class="sgr1">scattering </span></span>off  |  iterations 0  |  converged n/a
+<span class="sgr90">  ------------------------------------------------------------</span>
+</code></pre><p>The same <code>LightSimulation</code> can also be reused with meteo rows or meteo tables. Use the staged pipeline only when you need to inspect or customize internal solver stages.</p><p>To visualize the spatial distribution of light, we need to attach the results back to the MTG with <code>attach_light_step!</code>:</p><pre><code class="language-julia hljs">attach_light_step!(scene, step; fields=[:incident_par_flux])</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">/ 1: Scene
+├─ / 2: Plant
+│  └─ / 3: Internode
+│     ├─ + 4: Leaf
+│     └─ &lt; 5: Internode
+│        └─ + 6: Leaf
+├─ + 7: Cobblestone
+├─ + 8: Cobblestone
+├─ + 9: Cobblestone
+├─ + 10: Cobblestone
+├─ + 11: Cobblestone
+├─ + 12: Cobblestone
+├─ + 13: Cobblestone
+├─ + 14: Cobblestone
+├─ + 15: Cobblestone
+├─ + 16: Cobblestone
+├─ + 17: Cobblestone
+├─ + 18: Cobblestone
+├─ + 19: Cobblestone
+├─ + 20: Cobblestone
+├─ + 21: Cobblestone
+├─ + 22: Cobblestone
+├─ + 23: Cobblestone
+├─ + 24: Cobblestone
+…</code></pre><p>Then we can plot the scene colored by <code>Ri_PAR_f</code>:</p><pre><code class="language-julia hljs">par_max = maximum(values(step.budget.incident_flux.total.par))
+
+fig, ax, p = plantviz(
+    scene.mtg;
+    color=:Ri_PAR_f,
+    colormap=:thermal,
+    colorrange=(0.0, par_max),
+    color_missing=:gray85,
+    figure=(size=(900, 700),),
+)
+
+ax.show_axis[] = false
+PlantGeom.colorbar(fig[1, 2], p, label=&quot;Ri_PAR_f (W m^-2)&quot;)
+fig</code></pre><img src="ec31d42b.png" alt="Example block output"/><h2 id="Practical-Advice"><a class="docs-heading-anchor" href="#Practical-Advice">Practical Advice</a><a id="Practical-Advice-1"></a><a class="docs-heading-anchor-permalink" href="#Practical-Advice" title="Permalink"></a></h2><ul><li>pass <code>scene_xy_bounds=</code> explicitly when your scene was not read from an <code>.ops</code></li><li>add ground explicitly with <code>PlantGeom.add_ground!</code> when you want inspectable paving or better scattering realism near the soil</li><li>use <code>attach_light_step!</code> once you want to visualize the results through <code>PlantGeom</code></li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../tutorial_files/">« File-Based Workflow</a><a class="docs-footer-nextpage" href="../onboarding_templates/">Copy-Paste Templates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 6 July 2026 10:56">Monday 6 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
