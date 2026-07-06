@@ -2,9 +2,9 @@
 
 [![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/stable)
 [![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/dev)
-[![Test workflow status](https://github.com/ARCHIMED-platform/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/ARCHIMED-platform/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
-[![Docs workflow Status](https://github.com/ARCHIMED-platform/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/ARCHIMED-platform/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
-[![All Contributors](https://img.shields.io/github/all-contributors/ARCHIMED-platform/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
+[![Test workflow status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
+[![Docs workflow Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
+[![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
 [![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
 
 Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
@@ -234,7 +234,7 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
   --test-root /path/to/heavy-test-root \
   --tarball /tmp/archimedlight-release-fixtures.tar.gz \
   --refresh-references \
-  --url https://github.com/ARCHIMED-platform/ArchimedLight.jl/releases/download/v0.0.1/archimedlight-release-fixtures-v0.0.1.tar.gz
+  --url https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.0.1/archimedlight-release-fixtures-v0.0.1.tar.gz
 ```
 
 Run release-only heavy regression:
@@ -275,7 +275,7 @@ The repository includes a separate benchmark project for `AirspeedVelocity.jl` u
 
 ## How to Cite
 
-If you use ArchimedLight.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/ARCHIMED-platform/ArchimedLight.jl/blob/main/CITATION.cff).
+If you use ArchimedLight.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/VEZY/ArchimedLight.jl/blob/main/CITATION.cff).
 
 ---
 
