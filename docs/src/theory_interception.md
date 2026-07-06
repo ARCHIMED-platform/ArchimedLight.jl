@@ -10,6 +10,12 @@ This is the `Mir` stage in the historical ARCHIMED software developed by Jean Da
 
 The canopy is treated as a set of surfaces, implemented as triangle meshes. Each leaf, stem, soil tile, or object contributes through its mesh faces.
 
+Compared to other simpler approaches, this means that:
+
+- visibility is geometric
+- occlusion is explicit, which is important for downstream processes such as photosynthesis, energy balance, and scattering
+- the solver works at the level of surfaces and projected areas
+
 ## Why Projection Instead Of Full Ray Tracing
 
 ARCHIMED’s efficiency comes from a very specific compromise. It:

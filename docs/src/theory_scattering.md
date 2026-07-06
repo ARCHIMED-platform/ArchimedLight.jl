@@ -2,6 +2,10 @@
 
 After first-order interception, ARCHIMED can redistribute part of the intercepted energy between scene components through iterative scattering.
 
+## Scattering In One Sentence
+
+The model takes the energy first intercepted by each component, applies a waveband-specific scattering coefficient, and redistributes that scattered pool between adjacent visible hits along the same directional ray paths used for interception.
+
 The light intercepted by an object can be either absorbed, reflected, or transmitted:
 
 ![Reflectance, transmittance, absorptance](assets/optical_properties_reflectance_transmittance.jpg)
@@ -15,17 +19,16 @@ In practice, the model takes the energy first intercepted by each object compute
 The figure shows the three steps used to turn first-order ray paths into
 scattering transfers.
 
-For one light direction, and the three components depicted in the figure, the algorithm runs in two main steps:
+Panel 1 shows the geometric information that ARCHIMED reuses. For each turtle
+direction, the scene is projected onto a raster grid and each pixel ray records
+the ordered stack of objects it crosses. In the figure, the short double-headed
+arrows mark the ray segments where energy can be exchanged in both directions: purple between the top and middle
+objects, teal between the top and bottom objects, and orange between the middle
+and bottom objects.
 
-**Step 1: Build the visibility links (panel 1&2)**
+Energy exchange is then computed using links (Panel 2) between nodes that present shared ray segments. The links are built from the number of shared hits along the ray path, and they are used to transfer energy between the nodes in proportion to their shared ray paths. Each node's scattering coefficient determines how much of its intercepted energy is redistributed, and the pair links determine how that scattered energy is shared with their neighbors.
 
-We shoot many parallel rays from the sky direction through the pixels. Some rays hit the components directly (yellow arrows). This step is the first-order interception stage, which computes the intercepted energy for each component. Then, some light is transmitted or reflected and continues along the ray path (panel 1). Some of those rays hit other components, and some escape to the sky. The algorithm counts how many rays connect each pair of components along the ray path, to tell us who is visible from whom, and how strongly (depending on the number of common rays).
-
-**Step 2: Exchange energy  (panel 3)**
-
-Based on the visibility links (which organ sees which, and how many rays connect them), the algorithm redistributes the scattered energy between components. Each component absorbs part of the energy, and transmits or reflects the rest to its neighbors again. The more rays connect two components, the more energy is exchanged between them. We do this iteratively until the remaining scattered energy in the scene is small enough to stop.
-
-In more detail, panel 3 shows how the graph is used during propagation. A node's current power is
+Panel 3 shows how the graph is used during propagation. A node's current power is
 multiplied by its scattering coefficient, normalized by its total number of
 relevant directional hits, and split between the two transfer sides. Each pair
 link then receives that per-hit share multiplied by its common-hit count, so
