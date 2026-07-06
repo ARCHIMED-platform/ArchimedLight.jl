@@ -107,6 +107,69 @@ end
     @test cached.cache === nothing
 end
 
+@testitem "Beginner API write_component_values" tags = [:beginner_api, :fast] begin
+    using ArchimedLight
+    using CSV
+    using Tables
+
+    config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
+    options, scene, meteo, models = ArchimedLight.read_config(config)
+    sim = LightSimulation(scene, models; options=options)
+    series = run_light(sim, meteo)
+    step = first(series)
+    node_count = length(ArchimedLight._component_output_node_ids(sim.scene, sim.models, sim.options))
+
+    single_path = joinpath(mktempdir(), "nested", "component_values.csv")
+    @test write_component_values(single_path, sim, step) == single_path
+    @test isfile(single_path)
+    @test occursin(';', readline(single_path))
+    single_rows = collect(Tables.rowtable(CSV.File(single_path; delim=';', normalizenames=false)))
+    @test length(single_rows) == node_count
+    @test unique(Int(row.step_number) for row in single_rows) == [1]
+
+    expected_columns = Set([
+        "step_number",
+        "node_id",
+        "source_topology_id",
+        "object_id",
+        "item_id",
+        "component_id",
+        "group",
+        "type",
+        "area",
+        "barycentre_z",
+        "sky_fraction",
+        "Ri_PAR_0_f",
+        "Ri_NIR_0_f",
+        "Ri_PAR_0_q",
+        "Ri_NIR_0_q",
+        "Ra_PAR_0_q",
+        "Ra_NIR_0_q",
+    ])
+    @test expected_columns ⊆ Set(string.(propertynames(first(single_rows))))
+
+    series_path = joinpath(mktempdir(), "component_values.csv")
+    write_component_values(series_path, sim, series)
+    series_rows = collect(Tables.rowtable(CSV.File(series_path; delim=';', normalizenames=false)))
+    @test length(series_rows) == node_count * length(series)
+    @test sort!(unique(Int(row.step_number) for row in series_rows)) == collect(1:length(series))
+
+    zero_path = joinpath(mktempdir(), "component_values.csv")
+    write_component_values(zero_path, sim, series; step_index_base=0)
+    zero_rows = collect(Tables.rowtable(CSV.File(zero_path; delim=';', normalizenames=false)))
+    @test sort!(unique(Int(row.step_number) for row in zero_rows)) == collect(0:(length(series)-1))
+
+    scattering_options = LightOptions(options; scattering=true)
+    scattering_sim = LightSimulation(scene, models; options=scattering_options)
+    scattering_step = run_light(scattering_sim, first(prepare_meteo(meteo, scattering_options).rows))
+    @test scattering_step.scattering !== nothing
+    scattering_path = joinpath(mktempdir(), "component_values.csv")
+    write_component_values(scattering_path, scattering_sim, scattering_step)
+    scattering_rows = collect(Tables.rowtable(CSV.File(scattering_path; delim=';', normalizenames=false)))
+    scattering_columns = Set(string.(propertynames(first(scattering_rows))))
+    @test Set(["Ri_PAR_f", "Ri_NIR_f", "Ri_PAR_q", "Ri_NIR_q", "Ra_PAR_q", "Ra_NIR_q"]) ⊆ scattering_columns
+end
+
 @testitem "Beginner API run_light accepts SkyState" tags = [:beginner_api, :fast] begin
     using ArchimedLight
 
