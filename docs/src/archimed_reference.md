@@ -60,6 +60,8 @@ The Julia implementation mirrors this in two steps. First, `compute_sky` derives
 
 ![ARCHIMED light pipeline](assets/archimed_pipeline_overview.svg)
 
+The six panels in the figure are a compact map of this reference: Step 1 is input and scene preparation, Step 2 is the directional sky, Step 3 is projection and ordered pixel stacks, Step 4 is first-order interception, Step 5 is MuSc scattering, and Step 6 is the MTG-indexed output tables.
+
 ## The turtle discretization
 
 The "turtle" is the directional skeleton of the method. It is a fixed set of directions over the hemisphere, each associated with a solid-angle-like weight. The Java class `Turtle` generates the standard ARCHIMED sets with 1, 6, 16, 46, 136, or 406 sectors. When `allInTurtle=false`, Java appends one extra direction for the explicit direct beam. This creates a clean separation between diffuse illumination and direct solar illumination.

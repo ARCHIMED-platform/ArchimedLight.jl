@@ -2,24 +2,29 @@
 
 This page shows the three common ways to use `ArchimedLight.jl`.
 
-The central idea is always the same:
+The central idea is always the same and revolves around two steps:
 
 ```text
 Scene + Models + Options -> LightSimulation
 LightSimulation + Meteo -> light results
 ```
 
+The first step prepares the geometry and the optical models, and the second step runs the light simulation for one or more meteo rows. The `LightSimulation` object owns the prepared geometry and optional radiation cache.
+
 ## 1. Run From Files
 
 Use this when you already have a `config.yml` that points to a scene, model
-files, and a meteo file.
+files, and a meteo file (this is the historical approach).
 
 ```julia
 using ArchimedLight
 
 sim, meteo = read_simulation("config.yml")
 
+# Run one time step:
 step = run_light(sim, first(meteo))
+
+# Run all time steps:
 series = run_light(sim, meteo)
 ```
 
@@ -36,18 +41,25 @@ Use `incident_flux` for irradiance in `W m^-2`, and `incident_energy` or
 
 ## 2. Build Inputs Interactively
 
-Use this when the plant is created in Julia or imported object by object.
+Use this when the plant is created in Julia or imported object by object. In other words, when you want to build the scene and models interactively instead of reading them from files.
 
 ```julia
 using ArchimedLight
 using PlantGeom
 using FileIO, MeshIO
 
+# You can load a 3D object from a file:
 sensor_mesh = load("sensor.obj")
 
+# Then call `make_scene` to build the scene interactively:
 scene = make_scene(domain=(-1.0, -1.0, 1.0, 1.0)) do s
+    # opf and gwa files can be added by path directly (here, "plant.opf" is supposed to be a file in the current working directory):
     add_plant!(s, "plant.opf"; group="coffee", id=1, at=(0.0, 0.0, 0.0), scale=0.9)
+
+    # If you already have an object in memory, just pass it to `add_object!`:
     add_object!(s, sensor_mesh; group="sensor", type="panel", id=10, at=(0.5, 0.0, 1.2), rotate=(z=90.0,), deg=true)
+
+    # The ground is a particular object, so it has a dedicated function to add it to the scene:
     add_ground!(s; group="soil", type="ground", nx=20, ny=20)
 end
 ```
@@ -76,10 +88,15 @@ models = models_for(
 )
 ```
 
-Only nodes with geometry need a model. Grouping nodes such as plant, axis, or
-phytomer nodes do not.
+"coffee" and "soil" are the functional groups of the scene nodes, given in the `group` argument of `add_plant!`, `add_object!`, or `add_ground!` (or in the `ops` file if the scene is read from a file).
 
-Meteo can come from a file, `PlantMeteo`, or any Tables.jl-compatible table:
+"Leaf", "Stem", and "ground" are the component types of the scene nodes, either given in the `type` argument of `add_object!`, or inferred from the object's MultiScaleTreeGraph symbols.
+
+Only nodes with geometry need a model. Grouping nodes such as plant, axis, or phytomer nodes do not.
+
+If you don't know the functional groups and component types of your scene, use `summarize_scene(scene)` to see them.
+
+Meteo can come from a file, `PlantMeteo`, or any Tables.jl-compatible table. Here's an example of a simple meteo table built from a vector of tuples (with one row):
 
 ```julia
 meteo = [
