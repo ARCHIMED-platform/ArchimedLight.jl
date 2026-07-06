@@ -1,5 +1,6 @@
 using ArchimedLight
 using Artifacts: artifact_hash, artifact_path
+using Dates
 using KernelAbstractions
 using Pkg.Artifacts: ensure_artifact_installed
 using Printf
@@ -19,7 +20,7 @@ const DEFAULT_SCENES = [
     "elaeis_two_plants",
 ]
 const DEFAULT_BACKENDS = ["normal_cpu", "rastergpu_metal", "raycore_metal"]
-const DEFAULT_DIRECTIONS = [16, 48, 136]
+const DEFAULT_DIRECTIONS = [16, 46, 136]
 const DEFAULT_PIXELS_CM = [0.1, 0.5, 1.0, 10.0]
 const DEFAULT_BOOL = [false, true]
 const DEFAULT_STEPS = [1, 12, 24, 48]
@@ -73,6 +74,30 @@ function _split_symbol_env(name::AbstractString, default::Vector{Symbol})
     return [Symbol(strip(value)) for value in split(raw, ',') if !isempty(strip(value))]
 end
 
+function _int_or_auto_env(name::AbstractString, default)
+    raw = get(ENV, name, "")
+    isempty(strip(raw)) && return default
+    value = lowercase(strip(raw))
+    value == "auto" && return :auto
+    return parse(Int, value)
+end
+
+_timestamp() = Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS")
+
+function _log_progress(message::AbstractString; kwargs...)
+    print("[", _timestamp(), "] ", message)
+    for (key, value) in kwargs
+        print(" ", key, "=", value)
+    end
+    println()
+    flush(stdout)
+    return nothing
+end
+
+function _case_label(case)
+    return string(case.name, case.toric_traversal == :not_applicable ? "" : "[$(case.toric_traversal)]")
+end
+
 const BENCH_SCENES = _split_string_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_SCENES", DEFAULT_SCENES)
 const BENCH_BACKENDS = _split_string_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_BACKENDS", DEFAULT_BACKENDS)
 const BENCH_DIRECTIONS = _split_int_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_DIRECTIONS", DEFAULT_DIRECTIONS)
@@ -88,13 +113,77 @@ const BENCH_OUTPUT = get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_OUTPUT", DEFAULT_OUT
 const BENCH_DRY_RUN = _env_bool("ARCHIMEDLIGHT_ARTIFACT_BENCH_DRY_RUN", false)
 const BENCH_MAX_PIXEL_CELLS = parse(Int, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_MAX_PIXEL_CELLS", "25000000"))
 const BENCH_STEP_SECONDS = parse(Float64, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_STEP_SECONDS", "1800.0"))
-const BENCH_MAX_HITS = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_MAX_HITS", "32"))
+const BENCH_MAX_HITS = _int_or_auto_env("ARCHIMEDLIGHT_BENCH_MAX_HITS", :auto)
 const BENCH_WORKGROUPSIZE = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_WORKGROUPSIZE", "256"))
 const BENCH_EDGE_ACCUMULATION = Symbol(get(ENV, "ARCHIMEDLIGHT_BENCH_EDGE_ACCUMULATION", "auto"))
-const BENCH_RASTERGPU_TILE_SIZE = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_SIZE", "1"))
+const BENCH_RASTERGPU_TILE_SIZE = _int_or_auto_env("ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_SIZE", :auto)
 const BENCH_RASTERGPU_TILE_FACE_CAPACITY =
-    parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_FACE_CAPACITY", "32"))
+    _int_or_auto_env("ARCHIMEDLIGHT_BENCH_RASTERGPU_TILE_FACE_CAPACITY", :auto)
+const BENCH_RASTERGPU_AUTO_RETRIES = parse(Int, get(ENV, "ARCHIMEDLIGHT_BENCH_RASTERGPU_AUTO_RETRIES", "4"))
 const BENCH_VALIDATE = _env_bool("ARCHIMEDLIGHT_BENCH_VALIDATE", true)
+const BENCH_SKIP_HUGE_CASES = _env_bool("ARCHIMEDLIGHT_ARTIFACT_BENCH_SKIP_HUGE_CASES", true)
+const BENCH_SKIP_HUGE_MIN_DIRECTIONS =
+    parse(Int, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_SKIP_HUGE_MIN_DIRECTIONS", "136"))
+const BENCH_SKIP_HUGE_MIN_HOURS =
+    parse(Float64, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_SKIP_HUGE_MIN_HOURS", "2.0"))
+const RESULT_COLUMNS = Symbol[
+    :scene,
+    :scene_path,
+    :backend,
+    :toric_traversal,
+    :directions,
+    :pixel_size_cm,
+    :pixel_size_m,
+    :scattering,
+    :cache_radiation,
+    :steps,
+    :samples,
+    :nodes,
+    :faces,
+    :objects,
+    :domain_x,
+    :domain_y,
+    :pixel_cells_estimate,
+    :plot_nx_estimate,
+    :plot_ny_estimate,
+    :status,
+    :error_type,
+    :error_message,
+    :median_ms,
+    :min_ms,
+    :max_ms,
+    :median_alloc_mb,
+    :resolved_backend,
+    :geometry_mode,
+    :raycore_chunked,
+    :raycore_tlas_instances,
+    :raycore_tlas_geometries,
+    :raycore_expanded_face_count,
+    :rastergpu_fused_dense,
+    :rastergpu_max_hits_per_pixel,
+    :rastergpu_tile_size,
+    :rastergpu_tile_face_capacity,
+    :rastergpu_edge_accumulation,
+    :rastergpu_retry_count,
+    :incident_par,
+    :incident_nir,
+    :absorbed_par,
+    :absorbed_nir,
+    :par_delta_percent,
+    :nir_delta_percent,
+    :absorbed_par_delta_percent,
+    :absorbed_nir_delta_percent,
+]
+
+function _preload_metal_if_requested()
+    selected = lowercase.(BENCH_BACKENDS)
+    ("rastergpu_metal" in selected || "raycore_metal" in selected) || return nothing
+    Sys.isapple() && Sys.ARCH == :aarch64 || return nothing
+    Base.find_package("Metal") === nothing && return nothing
+    return Base.require(Main, :Metal)
+end
+
+const BENCH_METAL_MODULE = _preload_metal_if_requested()
 
 function _validate_raycore_toric_traversal_values(values)
     allowed = Set(DEFAULT_RAYCORE_TORIC_TRAVERSAL)
@@ -197,7 +286,7 @@ function _metal_backend()
         return nothing, "Metal.jl is not available in this Julia environment."
     end
     try
-        metal_mod = Base.require(Main, :Metal)
+        metal_mod = BENCH_METAL_MODULE === nothing ? Base.require(Main, :Metal) : BENCH_METAL_MODULE
         array_type = getproperty(metal_mod, :MtlArray)
         dev_array = Base.invokelatest(array_type, zeros(Float32, 1))
         backend = Base.invokelatest(KernelAbstractions.get_backend, dev_array)
@@ -205,6 +294,107 @@ function _metal_backend()
     catch err
         return nothing, "Could not initialize Metal backend: $(sprint(showerror, err))"
     end
+end
+
+_setting_is_auto(value) = value === :auto
+_setting_value(value, fallback::Int) = _setting_is_auto(value) ? fallback : Int(value)
+
+function _rastergpu_auto_requested()
+    return _setting_is_auto(BENCH_MAX_HITS) ||
+           _setting_is_auto(BENCH_RASTERGPU_TILE_SIZE) ||
+           _setting_is_auto(BENCH_RASTERGPU_TILE_FACE_CAPACITY)
+end
+
+function _next_bucket(value::Integer)
+    buckets = (32, 64, 96, 128, 160, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096)
+    target = max(1, ceil(Int, 1.15 * value))
+    for bucket in buckets
+        bucket >= target && return bucket
+    end
+    return target
+end
+
+function _observed_capacity(message::AbstractString, field::AbstractString)
+    m = match(Regex(field * "=(\\d+)"), message)
+    m === nothing && return nothing
+    return parse(Int, m.captures[1])
+end
+
+function _rastergpu_initial_config(scene_name::AbstractString, metrics)
+    dense_canopy = occursin("elaeis", lowercase(scene_name))
+    default_max_hits = dense_canopy ? 192 : 128
+    default_tile_face_capacity = dense_canopy ? 256 : 128
+    return (
+        max_hits_per_pixel=_setting_value(BENCH_MAX_HITS, default_max_hits),
+        tile_size=_setting_value(BENCH_RASTERGPU_TILE_SIZE, 1),
+        tile_face_capacity=_setting_value(BENCH_RASTERGPU_TILE_FACE_CAPACITY, default_tile_face_capacity),
+        edge_accumulation=BENCH_EDGE_ACCUMULATION,
+    )
+end
+
+function _rastergpu_config_with_retry(config, message::AbstractString)
+    observed_tile_capacity = _observed_capacity(message, "observed_max_tile_face_capacity")
+    observed_hits = _observed_capacity(message, "observed_max_hits_per_pixel")
+    next_tile_capacity = config.tile_face_capacity
+    next_max_hits = config.max_hits_per_pixel
+
+    if observed_tile_capacity !== nothing && _setting_is_auto(BENCH_RASTERGPU_TILE_FACE_CAPACITY)
+        next_tile_capacity = max(config.tile_face_capacity, _next_bucket(observed_tile_capacity))
+    end
+    if observed_hits !== nothing && _setting_is_auto(BENCH_MAX_HITS)
+        next_max_hits = max(config.max_hits_per_pixel, _next_bucket(observed_hits))
+    end
+
+    if next_tile_capacity == config.tile_face_capacity && next_max_hits == config.max_hits_per_pixel
+        return nothing
+    end
+    return (
+        max_hits_per_pixel=next_max_hits,
+        tile_size=config.tile_size,
+        tile_face_capacity=next_tile_capacity,
+        edge_accumulation=config.edge_accumulation,
+    )
+end
+
+function _make_rastergpu_backends(metal, config)
+    ib = ArchimedLight.RasterGPUBackend(
+        backend=metal,
+        max_hits_per_pixel=config.max_hits_per_pixel,
+        workgroupsize=BENCH_WORKGROUPSIZE,
+        tile_size=config.tile_size,
+        tile_face_capacity=config.tile_face_capacity,
+        edge_accumulation=config.edge_accumulation,
+    )
+    return ib, ArchimedLight.RasterGPUScatteringBackend(
+        ib;
+        edge_accumulation=config.edge_accumulation,
+    )
+end
+
+function _with_rastergpu_config(case, config)
+    ib, sb = _make_rastergpu_backends(case.metal_backend, config)
+    return merge(
+        case,
+        (
+            interception_backend=ib,
+            scattering_backend=sb,
+            rastergpu_max_hits_per_pixel=config.max_hits_per_pixel,
+            rastergpu_tile_size=config.tile_size,
+            rastergpu_tile_face_capacity=config.tile_face_capacity,
+            rastergpu_edge_accumulation=config.edge_accumulation,
+        ),
+    )
+end
+
+function _rastergpu_result_config(config, retry_count::Int; fused_dense=missing)
+    return (
+        rastergpu_max_hits_per_pixel=config.max_hits_per_pixel,
+        rastergpu_tile_size=config.tile_size,
+        rastergpu_tile_face_capacity=config.tile_face_capacity,
+        rastergpu_edge_accumulation=config.edge_accumulation,
+        rastergpu_fused_dense=fused_dense,
+        rastergpu_retry_count=retry_count,
+    )
 end
 
 function _backend_cases()
@@ -229,6 +419,7 @@ function _backend_cases()
                             interception_backend=nothing,
                             scattering_backend=nothing,
                             toric_traversal=toric_traversal,
+                            metal_backend=nothing,
                         ),
                     )
                 end
@@ -242,6 +433,7 @@ function _backend_cases()
                         interception_backend=nothing,
                         scattering_backend=nothing,
                         toric_traversal=:not_applicable,
+                        metal_backend=nothing,
                     ),
                 )
             end
@@ -262,6 +454,7 @@ function _backend_cases()
                     interception_backend=:raster_cpu,
                     scattering_backend=nothing,
                     toric_traversal=:not_applicable,
+                    metal_backend=nothing,
                 ),
             )
         elseif name == "rastergpu_metal"
@@ -275,17 +468,12 @@ function _backend_cases()
                         interception_backend=nothing,
                         scattering_backend=nothing,
                         toric_traversal=:not_applicable,
+                        metal_backend=nothing,
                     ),
                 )
             else
-                ib = ArchimedLight.RasterGPUBackend(
-                    backend=metal,
-                    max_hits_per_pixel=BENCH_MAX_HITS,
-                    workgroupsize=BENCH_WORKGROUPSIZE,
-                    tile_size=BENCH_RASTERGPU_TILE_SIZE,
-                    tile_face_capacity=BENCH_RASTERGPU_TILE_FACE_CAPACITY,
-                    edge_accumulation=BENCH_EDGE_ACCUMULATION,
-                )
+                config = _rastergpu_initial_config("", nothing)
+                ib, sb = _make_rastergpu_backends(metal, config)
                 push!(
                     cases,
                     (
@@ -293,11 +481,13 @@ function _backend_cases()
                         available=true,
                         unavailable_reason="",
                         interception_backend=ib,
-                        scattering_backend=ArchimedLight.RasterGPUScatteringBackend(
-                            ib;
-                            edge_accumulation=BENCH_EDGE_ACCUMULATION,
-                        ),
+                        scattering_backend=sb,
                         toric_traversal=:not_applicable,
+                        metal_backend=metal,
+                        rastergpu_max_hits_per_pixel=config.max_hits_per_pixel,
+                        rastergpu_tile_size=config.tile_size,
+                        rastergpu_tile_face_capacity=config.tile_face_capacity,
+                        rastergpu_edge_accumulation=config.edge_accumulation,
                     ),
                 )
             end
@@ -313,6 +503,7 @@ function _backend_cases()
                             interception_backend=nothing,
                             scattering_backend=nothing,
                             toric_traversal=toric_traversal,
+                            metal_backend=nothing,
                         ),
                     )
                 end
@@ -320,7 +511,7 @@ function _backend_cases()
                 for toric_traversal in BENCH_RAYCORE_TORIC_TRAVERSAL
                     ib = ArchimedLight.RaycoreInterceptionBackend(
                         backend=metal,
-                        max_hits_per_pixel=BENCH_MAX_HITS,
+                        max_hits_per_pixel=_setting_value(BENCH_MAX_HITS, 32),
                         workgroupsize=BENCH_WORKGROUPSIZE,
                         edge_accumulation=BENCH_EDGE_ACCUMULATION,
                         toric_traversal=toric_traversal,
@@ -338,6 +529,7 @@ function _backend_cases()
                                 edge_accumulation=BENCH_EDGE_ACCUMULATION,
                             ),
                             toric_traversal=toric_traversal,
+                            metal_backend=metal,
                         ),
                     )
                 end
@@ -502,6 +694,7 @@ function _cache_info(sim)
         raycore_tlas_instances=0,
         raycore_tlas_geometries=0,
         raycore_expanded_face_count=0,
+        rastergpu_fused_dense=missing,
     )
     if cache.raycore_data !== nothing
         shape = ArchimedLight._raycore_scene_shape_summary(cache.raycore_data)
@@ -512,9 +705,15 @@ function _cache_info(sim)
             raycore_tlas_instances=shape.tlas_instances,
             raycore_tlas_geometries=shape.tlas_geometries,
             raycore_expanded_face_count=shape.expanded_face_count,
+            rastergpu_fused_dense=missing,
         )
     end
     if hasproperty(cache, :rastergpu_data) && cache.rastergpu_data !== nothing
+        fused_dense = try
+            ArchimedLight._rastergpu_use_fused_dense_edges(cache.rastergpu_data)
+        catch
+            missing
+        end
         return (
             resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
             geometry_mode=:raster_gpu,
@@ -522,6 +721,7 @@ function _cache_info(sim)
             raycore_tlas_instances=0,
             raycore_tlas_geometries=0,
             raycore_expanded_face_count=0,
+            rastergpu_fused_dense=fused_dense,
         )
     end
     return (
@@ -531,13 +731,26 @@ function _cache_info(sim)
         raycore_tlas_instances=0,
         raycore_tlas_geometries=0,
         raycore_expanded_face_count=0,
+        rastergpu_fused_dense=missing,
     )
 end
 
-function _measure(scene, models, options, case, skies)
-    for _ in 1:BENCH_WARMUPS
+function _measure(scene, models, options, case, skies; row_context=nothing)
+    for warmup in 1:BENCH_WARMUPS
+        row_context !== nothing && _log_progress(
+            "warmup start";
+            row_context...,
+            warmup=warmup,
+            warmups=BENCH_WARMUPS,
+        )
         sim = _new_simulation(scene, models, options, case)
         _run_series(sim, skies)
+        row_context !== nothing && _log_progress(
+            "warmup done";
+            row_context...,
+            warmup=warmup,
+            warmups=BENCH_WARMUPS,
+        )
     end
 
     times_ms = Float64[]
@@ -550,19 +763,35 @@ function _measure(scene, models, options, case, skies)
         raycore_tlas_instances=0,
         raycore_tlas_geometries=0,
         raycore_expanded_face_count=0,
+        rastergpu_fused_dense=missing,
     )
-    for _ in 1:BENCH_SAMPLES
+    for sample in 1:BENCH_SAMPLES
         GC.gc()
         sim = _new_simulation(scene, models, options, case)
         series = Ref{Any}()
+        row_context !== nothing && _log_progress(
+            "sample start";
+            row_context...,
+            sample=sample,
+            samples=BENCH_SAMPLES,
+        )
         t0 = time_ns()
         bytes = @allocated begin
             series[] = _run_series(sim, skies)
         end
-        push!(times_ms, (time_ns() - t0) / 1e6)
+        elapsed_ms = (time_ns() - t0) / 1e6
+        push!(times_ms, elapsed_ms)
         push!(alloc_mb, Float64(bytes) / 1024.0^2)
         totals = _series_totals(series[])
         info = _cache_info(sim)
+        row_context !== nothing && _log_progress(
+            "sample done";
+            row_context...,
+            sample=sample,
+            samples=BENCH_SAMPLES,
+            elapsed_ms=round(elapsed_ms; digits=3),
+            alloc_mb=round(Float64(bytes) / 1024.0^2; digits=3),
+        )
     end
     return merge(
         (
@@ -577,6 +806,146 @@ function _measure(scene, models, options, case, skies)
         info,
         totals,
     )
+end
+
+function _measure_rastergpu_adaptive(
+    scene,
+    models,
+    options,
+    case,
+    skies,
+    scene_name,
+    metrics;
+    initial_config=nothing,
+    row_context=nothing,
+)
+    config = initial_config === nothing ? _rastergpu_initial_config(scene_name, metrics) : initial_config
+    last_error = nothing
+    last_message = ""
+
+    for retry_count in 0:BENCH_RASTERGPU_AUTO_RETRIES
+        configured_case = _with_rastergpu_config(case, config)
+        row_context !== nothing && _log_progress(
+            "rastergpu config attempt";
+            row_context...,
+            retry=retry_count,
+            max_hits=config.max_hits_per_pixel,
+            tile_size=config.tile_size,
+            tile_face_capacity=config.tile_face_capacity,
+            edge_accumulation=config.edge_accumulation,
+        )
+        try
+            measurement = _measure(scene, models, options, configured_case, skies; row_context=row_context)
+            return merge(
+                measurement,
+                _rastergpu_result_config(
+                    config,
+                    retry_count;
+                    fused_dense=measurement.rastergpu_fused_dense,
+                ),
+            )
+        catch err
+            last_error = err
+            last_message = sprint(showerror, err)
+            next_config = _rastergpu_config_with_retry(config, last_message)
+            if next_config === nothing || retry_count == BENCH_RASTERGPU_AUTO_RETRIES
+                row_context !== nothing && _log_progress(
+                    "rastergpu config failed";
+                    row_context...,
+                    retry=retry_count,
+                    max_hits=config.max_hits_per_pixel,
+                    tile_size=config.tile_size,
+                    tile_face_capacity=config.tile_face_capacity,
+                    error=last_message,
+                )
+                return merge(
+                    _empty_measurement(
+                        "error";
+                        error_type=string(nameof(typeof(err))),
+                        error_message=last_message,
+                    ),
+                    _rastergpu_result_config(config, retry_count),
+                )
+            end
+            row_context !== nothing && _log_progress(
+                "rastergpu retry";
+                row_context...,
+                retry=retry_count + 1,
+                previous_max_hits=config.max_hits_per_pixel,
+                previous_tile_face_capacity=config.tile_face_capacity,
+                next_max_hits=next_config.max_hits_per_pixel,
+                next_tile_face_capacity=next_config.tile_face_capacity,
+                error=last_message,
+            )
+            config = next_config
+        end
+    end
+
+    return merge(
+        _empty_measurement(
+            "error";
+            error_type=last_error === nothing ? "" : string(nameof(typeof(last_error))),
+            error_message=last_message,
+        ),
+        _rastergpu_result_config(config, BENCH_RASTERGPU_AUTO_RETRIES),
+    )
+end
+
+function _measure_case(
+    scene,
+    models,
+    options,
+    case,
+    skies,
+    scene_name,
+    metrics;
+    rastergpu_config_cache=nothing,
+    rastergpu_config_key=nothing,
+    row_context=nothing,
+)
+    if case.name == "rastergpu_metal" && _rastergpu_auto_requested()
+        initial_config =
+            rastergpu_config_cache !== nothing && rastergpu_config_key !== nothing ?
+            get(rastergpu_config_cache, rastergpu_config_key, nothing) :
+            nothing
+        measurement = _measure_rastergpu_adaptive(
+            scene,
+            models,
+            options,
+            case,
+            skies,
+            scene_name,
+            metrics;
+            initial_config=initial_config,
+            row_context=row_context,
+        )
+        if measurement.status == "ok" &&
+           rastergpu_config_cache !== nothing &&
+           rastergpu_config_key !== nothing
+            rastergpu_config_cache[rastergpu_config_key] = (
+                max_hits_per_pixel=measurement.rastergpu_max_hits_per_pixel,
+                tile_size=measurement.rastergpu_tile_size,
+                tile_face_capacity=measurement.rastergpu_tile_face_capacity,
+                edge_accumulation=measurement.rastergpu_edge_accumulation,
+            )
+        end
+        return measurement
+    end
+
+    measurement = _measure(scene, models, options, case, skies; row_context=row_context)
+    if case.name == "rastergpu_metal"
+        config = (
+            max_hits_per_pixel=case.rastergpu_max_hits_per_pixel,
+            tile_size=case.rastergpu_tile_size,
+            tile_face_capacity=case.rastergpu_tile_face_capacity,
+            edge_accumulation=case.rastergpu_edge_accumulation,
+        )
+        return merge(
+            measurement,
+            _rastergpu_result_config(config, 0; fused_dense=measurement.rastergpu_fused_dense),
+        )
+    end
+    return measurement
 end
 
 function _empty_measurement(status::AbstractString; error_type::AbstractString="", error_message::AbstractString="", resolved_backend::AbstractString="", geometry_mode=:none)
@@ -594,6 +963,7 @@ function _empty_measurement(status::AbstractString; error_type::AbstractString="
         raycore_tlas_instances=0,
         raycore_tlas_geometries=0,
         raycore_expanded_face_count=0,
+        rastergpu_fused_dense=missing,
         incident_par=NaN,
         incident_nir=NaN,
         absorbed_par=NaN,
@@ -608,22 +978,93 @@ function _relative_delta(value, reference)
     return 100.0 * (value - reference) / abs(reference)
 end
 
+function _huge_case_skip_reason(directions::Int, scattering::Bool, cache_radiation::Bool, step_count::Int)
+    BENCH_SKIP_HUGE_CASES || return ""
+    scattering && cache_radiation || return ""
+    directions >= BENCH_SKIP_HUGE_MIN_DIRECTIONS || return ""
+    simulated_hours = step_count * BENCH_STEP_SECONDS / 3600.0
+    simulated_hours >= BENCH_SKIP_HUGE_MIN_HOURS || return ""
+    return "skipped by ARCHIMEDLIGHT_ARTIFACT_BENCH_SKIP_HUGE_CASES: " *
+           "scattering=true, cache_radiation=true, directions=$directions, " *
+           "simulated_hours=$(round(simulated_hours; digits=3))"
+end
+
+function _with_deltas(row, base)
+    par_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.incident_par, base.incident_par) : NaN
+    nir_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.incident_nir, base.incident_nir) : NaN
+    absorbed_par_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.absorbed_par, base.absorbed_par) : NaN
+    absorbed_nir_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.absorbed_nir, base.absorbed_nir) : NaN
+    return merge(
+        row,
+        (
+            par_delta_percent=par_delta,
+            nir_delta_percent=nir_delta,
+            absorbed_par_delta_percent=absorbed_par_delta,
+            absorbed_nir_delta_percent=absorbed_nir_delta,
+        ),
+    )
+end
+
+function _print_result_row(row)
+    @printf("%-20s %-16s %-10s %7d %8.3f %-5s %-5s %5d %12d %-24s %10.3f %10.3f %10.3f\n",
+        row.scene,
+        row.backend,
+        string(row.toric_traversal),
+        row.directions,
+        row.pixel_size_cm,
+        string(row.scattering),
+        string(row.cache_radiation),
+        row.steps,
+        row.pixel_cells_estimate,
+        row.status,
+        row.median_ms,
+        row.median_alloc_mb,
+        row.par_delta_percent,
+    )
+    flush(stdout)
+    return nothing
+end
+
 function _tsv_cell(value)
     return replace(string(value), '\t' => ' ', '\n' => ' ', '\r' => ' ')
 end
 
-function _write_results(rows)
-    isempty(BENCH_OUTPUT) && return rows
-    columns = Symbol[]
-    for row in rows, key in keys(row)
-        key in columns || push!(columns, key)
-    end
+function _write_result_row(io, row)
+    println(
+        io,
+        join((_tsv_cell(key in keys(row) ? getproperty(row, key) : missing) for key in RESULT_COLUMNS), '\t'),
+    )
+    return nothing
+end
+
+function _prepare_results_file()
+    isempty(BENCH_OUTPUT) && return nothing
     dir = dirname(BENCH_OUTPUT)
     isempty(dir) || dir == "." || mkpath(dir)
     open(BENCH_OUTPUT, "w") do io
-        println(io, join(string.(columns), '\t'))
+        println(io, join(string.(RESULT_COLUMNS), '\t'))
+    end
+    @info "Initialized artifact scene benchmark results" path=BENCH_OUTPUT
+    return nothing
+end
+
+function _append_result(row)
+    isempty(BENCH_OUTPUT) && return row
+    open(BENCH_OUTPUT, "a") do io
+        _write_result_row(io, row)
+        flush(io)
+    end
+    return row
+end
+
+function _write_results(rows)
+    isempty(BENCH_OUTPUT) && return rows
+    dir = dirname(BENCH_OUTPUT)
+    isempty(dir) || dir == "." || mkpath(dir)
+    open(BENCH_OUTPUT, "w") do io
+        println(io, join(string.(RESULT_COLUMNS), '\t'))
         for row in rows
-            println(io, join((_tsv_cell(key in keys(row) ? getproperty(row, key) : missing) for key in columns), '\t'))
+            _write_result_row(io, row)
         end
     end
     @info "Wrote artifact scene benchmark results" path=BENCH_OUTPUT rows=length(rows)
@@ -631,6 +1072,7 @@ function _write_results(rows)
 end
 
 function _print_header(scene_root, cases)
+    _log_progress("benchmark start"; output=BENCH_OUTPUT)
     println("ArchimedLight artifact scene benchmark")
     println("scene root: ", scene_root)
     println("scenes: ", join(BENCH_SCENES, ", "))
@@ -651,6 +1093,7 @@ function _print_header(scene_root, cases)
 end
 
 function main()
+    _log_progress("initializing benchmark")
     BENCH_SAMPLES > 0 || error("ARCHIMEDLIGHT_ARTIFACT_BENCH_SAMPLES must be positive.")
     scene_root = _benchmark_scenes_root()
     scene_specs = _scene_specs(scene_root)
@@ -658,11 +1101,15 @@ function main()
     models = _benchmark_models()
     rows = NamedTuple[]
     baselines = Dict{Tuple{String,Int,Float64,Bool,Bool,Int},NamedTuple}()
+    rastergpu_config_cache = Dict{Tuple{String,Int,Float64,Bool,Bool},Any}()
 
     _print_header(scene_root, cases)
+    _prepare_results_file()
 
     for spec in scene_specs
+        _log_progress("scene load start"; scene=spec.name, path=spec.path)
         scene = BENCH_DRY_RUN ? nothing : ArchimedLight.read_scene(spec.path)
+        _log_progress("scene load done"; scene=spec.name)
         scene_name = spec.name
         for directions in BENCH_DIRECTIONS, pixel_cm in BENCH_PIXELS_CM, scattering in BENCH_SCATTERING,
             cache_radiation in BENCH_CACHE_RADIATION, step_count in BENCH_STEPS
@@ -672,12 +1119,37 @@ function main()
             metrics = BENCH_DRY_RUN ? _dry_run_scene_metrics(spec.path, pixel_m) : _scene_metrics(scene, models, pixel_m)
             skies = BENCH_DRY_RUN ? ArchimedLight.SkyState[] : _sky_series(step_count)
             combo_key = (scene_name, directions, pixel_cm, scattering, cache_radiation, step_count)
-            combo_rows = NamedTuple[]
+            rastergpu_config_key = (scene_name, directions, pixel_cm, scattering, cache_radiation)
+            skip_reason = _huge_case_skip_reason(directions, scattering, cache_radiation, step_count)
+            combo_row_count = 0
+            _log_progress(
+                "combo start";
+                scene=scene_name,
+                directions=directions,
+                pixel_cm=pixel_cm,
+                scattering=scattering,
+                cache_radiation=cache_radiation,
+                steps=step_count,
+                pixel_cells=metrics.pixel_cells_estimate,
+            )
 
             for case in cases
+                row_context = (
+                    scene=scene_name,
+                    backend=_case_label(case),
+                    directions=directions,
+                    pixel_cm=pixel_cm,
+                    scattering=scattering,
+                    cache_radiation=cache_radiation,
+                    steps=step_count,
+                    pixel_cells=metrics.pixel_cells_estimate,
+                )
+                _log_progress("row start"; row_context...)
                 measurement =
                     if BENCH_DRY_RUN
                         _empty_measurement("dry_run")
+                    elseif !isempty(skip_reason)
+                        _empty_measurement("skipped_huge_case"; error_message=skip_reason)
                     elseif BENCH_MAX_PIXEL_CELLS > 0 && metrics.pixel_cells_estimate > BENCH_MAX_PIXEL_CELLS
                         _empty_measurement(
                             "skipped_resource_limit";
@@ -687,7 +1159,18 @@ function main()
                         _empty_measurement("skipped_backend_unavailable"; error_message=case.unavailable_reason)
                     else
                         try
-                            _measure(scene, models, options, case, skies)
+                            _measure_case(
+                                scene,
+                                models,
+                                options,
+                                case,
+                                skies,
+                                scene_name,
+                                metrics;
+                                rastergpu_config_cache=rastergpu_config_cache,
+                                rastergpu_config_key=rastergpu_config_key,
+                                row_context=row_context,
+                            )
                         catch err
                             _empty_measurement(
                                 "error";
@@ -712,49 +1195,39 @@ function main()
                         samples=BENCH_SAMPLES,
                     ),
                     metrics,
-                    measurement,
+                        measurement,
                 )
                 case.name == "normal_cpu" && row.status == "ok" && (baselines[combo_key] = row)
-                push!(combo_rows, row)
-            end
-
-            base = get(baselines, combo_key, nothing)
-            for row in combo_rows
-                par_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.incident_par, base.incident_par) : NaN
-                nir_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.incident_nir, base.incident_nir) : NaN
-                absorbed_par_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.absorbed_par, base.absorbed_par) : NaN
-                absorbed_nir_delta = row.status == "ok" && base !== nothing ? _relative_delta(row.absorbed_nir, base.absorbed_nir) : NaN
-                full_row = merge(
-                    row,
-                    (
-                        par_delta_percent=par_delta,
-                        nir_delta_percent=nir_delta,
-                        absorbed_par_delta_percent=absorbed_par_delta,
-                        absorbed_nir_delta_percent=absorbed_nir_delta,
-                    ),
-                )
+                base = get(baselines, combo_key, nothing)
+                full_row = _with_deltas(row, base)
                 push!(rows, full_row)
-                @printf("%-20s %-16s %-10s %7d %8.3f %-5s %-5s %5d %12d %-24s %10.3f %10.3f %10.3f\n",
-                    full_row.scene,
-                    full_row.backend,
-                    string(full_row.toric_traversal),
-                    full_row.directions,
-                    full_row.pixel_size_cm,
-                    string(full_row.scattering),
-                    string(full_row.cache_radiation),
-                    full_row.steps,
-                    full_row.pixel_cells_estimate,
-                    full_row.status,
-                    full_row.median_ms,
-                    full_row.median_alloc_mb,
-                    full_row.par_delta_percent,
-                )
+                combo_row_count += 1
+                _print_result_row(full_row)
+                _append_result(full_row)
                 full_row.status == "error" && @info "Artifact scene benchmark row failed" scene=full_row.scene backend=full_row.backend message=full_row.error_message
+                _log_progress(
+                    "row done";
+                    row_context...,
+                    status=row.status,
+                    median_ms=round(row.median_ms; digits=3),
+                )
             end
+            _log_progress(
+                "combo done";
+                scene=scene_name,
+                directions=directions,
+                pixel_cm=pixel_cm,
+                scattering=scattering,
+                cache_radiation=cache_radiation,
+                steps=step_count,
+                rows=combo_row_count,
+            )
         end
     end
 
-    return _write_results(rows)
+    result = _write_results(rows)
+    _log_progress("benchmark done"; rows=length(rows), output=BENCH_OUTPUT)
+    return result
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
