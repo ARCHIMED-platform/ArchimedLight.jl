@@ -73,10 +73,10 @@ For each node and waveband, the first-order stage accumulates:
 
 After integration, those become the familiar exported variables:
 
-- `Ri_PAR_0_f`: first order intercepted PAR flux ($W \cdot m_{component}^{-2}$)
-- `Ri_NIR_0_f`: first order intercepted NIR flux ($W \cdot m_{component}^{-2}$)
-- `Ri_PAR_0_q`: first order intercepted PAR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
-- `Ri_NIR_0_q`: first order intercepted NIR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
+- `Ri_PAR_0_f`: first-order intercepted PAR flux ($W \cdot m_{component}^{-2}$)
+- `Ri_NIR_0_f`: first-order intercepted NIR flux ($W \cdot m_{component}^{-2}$)
+- `Ri_PAR_0_q`: first-order intercepted PAR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
+- `Ri_NIR_0_q`: first-order intercepted NIR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
 
 ## Practical Consequences
 

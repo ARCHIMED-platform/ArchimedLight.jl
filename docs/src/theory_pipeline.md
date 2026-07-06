@@ -60,7 +60,7 @@ Step 4 uses the top hit of each ordered pixel stack. The visible projected area 
 
 ### 5. Scattering
 
-Step 5 is light scattering. If `options.scattering=true`, the model reuses the ordered hit information to exchange scattered energy between adjacent layers iteratively. In otther words, it reuses precomputed information from the existing ray projection to traverse the hit stack again. This is the `MuSc` stage in the historical terminology. This step is optional because scattering is often negligible in sparse canopies (*e.g.* a single plant in an open field), and it is computationally expensive. But it is important in dense canopies (*e.g.* a forest, a crop canopy) where multiple scattering can be significant. This computation is performed at the component level, and iteratively until the scattered energy at the scene level is below a threshold or a maximum number of iterations is reached.
+Step 5 is light scattering. If `options.scattering=true`, the model reuses the ordered hit information to exchange scattered energy between adjacent layers iteratively. In other words, it reuses precomputed information from the existing ray projection to traverse the hit stack again. This is the `MuSc` stage in the historical terminology. This step is optional because scattering is often negligible in sparse canopies (*e.g.* a single plant in an open field), and it is computationally expensive. But it is important in dense canopies (*e.g.* a forest, a crop canopy) where multiple scattering can be significant. This computation is performed at the component level, and iteratively until the scattered energy at the scene level is below a threshold or a maximum number of iterations is reached.
 
 ### 6. Outputs
 
@@ -71,7 +71,7 @@ Step 6 writes the output tables shown in the last panel. `integrate_light` conve
 - `_f`: fluxes or irradiances
 - `_q`: step-integrated energies
 
-The outputs can also be re-allocated into the original scene components (*i.e.* the MultiscaleTreeGraph), which is useful for visualization and debugging.
+The outputs can also be re-allocated into the original scene components (*i.e.* the MultiScaleTreeGraph), which is useful for visualization and debugging.
 
 ## Julia API
 

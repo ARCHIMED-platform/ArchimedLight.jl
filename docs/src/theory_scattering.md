@@ -116,4 +116,4 @@ They usually are used to measure light received at a specific location, such as 
 ## Soil And Ground Matter More When Scattering Is Enabled
 
 Without ground geometry, a significant part of the lower-canopy exchange can be missed.
-That is why it is highly recommended to use a paving or explicit ground tiles whenever scattering is active.
+That is why it is highly recommended to use paving or explicit ground tiles whenever scattering is active.
