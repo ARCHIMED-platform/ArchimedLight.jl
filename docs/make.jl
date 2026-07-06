@@ -11,7 +11,7 @@ DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recurs
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
-    repo=Documenter.Remotes.GitHub("ARCHIMED-platform", "ArchimedLight.jl"),
+    repo=Documenter.Remotes.GitHub("VEZY", "ArchimedLight.jl"),
     sitename="ArchimedLight.jl",
     format=Documenter.HTML(
         prettyurls=get(ENV, "CI", "false") == "true",
@@ -51,5 +51,5 @@ makedocs(;
     ],
 )
 
-deploydocs(; repo="github.com/ARCHIMED-platform/ArchimedLight.jl.git", devbranch="main", push_preview=true)
+deploydocs(; repo="github.com/VEZY/ArchimedLight.jl.git", devbranch="main", push_preview=true)
 # Visit https://archimed-platform.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
