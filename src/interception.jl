@@ -7711,6 +7711,8 @@ function _rastergpu_checked_product(
 end
 
 _rastergpu_device_allocation_len(n::Int) = max(n, 1)
+_rastergpu_allocate(backend, ::Type{T}, n::Integer) where {T} =
+    KernelAbstractions.allocate(backend, T, _rastergpu_device_allocation_len(Int(n)); unified=false)
 
 function _rastergpu_device_buffer_bytes(::Type{T}, count::Integer) where {T}
     return Int128(_rastergpu_device_allocation_len(Int(count))) * Int128(sizeof(T))
@@ -7974,17 +7976,17 @@ function _rastergpu_scene_data(
     face_k = Int32[f[3] for f in geometry.faces]
     face2node_index = Int32.(geometry.face2node_index)
 
-    vertex_x_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_vertices))
-    vertex_y_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_vertices))
-    vertex_z_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_vertices))
-    face_i_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_faces))
-    face_j_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_faces))
-    face_k_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_faces))
-    face2node_index_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_faces))
-    node_transparency_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_nodes))
-    virtual_node_mask_dev = KernelAbstractions.allocate(backend, Bool, _rastergpu_device_allocation_len(n_nodes))
-    pavement_node_mask_dev = KernelAbstractions.allocate(backend, Bool, _rastergpu_device_allocation_len(n_nodes))
-    node_ids_dev = KernelAbstractions.allocate(backend, Int, _rastergpu_device_allocation_len(n_nodes))
+    vertex_x_dev = _rastergpu_allocate(backend, Float32, n_vertices)
+    vertex_y_dev = _rastergpu_allocate(backend, Float32, n_vertices)
+    vertex_z_dev = _rastergpu_allocate(backend, Float32, n_vertices)
+    face_i_dev = _rastergpu_allocate(backend, Int32, n_faces)
+    face_j_dev = _rastergpu_allocate(backend, Int32, n_faces)
+    face_k_dev = _rastergpu_allocate(backend, Int32, n_faces)
+    face2node_index_dev = _rastergpu_allocate(backend, Int32, n_faces)
+    node_transparency_dev = _rastergpu_allocate(backend, Float32, n_nodes)
+    virtual_node_mask_dev = _rastergpu_allocate(backend, Bool, n_nodes)
+    pavement_node_mask_dev = _rastergpu_allocate(backend, Bool, n_nodes)
+    node_ids_dev = _rastergpu_allocate(backend, Int, n_nodes)
 
     n_vertices > 0 && begin
         KernelAbstractions.copyto!(backend, vertex_x_dev, vertex_x)
@@ -8004,25 +8006,25 @@ function _rastergpu_scene_data(
         KernelAbstractions.copyto!(backend, node_ids_dev, geometry.node_ids)
     end
 
-    counts_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_pixels))
-    nodes_dev = KernelAbstractions.allocate(backend, UInt32, _rastergpu_device_allocation_len(stack_alloc_len))
-    heights_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(stack_alloc_len))
-    overflow_dev = KernelAbstractions.allocate(backend, Bool, _rastergpu_device_allocation_len(n_pixels))
-    node_counts_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_nodes))
-    projected_mesh_area_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_nodes))
-    projected_pixels_area_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_nodes))
-    sector_area_dev = KernelAbstractions.allocate(backend, Float32, _rastergpu_device_allocation_len(n_nodes))
-    tile_counts_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_tiles))
-    tile_faces_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(tile_candidate_len))
-    tile_unwrapped_i_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(tile_candidate_len))
-    tile_unwrapped_j_dev = KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(tile_candidate_len))
-    tile_overflow_dev = KernelAbstractions.allocate(backend, Bool, _rastergpu_device_allocation_len(n_tiles))
+    counts_dev = _rastergpu_allocate(backend, Int32, n_pixels)
+    nodes_dev = _rastergpu_allocate(backend, UInt32, stack_alloc_len)
+    heights_dev = _rastergpu_allocate(backend, Float32, stack_alloc_len)
+    overflow_dev = _rastergpu_allocate(backend, Bool, n_pixels)
+    node_counts_dev = _rastergpu_allocate(backend, Int32, n_nodes)
+    projected_mesh_area_dev = _rastergpu_allocate(backend, Float32, n_nodes)
+    projected_pixels_area_dev = _rastergpu_allocate(backend, Float32, n_nodes)
+    sector_area_dev = _rastergpu_allocate(backend, Float32, n_nodes)
+    tile_counts_dev = _rastergpu_allocate(backend, Int32, n_tiles)
+    tile_faces_dev = _rastergpu_allocate(backend, Int32, tile_candidate_len)
+    tile_unwrapped_i_dev = _rastergpu_allocate(backend, Int32, tile_candidate_len)
+    tile_unwrapped_j_dev = _rastergpu_allocate(backend, Int32, tile_candidate_len)
+    tile_overflow_dev = _rastergpu_allocate(backend, Bool, n_tiles)
 
     dense_edge_counts_dev =
-        dense_enabled ? KernelAbstractions.allocate(backend, Int32, Int(dense_pairs)) : nothing
+        dense_enabled ? _rastergpu_allocate(backend, Int32, Int(dense_pairs)) : nothing
     dense_edge_counts_host = dense_enabled ? zeros(Int32, Int(dense_pairs)) : nothing
-    edge_keys_dev = sparse_enabled ? KernelAbstractions.allocate(backend, UInt64, edge_key_capacity) : nothing
-    edge_key_counts_dev = sparse_enabled ? KernelAbstractions.allocate(backend, Int32, _rastergpu_device_allocation_len(n_pixels)) : nothing
+    edge_keys_dev = sparse_enabled ? _rastergpu_allocate(backend, UInt64, edge_key_capacity) : nothing
+    edge_key_counts_dev = sparse_enabled ? _rastergpu_allocate(backend, Int32, n_pixels) : nothing
 
     return RasterGPUSceneData(
         prepared,
