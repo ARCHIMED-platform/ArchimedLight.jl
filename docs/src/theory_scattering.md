@@ -6,6 +6,14 @@ After first-order interception, ARCHIMED can redistribute part of the intercepte
 
 The model takes the energy first intercepted by each component, applies a waveband-specific scattering coefficient, and redistributes that scattered pool between adjacent visible hits along the same directional ray paths used for interception.
 
+The light intercepted by an object can be either absorbed, reflected, or transmitted:
+
+![Reflectance, transmittance, absorptance](assets/optical_properties_reflectance_transmittance.jpg)
+
+Scattering corresponds to the **reflected** and **transmitted** fractions of the intercepted energy. It depends on the optical properties of the component and on the wavelength of the light considered, which are defined in the model files.
+
+In practice, the model takes the energy first intercepted by each object computed during the interception stage (the big band coming from the sun in the figure), applies a waveband-specific scattering coefficient, and redistributes that scattered energy between adjacent visible objects according to hits along the same directional ray paths used for interception.
+
 ![Scattering transfer graph on one pixel stack](assets/archimed_scattering_transfer.svg)
 
 The figure shows the three steps used to turn first-order ray paths into
@@ -13,7 +21,7 @@ scattering transfers.
 
 Panel 1 shows the geometric information that ARCHIMED reuses. For each turtle
 direction, the scene is projected onto a raster grid and each pixel ray records
-the ordered stack of objects it crosses. In the figure, the short double-headed 
+the ordered stack of objects it crosses. In the figure, the short double-headed
 arrows mark the ray segments where energy can be exchanged in both directions: purple between the top and middle
 objects, teal between the top and bottom objects, and orange between the middle
 and bottom objects.
@@ -111,4 +119,4 @@ They usually are used to measure light received at a specific location, such as 
 ## Soil And Ground Matter More When Scattering Is Enabled
 
 Without ground geometry, a significant part of the lower-canopy exchange can be missed.
-That is why it is highly recommended to use a paving or explicit ground tiles whenever scattering is active.
+That is why it is highly recommended to use paving or explicit ground tiles whenever scattering is active.

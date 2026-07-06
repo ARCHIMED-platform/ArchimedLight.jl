@@ -1,8 +1,8 @@
 # First-Order Interception
 
-First-order interception is the part of the model that answers one question:
+First-order interception is the light interception that occurs when rays of light hit objects in the scene. It is computed using a rasterization approach, by projecting the scene onto a 2D plane and counting the visible hits for each component (*i.e.* the projected area of the object that is visible from the source of light). The intercepted energy is computed from the visible projected area, the optical properties of the component, and the incoming irradiance.
 
-> from each incoming direction, which scene components are actually exposed, and by how much?
+By definition this step does not include any scattering, which is treated in a later step.
 
 This is the `Mir` stage in the historical ARCHIMED software developed by Jean Dauzat (AMAP, CIRAD).
 
@@ -20,7 +20,7 @@ Compared to other simpler approaches, this means that:
 
 ARCHIMED’s efficiency comes from a very specific compromise. It:
 
-- uses a finite number of incoming directions (e.g. 46 directions) instead of a continuous angular space
+- uses a finite number of incoming directions (*e.g.* 46 directions) instead of a continuous angular space
 - assumes rays are parallel inside each direction, which makes projection easy and fast
 - infers visibility from the ordered hits inside projected pixels (and scattering uses the same information)
 
@@ -38,7 +38,7 @@ Each pixel stores:
 
 The pixel table is therefore both a visibility structure for first-order interception and a transfer structure reused later by scattering. This makes the model efficient, because it avoids recomputing visibility for each scattering iteration.
 
-When only first-order interception is needed, ARCHIMED only keeps the upper visible hit for each pixel, and discards lower surfaces that will not receive direct light. 
+When only first-order interception is needed, ARCHIMED only keeps the upper visible hit for each pixel, and discards lower surfaces that will not receive direct light.
 
 > Note that this is true even if the upper surface has a non-zero `transparency` value.
 
@@ -79,10 +79,10 @@ For each node and waveband, the first-order stage accumulates:
 
 After integration, those become the familiar exported variables:
 
-- `Ri_PAR_0_f`: first order intercepted PAR flux ($W \cdot m_{component}^{-2}$)
-- `Ri_NIR_0_f`: first order intercepted NIR flux ($W \cdot m_{component}^{-2}$)
-- `Ri_PAR_0_q`: first order intercepted PAR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
-- `Ri_NIR_0_q`: first order intercepted NIR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
+- `Ri_PAR_0_f`: first-order intercepted PAR flux ($W \cdot m_{component}^{-2}$)
+- `Ri_NIR_0_f`: first-order intercepted NIR flux ($W \cdot m_{component}^{-2}$)
+- `Ri_PAR_0_q`: first-order intercepted PAR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
+- `Ri_NIR_0_q`: first-order intercepted NIR quantity ($J \cdot component^{-1} \cdot timestep^{-1}$)
 
 ## Practical Consequences
 

@@ -3,5 +3,5 @@ git-tree-sha1 = "5963e97b555116d6f2d9270b2333e29642f4649e"
 lazy = true
 
 [[archimedlight-release-fixtures.download]]
-url = "https://github.com/ARCHIMED-platform/ArchimedLight.jl/releases/download/v0.1.2/archimedlight-release-fixtures-v0.1.2.tar.gz"
+url = "https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.2/archimedlight-release-fixtures-v0.1.2.tar.gz"
 sha256 = "761cc512e91bc90e6e0a74644e077da49358839ccfdedb6e7748c11ba8a6a92e"

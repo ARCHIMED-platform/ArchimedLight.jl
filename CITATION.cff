@@ -15,7 +15,7 @@ authors:
     orcid: "https://orcid.org/0000-0002-0808-1461"
   - given-names: Jean
     family-names: Dauzat
-repository-code: "https://github.com/ARCHIMED-platform/ArchimedLight.jl"
+repository-code: "https://github.com/VEZY/ArchimedLight.jl"
 keywords:
   - light interception
   - radiation
