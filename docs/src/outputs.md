@@ -160,6 +160,17 @@ Common columns are:
 - `Ri_*`
 - `Ra_*`
 
+You can write this table from already-computed results:
+
+```julia
+sim, meteo = read_simulation("example_2/config.yml")
+series = run_light(sim, meteo)
+write_component_values("output/component_values.csv", sim, series)
+```
+
+`step_index_base=0` is available for compatibility with historical harness
+outputs.
+
 ### `scene_values.csv`
 
 Scene-scale summary per meteo step.

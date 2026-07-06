@@ -15,6 +15,7 @@ using KernelAbstractions: @atomic, @index
 import Raycore
 import Tables
 import YAML
+import CSV
 
 include("types.jl")
 include("io.jl")
@@ -24,6 +25,7 @@ include("interception.jl")
 include("scattering.jl")
 include("pipeline.jl")
 include("attach.jl")
+include("outputs.jl")
 include("visualization.jl")
 
 export MeteoTable
@@ -76,6 +78,7 @@ export run_light
 export attach_node_values!
 export attach_light_step!
 export attach_light_series!
+export write_component_values
 export light_render_geometry
 export tile_light_geometry
 export light_metric_values

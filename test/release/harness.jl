@@ -161,30 +161,6 @@ function _simulation_node_ids(scene, models, options)
     return ids
 end
 
-function _sky_fraction_per_node(scene, models, turtle, options, node_ids)
-    responses = ArchimedLight._build_sector_responses(scene, models, turtle, options)
-    sky_count = 0
-    visible_sum = Dict{Int,Float64}()
-    for (i, sector) in enumerate(turtle.sectors)
-        sector.source == :sun && continue
-        sky_count += 1
-        for (nid, area) in ArchimedLight._sector_projected_area_pairs(responses, i)
-            visible_sum[nid] = get(visible_sum, nid, 0.0) + area
-        end
-    end
-
-    out = Dict{Int,Float64}()
-    for nid in node_ids
-        area = ArchimedLight._scene_area(scene, nid, 0.0)
-        if area <= 0.0 || sky_count == 0
-            out[nid] = 0.0
-        else
-            out[nid] = get(visible_sum, nid, 0.0) / sky_count / area
-        end
-    end
-    return out
-end
-
 _release_node_area(scene, nid::Int) = ArchimedLight._scene_area(scene, nid, 0.0)
 _release_node_barycenter(scene, nid::Int) = ArchimedLight._scene_barycenter(scene, nid, (NaN, NaN, NaN))
 _release_node_source_topology_id(scene, nid::Int) = ArchimedLight._scene_source_topology_id(scene, nid, nid)
@@ -208,51 +184,9 @@ function _display_type_name(scene, models, nid::Int)
     return t
 end
 
-function _component_rows_for_step(scene, models, options, step, step_number::Int)
-    rows = OrderedDict{String,Any}[]
-    node_ids = _simulation_node_ids(scene, models, options)
-    keys_by_node = _simulation_output_keys(scene, models, options)
-    sky_fraction = _sky_fraction_per_node(scene, models, step.turtle, options, node_ids)
-    for nid in node_ids
-        barycenter = _release_node_barycenter(scene, nid)
-        item_id, component_id = get(keys_by_node, nid, (_release_node_object_id(scene, nid), _release_node_source_topology_id(scene, nid)))
-        row = OrderedDict{String,Any}(
-            "Ri_PAR_0_q" => get(step.budget.incident_energy.initial.par, nid, 0.0),
-            "Ra_PAR_0_q" => get(step.budget.absorbed_energy.initial.par, nid, 0.0),
-            "Ra_NIR_0_q" => get(step.budget.absorbed_energy.initial.nir, nid, 0.0),
-            "component_id" => component_id,
-            "step_number" => step_number,
-            "area" => _release_node_area(scene, nid),
-            "item_id" => item_id,
-            "Ri_NIR_0_f" => get(step.budget.incident_flux.initial.nir, nid, 0.0),
-            "group" => _release_node_group(scene, nid),
-            "sky_fraction" => get(sky_fraction, nid, 0.0),
-            "barycentre_z" => barycenter[3],
-            "Ri_PAR_0_f" => get(step.budget.incident_flux.initial.par, nid, 0.0),
-            "type" => _display_type_name(scene, models, nid),
-            "Ri_NIR_0_q" => get(step.budget.incident_energy.initial.nir, nid, 0.0),
-        )
-        if step.scattering !== nothing
-            row["Ri_PAR_f"] = get(step.budget.incident_flux.total.par, nid, 0.0)
-            row["Ri_NIR_f"] = get(step.budget.incident_flux.total.nir, nid, 0.0)
-            row["Ri_PAR_q"] = get(step.budget.incident_energy.total.par, nid, 0.0)
-            row["Ri_NIR_q"] = get(step.budget.incident_energy.total.nir, nid, 0.0)
-            row["Ra_PAR_q"] = get(step.budget.absorbed_energy.total.par, nid, 0.0)
-            row["Ra_NIR_q"] = get(step.budget.absorbed_energy.total.nir, nid, 0.0)
-        end
-        push!(rows, row)
-    end
-    return rows
-end
-
 function _write_component_series_csv(path::AbstractString, scene, models, series, options, meteo_rows)
-    mkpath(dirname(path))
-    rows = OrderedDict{String,Any}[]
-    for i in eachindex(series)
-        append!(rows, _component_rows_for_step(scene, models, options, series[i], i - 1))
-    end
-    CSV.write(path, rows; delim=';')
-    return path
+    sim = ArchimedLight.LightSimulation(scene, models; options=options)
+    return ArchimedLight.write_component_values(path, sim, series; step_index_base=0)
 end
 
 function _meteo_rows_with_step(rows)
