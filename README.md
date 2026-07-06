@@ -1,7 +1,7 @@
 # ArchimedLight.jl
 
-[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/stable)
-[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/dev)
+[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://VEZY/ArchimedLight.jl/stable)
+[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://VEZY/ArchimedLight.jl/dev)
 [![Test workflow status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
 [![Docs workflow Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
 [![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
