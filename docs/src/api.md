@@ -7,13 +7,14 @@ For normal use, create a `LightSimulation` and call `run_light`.
 
 For the `0.1.x` series, the stable public API is the set of names exported by
 `ArchimedLight`. This includes the high-level simulation workflow, input
-readers, model helpers, validation helpers, result types, attachment/output
-helpers, visualization helpers, and backend selector types.
+readers, model helpers, validation helpers, user-facing result containers,
+attachment/output helpers, visualization helpers, and concrete backend
+selectors.
 
 Some lower-level stage functions are available as qualified calls such as
 `ArchimedLight.compute_sky(...)`. These are intended for debugging, research,
 and parity work. They are not exported, and their exact arguments, return
-details, and cache internals may be refined before `1.0`.
+containers, and cache internals may be refined before `1.0`.
 
 `LightStepResult` and `LightBudget` are public result containers. It is fine to
 read their fields in analysis code, but user code should normally construct
@@ -167,7 +168,9 @@ cache entries. The cache object itself is an implementation detail; use
 ## Advanced Light Pipeline
 
 The explicit stage API is available as qualified, advanced API for debugging,
-research, and parity workflows:
+research, and parity workflows. These calls may return stage containers such as
+`ArchimedLight.TurtleGrid` or `ArchimedLight.FirstOrderResult`, which are not
+exported in `0.1.x`.
 
 ```julia
 ArchimedLight.compute_sky(row, options)
@@ -178,9 +181,9 @@ ArchimedLight.compute_scattering(scene, models, turtle, first, options)
 ArchimedLight.integrate_light(scene, models, first, scattering, options; meteo_row=row)
 ```
 
-These functions are intentionally not exported in `0.1.x`. Prefer `run_light`
-for application code unless you need to inspect or replace individual pipeline
-stages.
+These functions and stage containers are intentionally not exported in `0.1.x`.
+Prefer `run_light` for application code unless you need to inspect or replace
+individual pipeline stages.
 
 For interactive synthetic scenes, `run_light` also accepts a prebuilt sky state:
 
@@ -288,9 +291,9 @@ RaycastScatteringBackend()
 ```
 
 They can be passed explicitly to the pipeline helpers when you want to control
-the implementation used for interception or scattering. They are closed
-selector types in `0.1.x`; defining new backend subtypes is not yet a supported
-extension interface.
+the implementation used for interception or scattering. Only the concrete
+selectors are exported in `0.1.x`; the backend supertypes are internal, and
+defining new backend subtypes is not yet a supported extension interface.
 
 ## Recommended Starting Points
 
