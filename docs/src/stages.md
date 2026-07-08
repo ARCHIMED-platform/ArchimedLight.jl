@@ -2,7 +2,8 @@
 
 `ArchimedLight.jl` is designed so each stage can be called independently for
 advanced debugging and parity work. These staged functions are not exported by
-the beginner API; call them through the module name.
+the stable public API in the `0.1.x` series; call them through the module name
+and prefer `run_light` for application code.
 
 ## Inputs
 
@@ -79,4 +80,5 @@ step = run_light(
 - `ArchimedLight.compute_first_order(...; backend=:raster_cpu)` is the reference backend (`RasterCPUBackend()` also works).
 - `ArchimedLight.compute_scattering(...; mode=:raycast)` is the current scattering mode.
 - `ArchimedLight.compute_scattering(...; backend=RaycastScatteringBackend())` is also available.
+- Backend types are public selectors in `0.1.x`, not yet an extension interface for user-defined backend subtypes.
 - `PlantGeom.add_ground!(scene; ...)` is the explicit scene-editing step when you want inspectable paving or soil geometry in the MTG.

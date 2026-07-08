@@ -3,6 +3,26 @@
 This page is a compact guide to the public entry points of `ArchimedLight.jl`.
 For normal use, create a `LightSimulation` and call `run_light`.
 
+## API Stability
+
+For the `0.1.x` series, the stable public API is the set of names exported by
+`ArchimedLight`. This includes the high-level simulation workflow, input
+readers, model helpers, validation helpers, result types, attachment/output
+helpers, visualization helpers, and backend selector types.
+
+Some lower-level stage functions are available as qualified calls such as
+`ArchimedLight.compute_sky(...)`. These are intended for debugging, research,
+and parity work. They are not exported, and their exact arguments, return
+details, and cache internals may be refined before `1.0`.
+
+`LightStepResult` and `LightBudget` are public result containers. It is fine to
+read their fields in analysis code, but user code should normally construct
+results through `run_light` rather than calling result constructors directly.
+
+`LightSimulation` owns internal preparation and cache state. Use
+`update_scene!`, `update_models!`, `update_options!`, and `cache_summary` rather
+than relying on the `cache` field or cache object layout.
+
 ## Main Workflow
 
 File-based run:
@@ -141,11 +161,13 @@ cache_summary(sim)
 ```
 
 `update_scene!` immediately releases old scene-dependent prepared data and
-cache entries.
+cache entries. The cache object itself is an implementation detail; use
+`cache_summary(sim)` when you need to inspect cache behavior.
 
 ## Advanced Light Pipeline
 
-The explicit stage API remains available for debugging and research workflows:
+The explicit stage API is available as qualified, advanced API for debugging,
+research, and parity workflows:
 
 ```julia
 ArchimedLight.compute_sky(row, options)
@@ -156,6 +178,10 @@ ArchimedLight.compute_scattering(scene, models, turtle, first, options)
 ArchimedLight.integrate_light(scene, models, first, scattering, options; meteo_row=row)
 ```
 
+These functions are intentionally not exported in `0.1.x`. Prefer `run_light`
+for application code unless you need to inspect or replace individual pipeline
+stages.
+
 For interactive synthetic scenes, `run_light` also accepts a prebuilt sky state:
 
 ```julia
@@ -163,7 +189,8 @@ sim = LightSimulation(scene, models; options=options)
 step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
-The old low-level cache functions are still available for advanced work:
+The low-level cache functions are still available for advanced work, but their
+cache object layout is internal:
 
 ```julia
 cache = ArchimedLight.prepare_light_cache(scene, models, options; ...)
@@ -260,7 +287,10 @@ RasterCPUBackend()
 RaycastScatteringBackend()
 ```
 
-They can be passed explicitly to the pipeline helpers when you want to control the implementation used for interception or scattering.
+They can be passed explicitly to the pipeline helpers when you want to control
+the implementation used for interception or scattering. They are closed
+selector types in `0.1.x`; defining new backend subtypes is not yet a supported
+extension interface.
 
 ## Recommended Starting Points
 
@@ -273,4 +303,5 @@ They can be passed explicitly to the pipeline helpers when you want to control t
 
 ```@autodocs
 Modules = [ArchimedLight]
+Private = false
 ```
