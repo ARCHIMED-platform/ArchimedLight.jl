@@ -14,7 +14,7 @@
         )
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
-    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options))
     step = ArchimedLight.run_light_step(fixture.scene, fixture.models, row, fixture.options)
     render_geometry = ArchimedLight.light_render_geometry(step)
 

@@ -83,7 +83,7 @@ function _row_get(row, col::String)
         return get(row, col, get(row, Symbol(col), missing))
     end
     s = Symbol(col)
-    return s in propertynames(row) ? getproperty(row, s) : missing
+    return s in ArchimedLight._row_propertynames(row) ? getproperty(row, s) : missing
 end
 
 function _try_float(v)

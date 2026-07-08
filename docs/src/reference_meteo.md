@@ -11,7 +11,7 @@ time-dependent forcing description that tells it:
 
 Historically that information often comes from a semicolon-separated meteo CSV.
 In dynamic workflows, the same semantics can be provided directly through a
-[`MeteoTable`](@ref) or even a single [`SkyState`](@ref).
+`PlantMeteo.TimeStepTable` or even a single [`SkyState`](@ref).
 
 ## What Matters In Meteo For The Light Solver
 
@@ -41,7 +41,7 @@ For most users, a meteo table should provide these fields:
 | Sun position | `sun_azimuth`/`sun_azimut` and `sun_elevation` | degrees | optional |
 | Direct fraction | `direct_fraction` | fraction | optional |
 
-`run_light` accepts `MeteoTable`, `PlantMeteo.TimeStepTable`, and generic
+`run_light` accepts `PlantMeteo.TimeStepTable` and generic
 Tables.jl-compatible inputs such as vectors of named tuples or DataFrames.
 Use `summarize_meteo(meteo)` to see what ArchimedLight detected, and
 `check_meteo(meteo)` to diagnose missing columns before a simulation.
@@ -62,7 +62,7 @@ date;hour_start;hour_end;RI_PAR_f;RI_NIR_f
 
 ### Dynamically In Julia
 
-The direct in-memory equivalent inside a [`MeteoTable`](@ref) row is:
+The direct in-memory equivalent inside a `PlantMeteo.TimeStepTable` row is:
 
 ```julia
 (
@@ -96,10 +96,10 @@ ARCHIMED-style meteo files often begin with metadata comments such as:
 
 ### Dynamically In Julia
 
-The in-memory equivalent is the `metadata` part of [`MeteoTable`](@ref):
+The in-memory equivalent is the `metadata` part of `PlantMeteo.TimeStepTable`:
 
 ```julia
-meteo = MeteoTable(
+meteo = PlantMeteo.TimeStepTable(
     rows,
     (latitude=15.0, altitude=100.0, file="interactive",),
 )
@@ -232,7 +232,7 @@ This partition can be provided explicitly with columns such as
 `direct_fraction`, or inferred from the available radiation inputs and the
 historical ARCHIMED assumptions.
 
-### Dynamically In Julia With `MeteoTable`
+### Dynamically In Julia With `PlantMeteo.TimeStepTable`
 
 The same applies to in-memory rows:
 
@@ -283,7 +283,7 @@ When not given explicitly, it can be reconstructed from:
 
 Some files may also carry explicit `sun_azimuth` and `sun_elevation` columns.
 
-### Dynamically In Julia With `MeteoTable`
+### Dynamically In Julia With `PlantMeteo.TimeStepTable`
 
 The same logic applies to in-memory rows. You can either:
 
@@ -339,13 +339,13 @@ sim = LightSimulation(scene, models; options=options)
 step = run_light(sim, first(meteo))
 ```
 
-## 8. Dynamic Workflow With `MeteoTable`
+## 8. Dynamic Workflow With `PlantMeteo.TimeStepTable`
 
-Use [`MeteoTable`](@ref) when you still want the normal meteo-driven pipeline,
+Use `PlantMeteo.TimeStepTable` when you still want the normal meteo-driven pipeline,
 but without writing a CSV:
 
 ```julia
-meteo = MeteoTable(
+meteo = PlantMeteo.TimeStepTable(
     [
         (
             date=Date(2020, 6, 21),

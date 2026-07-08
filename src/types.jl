@@ -580,37 +580,6 @@ function LightOptions(old::LightOptions; kwargs...)
 end
 
 """
-    MeteoTable(rows, metadata)
-
-Normalized in-memory meteorological forcing table.
-
-`rows` is a vector of named tuples, and `metadata` stores site-level context
-such as latitude, altitude, and source file information.
-
-This is the interactive equivalent of a parsed meteorological CSV file.
-
-Typical row fields include:
-
-- time and date information such as `date`, `hour_start`, `hour_end`
-- radiative forcing such as `RI_SW_f`, `RI_PAR_f`, `RI_NIR_f`
-- optional sun diagnostics such as `sun_azimuth`, `sun_elevation`
-- optional partitioning inputs such as `direct_fraction` or `clearness`
-
-The table is usually passed through `prepare_meteo(meteo, options)` before
-running a series simulation.
-"""
-struct MeteoTable
-    rows::Vector{NamedTuple}
-    metadata::NamedTuple
-end
-
-Base.iterate(meteo::MeteoTable, state::Int=1) =
-    state > length(meteo.rows) ? nothing : (meteo.rows[state], state + 1)
-Base.length(meteo::MeteoTable) = length(meteo.rows)
-Base.getindex(meteo::MeteoTable, i::Integer) = meteo.rows[i]
-Base.first(meteo::MeteoTable) = first(meteo.rows)
-
-"""
     LightRenderGeometry
 
 Render-ready geometry used to visualize one simulated light result.

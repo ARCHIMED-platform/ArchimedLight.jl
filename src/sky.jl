@@ -12,6 +12,8 @@ function _duration_seconds_strict(v; field_name::AbstractString="duration")
     PlantMeteo.positive_duration_seconds(v; field_name=field_name)
 end
 
+_row_propertynames(row) = row isa PlantMeteo.TimeStepRow ? Tables.columnnames(row) : propertynames(row)
+
 function _row_metadata_value(row, candidates::Vector{Symbol})
     row isa PlantMeteo.TimeStepRow || return nothing
     meta = getfield(parent(row), :metadata)
@@ -22,7 +24,7 @@ function _row_metadata_value(row, candidates::Vector{Symbol})
 end
 
 function _row_value(row, candidates::Vector{Symbol}, default::Float64)
-    names = propertynames(row)
+    names = _row_propertynames(row)
     for c in candidates
         if c in names
             v = getproperty(row, c)
@@ -48,7 +50,7 @@ function _row_value(row, candidates::Vector{Symbol}, default::Float64)
 end
 
 function _row_time_value(row, candidates::Vector{Symbol}, default::Dates.Time)
-    names = propertynames(row)
+    names = _row_propertynames(row)
     for c in candidates
         if c in names
             v = getproperty(row, c)
@@ -97,7 +99,7 @@ end
 _to_decimal_hour(t::Dates.Time) = Dates.hour(t) + Dates.minute(t) / 60 + Dates.second(t) / 3600
 
 function _row_date(meteo_row)
-    names = propertynames(meteo_row)
+    names = _row_propertynames(meteo_row)
     if :date in names
         return _parse_date_value(getproperty(meteo_row, :date), Dates.Date(2000, 1, 1))
     end
@@ -119,7 +121,7 @@ function _row_step_hours(meteo_row)
     end_h < start_h && (end_h += 24.0)
 
     if end_h == start_h
-        names = propertynames(meteo_row)
+        names = _row_propertynames(meteo_row)
         if :step_duration in names
             duration_seconds = _duration_seconds_strict(getproperty(meteo_row, :step_duration); field_name="step_duration")
             end_h += duration_seconds / 3600.0
@@ -270,7 +272,7 @@ function _as_degrees_if_radians(x::Float64)
 end
 
 function _use_tokens(row)
-    if :use in propertynames(row)
+    if :use in _row_propertynames(row)
         v = getproperty(row, :use)
         if v isa AbstractString
             t = strip(String(v))
@@ -296,7 +298,7 @@ function _use_tokens(row)
 end
 
 function _has_any_column(row, candidates::Vector{Symbol})
-    names = propertynames(row)
+    names = _row_propertynames(row)
     for c in candidates
         c in names && return true
     end

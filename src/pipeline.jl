@@ -544,7 +544,7 @@ function _stream_first_order_with_scattering_topology(
 end
 
 function _row_number_local(row, name::Symbol, default::Float64=0.0)
-    if name in propertynames(row)
+    if name in _row_propertynames(row)
         v = getproperty(row, name)
         if v isa Number
             return Float64(v)
@@ -577,7 +577,7 @@ function _parse_time_or_default_local(v)
 end
 
 function _step_duration_seconds_local(row)
-    names = propertynames(row)
+    names = _row_propertynames(row)
     if (:step_duration in names)
         return _duration_seconds_strict(getproperty(row, :step_duration); field_name="step_duration")
     end
@@ -696,9 +696,9 @@ function _parse_range_datetime_token_local(s::AbstractString)
     error("invalid meteo_range datetime token: $(repr(s))")
 end
 
-function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, options::LightOptions)
+function _apply_meteo_range_local(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
     spec = _cfg_meteo_range_spec_local(options)
-    spec === nothing && return rows
+    spec === nothing && return meteo
 
     parts = split(spec, ","; limit=2)
     length(parts) == 2 || error("invalid meteo_range format: $(repr(spec))")
@@ -710,52 +710,45 @@ function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, options::LightOpti
     ia = tryparse(Int, a)
     ib = tryparse(Int, b)
     if ia !== nothing && ib !== nothing
-        n = length(rows)
+        n = length(meteo)
         ia >= 1 || error("invalid meteo_range: start step must be >= 1")
         ib >= ia || error("invalid meteo_range: end step is before start step")
         ib <= n || error("invalid meteo_range: end step exceeds meteo size")
-        return rows[ia:ib]
+        return meteo[ia:ib]
     end
 
     t0 = _parse_range_datetime_token_local(a)
     t1 = _parse_range_datetime_token_local(b)
     t1 >= t0 || error("invalid meteo_range: end datetime is before start datetime")
 
-    out = PlantMeteo.select_overlapping_timesteps(
-        rows,
-        t0,
-        t1;
-        closed=true, # Java uses closed-interval overlap semantics.
-        date_cols=(:date,),
-        start_cols=(:hour_start, :hour, :date),
-        end_cols=(:hour_end,),
-        duration_cols=(:step_duration, :duration),
-        default_date=Dates.Date(2000, 1, 1),
-        default_duration_seconds=1.0,
-        allow_end_rollover=false,
-    )
-    isempty(out) && error("invalid meteo_range: selection is empty")
-    return out
-end
-
-function _apply_meteo_active_filter_local(rows::Vector{<:NamedTuple})
-    isempty(rows) && return rows
-    names = propertynames(first(rows))
-    :active in names || return rows
-
-    out = NamedTuple[]
-    for row in rows
-        flag = _parse_bool_strict_local(getproperty(row, :active), "active")
-        flag && push!(out, row)
+    selected = Int[]
+    for (i, row) in enumerate(meteo)
+        s, e = _row_datetime_interval_local(row; index=i)
+        # Java uses closed-interval overlap semantics.
+        s <= t1 && e >= t0 && push!(selected, i)
     end
-    isempty(out) && error("invalid meteo: no active meteo step")
-    return out
+    isempty(selected) && error("invalid meteo_range: selection is empty")
+    return meteo[selected]
 end
 
-function _validate_meteo_sequence_local(rows::Vector{<:NamedTuple})
+function _apply_meteo_active_filter_local(meteo::PlantMeteo.TimeStepTable)
+    isempty(meteo) && return meteo
+    names = _row_propertynames(first(meteo))
+    :active in names || return meteo
+
+    selected = Int[]
+    for (i, row) in enumerate(meteo)
+        flag = _parse_bool_strict_local(getproperty(row, :active), "active")
+        flag && push!(selected, i)
+    end
+    isempty(selected) && error("invalid meteo: no active meteo step")
+    return meteo[selected]
+end
+
+function _validate_meteo_sequence_local(meteo::PlantMeteo.TimeStepTable)
     try
         PlantMeteo.check_non_overlapping_timesteps(
-            rows;
+            meteo;
             date_cols=(:date,),
             start_cols=(:hour_start, :hour, :date),
             end_cols=(:hour_end,),
@@ -775,51 +768,28 @@ function _validate_meteo_sequence_local(rows::Vector{<:NamedTuple})
     end
 end
 
-_meteo_rows(meteo::MeteoTable) = collect(meteo.rows)
-function _meteo_rows(meteo::PlantMeteo.TimeStepTable)
-    meta = _meta_to_namedtuple(getfield(meteo, :metadata))
-    raw_rows = _rows_to_namedtuples(meteo)
-    [_namedtuple_with_meta(r, meta) for r in raw_rows]
-end
+_meteo_rows(meteo::PlantMeteo.TimeStepTable) = collect(meteo)
 
-_meteo_metadata(meteo::MeteoTable) = meteo.metadata
-_meteo_metadata(meteo::PlantMeteo.TimeStepTable) = _meta_to_namedtuple(getfield(meteo, :metadata))
-
-function _prepare_meteo_rows_for_series(meteo::MeteoTable, options::LightOptions)
-    rows = _meteo_rows(meteo)
-    isempty(rows) && return rows
-    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
-    rows = _apply_meteo_range_local(rows, options)
-    rows = _apply_meteo_active_filter_local(rows)
-    rows
-end
-
-function _prepare_meteo_rows_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    rows = _meteo_rows(meteo)
-    isempty(rows) && return rows
-    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
-    rows = _apply_meteo_range_local(rows, options)
-    rows = _apply_meteo_active_filter_local(rows)
-    rows
+function _prepare_meteo_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
+    isempty(meteo) && return meteo
+    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(meteo)
+    meteo = _apply_meteo_range_local(meteo, options)
+    meteo = _apply_meteo_active_filter_local(meteo)
+    meteo
 end
 
 """
-    prepare_meteo(meteo, options)::MeteoTable
+    prepare_meteo(meteo, options)::PlantMeteo.TimeStepTable
 
 Return the effective meteo table after Java-like meteo controls are applied:
 sequence validation, optional `meteo_range`, and optional `active` filtering.
 """
-function prepare_meteo(meteo::MeteoTable, options::LightOptions)
-    MeteoTable(_prepare_meteo_rows_for_series(meteo, options), meteo.metadata)
-end
-
 function prepare_meteo(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    PlantMeteo.TimeStepTable(_prepare_meteo_rows_for_series(meteo, options), _meteo_metadata(meteo))
+    _prepare_meteo_for_series(meteo, options)
 end
 
 function prepare_meteo(meteo, options::LightOptions)
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return prepare_meteo(meteo, options)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
     meteo isa PlantMeteo.TimeStepTable && return prepare_meteo(meteo, options)
     prepare_meteo(_as_plantmeteo_table(meteo), options)
 end
@@ -904,7 +874,7 @@ end
 
 function _extra_band_irradiance(meteo_row)
     extras = Dict{String,Float64}()
-    for p in propertynames(meteo_row)
+    for p in _row_propertynames(meteo_row)
         s = String(p)
         su = uppercase(s)
         startswith(su, "RI_") || continue
@@ -1418,14 +1388,13 @@ function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
 end
 
 function _meteo_rows_for_check(meteo)
-    meteo isa MeteoTable && return meteo.rows
     meteo isa PlantMeteo.TimeStepTable && return _meteo_rows(meteo)
     Tables.istable(typeof(meteo)) && return _meteo_rows(_as_plantmeteo_table(meteo))
     return [meteo]
 end
 
 function check_meteo(meteo; options::LightOptions=LightOptions())
-    rows = NamedTuple[]
+    rows = Any[]
     errors = String[]
     warnings = String[]
     infos = String[]
@@ -1439,7 +1408,7 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
     isempty(rows) && return ValidationReport(errors, warnings, infos)
 
     for (i, row) in enumerate(rows)
-        names = propertynames(row)
+        names = _row_propertynames(row)
         has_sun = (:sun_azimuth in names || :sun_azimut in names) && (:sun_elevation in names)
         latitude = _row_value(row, [:latitude, :lat], NaN)
         if !has_sun && !isfinite(latitude)
@@ -1485,7 +1454,7 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
     end
     first_row = first(rows)
-    columns = collect(Symbol.(propertynames(first_row)))
+    columns = collect(Symbol.(_row_propertynames(first_row)))
     radiation_inputs = try
         inputs = _effective_radiation_use_tokens(first_row)
         isempty(inputs) ? _inferred_radiation_input_columns(first_row) : inputs
@@ -1966,7 +1935,6 @@ function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulation
 end
 
 function _is_meteo_series_input(x)
-    x isa MeteoTable && return true
     x isa PlantMeteo.TimeStepTable && return true
     x isa AbstractVector && return !isempty(x) && all(row -> row isa NamedTuple, x)
     Tables.istable(typeof(x)) && return !(x isa NamedTuple)
@@ -1975,15 +1943,8 @@ end
 
 function _run_light_series_sim(sim::LightSimulation, meteo)
     cache = _ensure_light_cache!(sim)
-    meteo_local =
-        if meteo isa MeteoTable
-            meteo
-        elseif meteo isa PlantMeteo.TimeStepTable
-            MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-        else
-            MeteoTable(_meteo_rows(_as_plantmeteo_table(meteo)), _meteo_metadata(_as_plantmeteo_table(meteo)))
-        end
-    rows_eff = _prepare_meteo_rows_for_series(meteo_local, sim.options)
+    meteo_local = meteo isa PlantMeteo.TimeStepTable ? meteo : _as_plantmeteo_table(meteo)
+    rows_eff = _prepare_meteo_for_series(meteo_local, sim.options)
     out = Vector{LightStepResult}(undef, length(rows_eff))
     io = stderr
     started_ns = time_ns()
@@ -1992,8 +1953,8 @@ function _run_light_series_sim(sim::LightSimulation, meteo)
     if !isempty(rows_eff)
         _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
     end
-    for i in eachindex(rows_eff)
-        out[i] = _run_light_step_cached(cache, rows_eff[i]; use_full_response=use_full_response)
+    for (i, row) in enumerate(rows_eff)
+        out[i] = _run_light_step_cached(cache, row; use_full_response=use_full_response)
         _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
     end
     return out
@@ -2080,7 +2041,7 @@ end
 """
     run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
 
-Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
+Run the complete light pipeline for all rows in a `PlantMeteo.TimeStepTable`, with optional directional
 response reuse when `LightOptions(cache_radiation=true)` is enabled.
 Set `LightOptions(include_sky_fraction=true)` to store `sky_fraction` in each step.
 When using `read_config`, this option is enabled by requesting `sky_fraction`
@@ -2089,7 +2050,7 @@ in `component_variables` or `opf_variables`.
 function run_light_series(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
-    meteo::MeteoTable,
+    meteo::PlantMeteo.TimeStepTable,
     options::LightOptions;
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
@@ -2121,9 +2082,9 @@ end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo::MeteoTable,
+    meteo::PlantMeteo.TimeStepTable,
 )
-    rows_eff = _prepare_meteo_rows_for_series(meteo, cache.options)
+    rows_eff = _prepare_meteo_for_series(meteo, cache.options)
     out = Vector{LightStepResult}(undef, length(rows_eff))
     io = stderr
     started_ns = time_ns()
@@ -2131,8 +2092,8 @@ function run_light_series(
     if !isempty(rows_eff)
         _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
     end
-    for i in eachindex(rows_eff)
-        out[i] = _run_light_step_cached(cache, rows_eff[i])
+    for (i, row) in enumerate(rows_eff)
+        out[i] = _run_light_step_cached(cache, row)
         _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
     end
     return out
@@ -2140,41 +2101,11 @@ end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo::PlantMeteo.TimeStepTable,
-)
-    meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-    return run_light_series(cache, meteo_local)
-end
-
-function run_light_series(
-    cache::LightSimulationCache,
     meteo;
 )
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(cache, meteo)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
     meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo)
     return run_light_series(cache, _as_plantmeteo_table(meteo))
-end
-
-function run_light_series(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    meteo::PlantMeteo.TimeStepTable,
-    options::LightOptions;
-    interception_backend=:raster_cpu,
-    scattering_mode::Symbol=:raycast,
-    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
-)
-    meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-    run_light_series(
-        scene,
-        models,
-        meteo_local,
-        options;
-        interception_backend=interception_backend,
-        scattering_mode=scattering_mode,
-        scattering_backend=scattering_backend,
-    )
 end
 
 function run_light_series(
@@ -2186,8 +2117,7 @@ function run_light_series(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
 )
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
     meteo isa PlantMeteo.TimeStepTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
     run_light_series(scene, models, _as_plantmeteo_table(meteo), options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
 end

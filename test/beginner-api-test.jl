@@ -87,7 +87,7 @@ end
 
     config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config)
-    row = first(prepare_meteo(meteo, options).rows)
+    row = first(prepare_meteo(meteo, options))
 
     old_step = ArchimedLight.run_light_step(scene, models, row, options)
     sim = LightSimulation(scene, models; options=options)
@@ -96,7 +96,7 @@ end
 
     cached = LightSimulation(scene, models; options=LightOptions(options; cache_radiation=true))
     series = run_light(cached, meteo)
-    @test length(series) == length(prepare_meteo(meteo, options).rows)
+    @test length(series) == length(prepare_meteo(meteo, options))
     @test cache_summary(cached).cached_turtle_count >= 1
 
     scene2 = make_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
@@ -161,7 +161,7 @@ end
 
     scattering_options = LightOptions(options; scattering=true)
     scattering_sim = LightSimulation(scene, models; options=scattering_options)
-    scattering_step = run_light(scattering_sim, first(prepare_meteo(meteo, scattering_options).rows))
+    scattering_step = run_light(scattering_sim, first(prepare_meteo(meteo, scattering_options)))
     @test scattering_step.scattering !== nothing
     scattering_path = joinpath(mktempdir(), "component_values.csv")
     write_component_values(scattering_path, scattering_sim, scattering_step)

@@ -133,7 +133,7 @@ end
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
     ]
-    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_series"))
+    meteo = ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_cached_series"))
     uncached = HelperModule._synthetic_options(cache_radiation=false)
     cached = HelperModule._synthetic_options(cache_radiation=true)
 
@@ -227,7 +227,7 @@ end
     @test selected isa PM.TimeStepTable
     @test length(selected) == 2
     @test length(series) == 2
-    @test meteo_read isa ArchimedLight.MeteoTable
+    @test meteo_read isa PM.TimeStepTable
     @test first(selected).Ri_SW_f == 200.0
     @test isapprox(sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
 end
@@ -242,7 +242,7 @@ end
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12, 0), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12, 15), duration_seconds=1800.0, ri_par_f=100.0, ri_nir_f=60.0),
     ]
-    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_overlap"))
+    meteo = ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_overlap"))
 
     strict_options = HelperModule._synthetic_options(cache_radiation=false)
     @test_throws "invalid overlapping meteo steps at row 2" ArchimedLight.prepare_meteo(meteo, strict_options)
@@ -252,7 +252,7 @@ end
     selected = ArchimedLight.prepare_meteo(meteo, permissive_options)
     series = ArchimedLight.run_light_series(scene, models, meteo, permissive_options)
 
-    @test length(selected.rows) == 2
+    @test length(selected) == 2
     @test length(series) == 2
 
     config_path = tempname() * ".yml"
@@ -280,7 +280,7 @@ end
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0),
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0),
     ]
-    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_scattering_series"))
+    meteo = ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_cached_scattering_series"))
     uncached = HelperModule._synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=false)
     cached = HelperModule._synthetic_options(sectors=6, all_in_turtle=false, scattering=true, pixel_size=0.01, cache_radiation=true)
 
@@ -306,7 +306,7 @@ end
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=100.0, ri_nir_f=50.0),
         HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(14), duration_seconds=900.0, ri_par_f=90.0, ri_nir_f=60.0),
     ]
-    meteo = ArchimedLight.MeteoTable(rows, (; source="synthetic_manual_cache"))
+    meteo = ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_manual_cache"))
 
     cache = ArchimedLight.prepare_light_cache(scene, models, options)
     summary0 = ArchimedLight.cache_summary(cache)
@@ -350,7 +350,7 @@ end
     uncached_options = HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false)
     row0 = merge(HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0), (RI_UV_F=25.0,))
     row1 = merge(HelperModule._synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=600.0, ri_par_f=100.0, ri_nir_f=60.0), (RI_UV_F=10.0,))
-    meteo = ArchimedLight.MeteoTable([row0, row1], (; source="synthetic_extra_band_cache"))
+    meteo = ArchimedLight.PlantMeteo.TimeStepTable([row0, row1], (; source="synthetic_extra_band_cache"))
 
     cached = ArchimedLight.run_light_series(scene, models, meteo, cached_options)
     uncached = ArchimedLight.run_light_series(scene, models, meteo, uncached_options)

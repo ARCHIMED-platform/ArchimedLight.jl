@@ -11,7 +11,7 @@ config_path = joinpath(REPO_ROOT, "example_2", "config.yml")
 
 function run_archimed(config_path)
     options, scene, meteo, models = read_config(config_path)
-    row = first(prepare_meteo(meteo, options).rows)
+    row = first(prepare_meteo(meteo, options))
     step = run_light_step(scene, models, row, options)
     return scene, models, options, step
 end

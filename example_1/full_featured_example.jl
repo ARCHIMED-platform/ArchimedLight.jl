@@ -134,10 +134,11 @@ function write_component_comparison(out_csv::String, java_vals, julia_vals)
 end
 
 function step_duration_seconds(row)
-    if (:step_duration in propertynames(row))
+    names = ArchimedLight._row_propertynames(row)
+    if (:step_duration in names)
         return to_float(getproperty(row, :step_duration))
     end
-    if (:hour_start in propertynames(row)) && (:hour_end in propertynames(row))
+    if (:hour_start in names) && (:hour_end in names)
         t0 = Time(string(getproperty(row, :hour_start)))
         t1 = Time(string(getproperty(row, :hour_end)))
         dt0 = DateTime(Date(2000, 1, 1), t0)
@@ -153,7 +154,7 @@ function main()
 
     config_path = joinpath(base, "config.yml")
     options, scene, meteo, models = read_config(config_path)
-    row = first(prepare_meteo(meteo, options).rows)
+    row = first(prepare_meteo(meteo, options))
 
     # Stage-by-stage execution with explicit backend objects.
     sky = compute_sky(row, options)
@@ -196,7 +197,7 @@ function main()
     nir_vals = collect(values(step.budget.incident_energy.total.nir))
 
     println("ArchimedLight full example completed")
-    println("- meteo rows: ", length(meteo.rows))
+    println("- meteo rows: ", length(meteo))
     println("- turtle sectors: ", length(step.turtle.sectors))
     println("- nodes in budget: ", length(step.budget.incident_energy.total.par))
     println("- custom bands: ", join(sort(collect(keys(step.extra_band_irradiance))), ", "))

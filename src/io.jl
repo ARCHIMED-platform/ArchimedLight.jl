@@ -464,10 +464,6 @@ function write_scene(path::AbstractString, scene::PlantGeom.SceneGeometry)
     return path
 end
 
-function _rows_to_namedtuples(table)
-    Tables.rowtable(table) |> collect
-end
-
 function _meta_to_namedtuple(meta)
     if meta isa NamedTuple
         return meta
@@ -477,14 +473,6 @@ function _meta_to_namedtuple(meta)
     else
         return (;)
     end
-end
-
-function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
-    pairs = Pair{Symbol,Any}[]
-    for k in (:latitude, :longitude, :altitude, :use)
-        haskey(meta, k) && push!(pairs, k => getfield(meta, k))
-    end
-    isempty(pairs) ? row : merge(row, (; pairs...))
 end
 
 function _positive_duration_seconds(v; field_name::AbstractString="step_duration")
@@ -523,59 +511,56 @@ function _table_metadata_namedtuple(data)
     _meta_to_namedtuple(meta)
 end
 
-function _as_plantmeteo_table(data)
+function _with_meteo_metadata(table::PlantMeteo.TimeStepTable, metadata)
+    meta = _meta_to_namedtuple(metadata)
+    PlantMeteo.TimeStepTable(getfield(table, :names), meta, getfield(table, :ts))
+end
+
+function _as_plantmeteo_table(data; metadata=_table_metadata_namedtuple(data))
+    data isa PlantMeteo.TimeStepTable && return data
     transformed = Tables.columntable(data)
-    column_names = Tables.columnnames(data)
+    column_names = Tables.columnnames(transformed)
     if !(:date in column_names) && :DateTime in column_names
         transformed = PlantMeteo.set_column(transformed, :date, transformed.DateTime)
+        column_names = Tables.columnnames(transformed)
     end
     transformed = _normalize_raw_meteo_dates(transformed)
+    column_names = Tables.columnnames(transformed)
     if !(:duration in column_names)
         duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
         transformed = PlantMeteo.set_column(transformed, :duration, duration)
     end
-    PlantMeteo.TimeStepTable(transformed, _table_metadata_namedtuple(data))
+    PlantMeteo.TimeStepTable(transformed, _meta_to_namedtuple(metadata))
 end
 
 """
-    read_meteo(path)::MeteoTable
+    read_meteo(path)::PlantMeteo.TimeStepTable
 
 Read a meteorological forcing table from `path` and return it as a
-[`MeteoTable`](@ref).
+`PlantMeteo.TimeStepTable`.
 
-The resulting table stores rows as named tuples and keeps available metadata
-such as latitude, longitude, altitude, and source file path.
+The resulting table keeps available metadata such as latitude, longitude,
+altitude, and source file path.
 """
 function read_meteo(path::AbstractString)
-    weather, meta =
-        try
-            w = PlantMeteo.read_weather(
-                path;
-                date_formats=(Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd")),
-                forward_fill_date=true,
-            )
-            m = try
-                PlantMeteo.metadata(w)
-            catch
-                (; file=path)
-            end
-            (w, m)
-        catch
-            data, metadata_ = PlantMeteo.read_weather_(path)
-            data = _normalize_raw_meteo_dates(data)
-            (data, metadata_)
-        end
-    meta_nt = merge((; file=path), _meta_to_namedtuple(meta))
-    raw_rows = _rows_to_namedtuples(weather)
-    rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
-    MeteoTable(rows, meta_nt)
+    try
+        weather = PlantMeteo.read_weather(
+            path;
+            date_formats=(Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd")),
+            forward_fill_date=true,
+        )
+        meta = merge((; file=path), _table_metadata_namedtuple(weather))
+        return _with_meteo_metadata(weather, meta)
+    catch
+        data, metadata_ = PlantMeteo.read_weather_(path)
+        data = _normalize_raw_meteo_dates(data)
+        meta = merge((; file=path), _meta_to_namedtuple(metadata_))
+        return _as_plantmeteo_table(data; metadata=meta)
+    end
 end
 
 function read_meteo(data)
     Tables.istable(typeof(data)) || error("Unsupported meteo input: expected a path or a Tables.jl-compatible table.")
-    data isa MeteoTable && return data
-    data isa PlantMeteo.TimeStepTable && return MeteoTable(_meteo_rows(data), _meteo_metadata(data))
-
-    meteo = _as_plantmeteo_table(data)
-    MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
+    data isa PlantMeteo.TimeStepTable && return data
+    _as_plantmeteo_table(data)
 end

@@ -54,7 +54,7 @@ At this point:
 
 - `options` is a `LightOptions`
 - `scene` is a `PlantGeom.SceneGeometry`
-- `meteo` is a `MeteoTable`
+- `meteo` is a `PlantMeteo.TimeStepTable`
 - `models` is a `LightModels`
 
 The soil optics still come from `model_soil.yml`. The only thing changed here is how the paving geometry is materialized for the demonstration figure.

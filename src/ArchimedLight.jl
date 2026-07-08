@@ -24,7 +24,6 @@ include("attach.jl")
 include("outputs.jl")
 include("visualization.jl")
 
-export MeteoTable
 export LightRenderGeometry
 export LightModels
 export GroupModel

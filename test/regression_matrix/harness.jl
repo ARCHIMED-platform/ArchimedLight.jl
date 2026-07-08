@@ -341,7 +341,7 @@ function _synthetic_meteo_for_source(source_id::String)
             _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
             _synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
         ]
-        return ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_series"))
+        return ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_cached_series"))
     elseif source_id == "toricity_wraparound"
         return _synthetic_meteo_row(; duration_seconds=1.0, ri_par_f=100.0, ri_nir_f=0.0, direct_fraction=1.0, sun_azimut=270.0, sun_elevation=45.0)
     end
@@ -374,7 +374,7 @@ function _compute_synthetic_case(case::RegressionCase)
             models=models,
             options=options_cached,
             series=series_cached,
-            meteo_rows=meteo.rows,
+            meteo_rows=collect(meteo),
             figure=nothing,
             strict_result=strict_result,
             meta=OrderedDict{String,Any}("cache_radiation" => true),
@@ -405,7 +405,7 @@ function _compute_fast_fixture_case(case::RegressionCase)
     options = _apply_case_options(src.options, case.options)
     scattering_mode = _scattering_mode(case.options)
     if startswith(case.scenario.source_id, "sky_")
-        row = first(ArchimedLight.prepare_meteo(src.meteo, options).rows)
+        row = first(ArchimedLight.prepare_meteo(src.meteo, options))
         sky = ArchimedLight.compute_sky(row, options)
         turtle = ArchimedLight.build_turtle(options, sky)
         fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
@@ -435,7 +435,7 @@ function _compute_fast_fixture_case(case::RegressionCase)
         models=src.models,
         options=options,
         series=series,
-        meteo_rows=selected.rows,
+        meteo_rows=collect(selected),
         figure=figure,
         strict_result=strict_result,
         meta=OrderedDict{String,Any}("fixture" => case.scenario.source_id),

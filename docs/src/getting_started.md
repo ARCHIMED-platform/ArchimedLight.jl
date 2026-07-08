@@ -5,7 +5,7 @@ It uses the bundled coffee example from `example_2/`, which is also the source o
 Here is how to plot it:
 
 ```@setup getting_started
-using CairoMakie, ArchimedLight, PlantGeom
+using CairoMakie, ArchimedLight, PlantGeom, PlantMeteo
 using Dates
 CairoMakie.activate!(type = "png")
 ```
@@ -131,7 +131,7 @@ any simulated hour without rebuilding the geometry:
 
 ```@example getting_started
 # Generating a series of meteo row to simulate a day:
-meteo = MeteoTable(
+meteo = PlantMeteo.TimeStepTable(
     [
         (
             date=Date(2020, 6, 21),

@@ -206,7 +206,7 @@ sky = SkyState(
 )
 ```
 
-This can be replaced with a row from a `MeteoTable`, and ArchimedLight.jl will compute the `SkyState` from the solar geometry and irradiance values in the meteo file.
+This can be replaced with a row from a `PlantMeteo.TimeStepTable`, and ArchimedLight.jl will compute the `SkyState` from the solar geometry and irradiance values in the meteo file.
 
 Then we define the `LightOptions`, which defines simulations parameters such as the number of turtle sectors, pixel size, toricity, and scattering behavior:
 

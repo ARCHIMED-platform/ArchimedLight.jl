@@ -20,7 +20,7 @@ function simulate_home_figure(
 )
     config_path = joinpath(repo_root, "example_2", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config_path; plot_paving_override=plot_paving_override)
-    row = first(ArchimedLight.prepare_meteo(meteo, options).rows)
+    row = first(ArchimedLight.prepare_meteo(meteo, options))
     step = ArchimedLight.run_light_step(scene, models, row, options)
     return scene, models, options, step
 end
