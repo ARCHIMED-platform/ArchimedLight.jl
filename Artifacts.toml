@@ -1,7 +1,7 @@
 [archimedlight-release-fixtures]
-git-tree-sha1 = "5963e97b555116d6f2d9270b2333e29642f4649e"
+git-tree-sha1 = "68ce0ccf594ed2ff4fb7369f19735f75b7a4085e"
 lazy = true
 
-[[archimedlight-release-fixtures.download]]
-url = "https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.3/archimedlight-release-fixtures-v0.1.3.tar.gz"
-sha256 = "761cc512e91bc90e6e0a74644e077da49358839ccfdedb6e7748c11ba8a6a92e"
+    [[archimedlight-release-fixtures.download]]
+    sha256 = "95547ed6c13bf3b16ca76e93251e275bffc277e4f8a211263565cf99d7aa1bc8"
+    url = "https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.3/archimedlight-release-fixtures-v0.1.3.tar.gz"
