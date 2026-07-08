@@ -517,7 +517,7 @@ Base.get(pixel_hits::DensePixelHits, idx::Int, default) =
 Base.get(pixel_hits::DenseUpperPixelHits, idx::Int, default) =
     (1 <= idx <= length(pixel_hits.nodes) && pixel_hits.nodes[idx] != 0) ? UpperHitStack(pixel_hits, idx) : default
 
-function Base.get!(f::F, pixel_hits::DensePixelHits, idx::Int) where {F}
+function Base.get!(f::Function, pixel_hits::DensePixelHits, idx::Int)
     stack = pixel_hits.stacks[idx]
     if stack === nothing
         stack = f()
