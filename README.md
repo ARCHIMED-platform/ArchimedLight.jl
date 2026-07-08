@@ -1,7 +1,7 @@
 # ArchimedLight.jl
 
-[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/stable)
-[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://archimed-platform.github.io/ArchimedLight.jl/dev)
+[![Stable Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/stable)
+[![Development documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://VEZY.github.io/ArchimedLight.jl/dev)
 [![Test workflow status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Test.yml?query=branch%3Amain)
 [![Docs workflow Status](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml/badge.svg?branch=main)](https://github.com/VEZY/ArchimedLight.jl/actions/workflows/Docs.yml?query=branch%3Amain)
 [![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
@@ -234,7 +234,7 @@ julia --project=. scripts/build_release_fixture_artifact.jl \
   --test-root /path/to/heavy-test-root \
   --tarball /tmp/archimedlight-release-fixtures.tar.gz \
   --refresh-references \
-  --url https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.0.1/archimedlight-release-fixtures-v0.0.1.tar.gz
+  --url https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.3/archimedlight-release-fixtures-v0.1.3.tar.gz
 ```
 
 Run release-only heavy regression:

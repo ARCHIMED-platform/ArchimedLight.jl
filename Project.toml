@@ -1,6 +1,6 @@
 name = "ArchimedLight"
 uuid = "ca362a0f-208d-4994-8e0e-d922fd0d438a"
-version = "0.0.1-DEV"
+version = "0.1.3"
 authors = ["Rémi Vezy <VEZY@users.noreply.github.com> and contributors"]
 
 [deps]
