@@ -1454,7 +1454,7 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
     end
     first_row = first(rows)
-    columns = collect(Symbol.(_row_propertynames(first_row)))
+    columns = Symbol[Symbol(name) for name in _row_propertynames(first_row)]
     radiation_inputs = try
         inputs = _effective_radiation_use_tokens(first_row)
         isempty(inputs) ? _inferred_radiation_input_columns(first_row) : inputs
