@@ -203,70 +203,11 @@ Generate or refresh fast fixture references (simple-plant numeric CSV + image):
 julia --project=. scripts/generate_fast_fixture_references.jl
 ```
 
-## Release-only heavy regression (artifact)
+## Releasing
 
-Heavy full-fixture regression can be kept outside the package repository and run only before
-releases.
-
-Build a data-only artifact tarball from a heavy fixture dataset checkout (fixtures + references +
-reference images + manifest):
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz
-```
-
-If you want the current Julia outputs to become the packaged references first, refresh and package
-in one step:
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
-  --refresh-references
-```
-
-Optional: bind the artifact in `Artifacts.toml` by providing the download URL:
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
-  --refresh-references \
-  --url https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.3/archimedlight-release-fixtures-v0.1.3.tar.gz
-```
-
-Run release-only heavy regression:
-
-```bash
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
-```
-
-You can also bypass artifacts and point directly to a local extracted release dataset:
-
-```bash
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
-```
-
-Run one release fixture directly by tag. Fixture ids are exposed as tags with `-` replaced by `_`:
-
-```bash
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :test_compare_simpleplant in ti.tags, verbose=true)'
-```
-
-Release test scripts are local in this repository (`test/release/`) and consume only data from the
-artifact/dataset. During release runs, per-fixture progress is logged with start/end timestamps.
-
-The regression matrix also has an optional release profile that reuses the same dataset root:
-
-```bash
-ARCHIMEDLIGHT_REGRESSION_PROFILE=release \
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test test/regression_matrix/runtests.jl
-```
+Maintainer release steps, including docs, release fixtures, regression matrix,
+benchmarks, Julia General registration, TagBot, and artifact upload, are in
+[`RELEASE.md`](RELEASE.md).
 
 ## Benchmarks
 
