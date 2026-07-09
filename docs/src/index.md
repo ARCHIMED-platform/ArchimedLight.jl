@@ -28,15 +28,17 @@ Energy balance, transpiration, and photosynthesis are intentionally out of scope
 
 ## Quick Start
 
-```julia
+```@example home_quick_start
 using ArchimedLight
 
-sim, meteo = read_simulation("config.yml")
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
+sim, meteo = read_simulation(config)
 
 step = run_light(sim, first(meteo))
 
-step.budget.incident_flux.total.par
-step.budget.absorbed_energy.total.par
+step.budget.incident_flux.total.par;
+step.budget.absorbed_energy.total.par;
 ```
 
 The simulation results are grouped by quantity and waveband in `LightBudget`. When you attach those values back onto the scene, the default attribute names keep the standard ARCHIMED naming convention such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.

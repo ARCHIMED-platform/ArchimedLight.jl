@@ -12,9 +12,17 @@ This page documents those three layers and then explains the ARCHIMED-style CSV 
 
 The core output of `run_light` for one meteo row is:
 
-```julia
+```@example outputs
+using ArchimedLight
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
+sim, meteo = read_simulation(config)
+sky_options = LightOptions(sim.options; include_sky_fraction=true)
+sim = LightSimulation(sim.scene, sim.models; options=sky_options)
+row = first(meteo)
 step = run_light(sim, row)
-budget = step.budget
+budget = step.budget;
 ```
 
 The main grouped fields are:
@@ -36,10 +44,10 @@ and by waveband, for example:
 
 Typical accesses:
 
-```julia
-budget.incident_flux.initial.par
-budget.incident_flux.total.par
-budget.absorbed_energy.total.nir
+```@example outputs
+budget.incident_flux.initial.par;
+budget.incident_flux.total.par;
+budget.absorbed_energy.total.nir;
 ```
 
 Each leaf of that structure is a dictionary keyed by node id.
@@ -53,12 +61,12 @@ When using a YAML config, `read_options` enables that option when
 
 The convenience layer for visual inspection is `attach_light_step!`:
 
-```julia
+```@example outputs
 attach_light_step!(
-    scene,
+    sim.scene,
     step;
     fields=[:incident_par_flux, :incident_par_energy, :absorbed_par_energy],
-)
+);
 ```
 
 The default mappings are:
@@ -97,21 +105,23 @@ The meaning follows the historical ARCHIMED naming:
 You can also rename attached attributes for downstream packages. For example,
 PlantBiophysics can use `Ra_SW_f` as an alias for absorbed NIR:
 
-```julia
+```@example outputs
 attach_light_step!(
-    scene,
+    sim.scene,
     step;
     fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
     names=Dict(:absorbed_nir_flux => :Ra_SW_f),
-)
+);
 ```
 
 ## 3. Disk Outputs: Exported Scenes
 
 Once results are attached, you can export the enriched scene:
 
-```julia
-write_scene("output/scene_with_light.opf", scene)
+```@example outputs
+scene_path = joinpath(mktempdir(), "scene_with_light.opf")
+write_scene(scene_path, sim.scene)
+isfile(scene_path)
 ```
 
 Supported export formats are:
@@ -162,10 +172,11 @@ Common columns are:
 
 You can write this table from already-computed results:
 
-```julia
-sim, meteo = read_simulation("example_2/config.yml")
+```@example outputs
 series = run_light(sim, meteo)
-write_component_values("output/component_values.csv", sim, series)
+component_path = joinpath(mktempdir(), "component_values.csv")
+write_component_values(component_path, sim, series)
+isfile(component_path)
 ```
 
 `step_index_base=0` is available for compatibility with historical harness

@@ -28,13 +28,19 @@ than relying on the `cache` field or cache object layout.
 
 File-based run:
 
-```julia
-sim, meteo = read_simulation("config.yml")
+```@example api_file_workflow
+using ArchimedLight
+
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
+sim, meteo = read_simulation(config)
 step = run_light(sim, first(meteo))
-series = run_light(sim, meteo)
+series = run_light(sim, meteo);
 ```
 
-Interactive run:
+Interactive run. This is a schematic API shape because it assumes that the
+host application provides `plant.opf` and `meteo_row`; see the checked
+Interactive Workflow page for a fully executable in-memory scene.
 
 ```julia
 using PlantGeom
@@ -53,7 +59,8 @@ sim = LightSimulation(scene, models; options=LightOptions())
 step = run_light(sim, meteo_row)
 ```
 
-For host-model coupling:
+For host-model coupling, this schematic loop assumes your host model provides
+the meteo `rows` and a later `new_scene`:
 
 ```julia
 for row in rows
@@ -65,7 +72,8 @@ update_scene!(sim, new_scene)
 
 ## Input Loading
 
-Use these when your workflow starts from files or existing tables:
+Use these when your workflow starts from files or existing tables. The names in
+this block are schematic placeholders for your actual paths and tables.
 
 ```julia
 read_simulation(path)
@@ -77,7 +85,8 @@ read_meteo(path_or_table)
 
 ## Scene And Model Helpers
 
-Use these when inputs are built in Julia:
+Use these when inputs are built in Julia. This block lists call signatures and
+is intentionally schematic.
 
 ```julia
 PlantGeom.make_scene(f; domain, source_path="interactive.scene", kwargs...)
@@ -93,7 +102,8 @@ emitter(; radiance, par=0.48, nir=0.52)
 
 `PlantGeom.add_plant!` is the plant-named wrapper. `PlantGeom.add_object!` is the general placement
 helper for MTGs, `GeometryBasics` meshes, `.opf`, and `.gwa` files. For mesh
-files such as `.obj` or `.ply`, use MeshIO/FileIO to load the mesh first:
+files such as `.obj` or `.ply`, use MeshIO/FileIO to load the mesh first. This
+snippet is schematic because it depends on your local mesh file and builder:
 
 ```julia
 using FileIO, MeshIO
@@ -104,20 +114,22 @@ PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10)
 Both placement helpers accept `at`, `scale`, `rotate`, `deg`, and OPS-style
 `rotation`, `inclination_azimut`, and `inclination_angle` placement keywords.
 
-Tuple rotations use fixed X, then Y, then Z order:
+Tuple rotations use fixed X, then Y, then Z order. This is a schematic call
+shape:
 
 ```julia
 PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(10, 20, 30), deg=true)
 ```
 
 Named-tuple rotations preserve the field order, which is useful when you need a
-specific Euler sequence:
+specific Euler sequence. This is a schematic call shape:
 
 ```julia
 PlantGeom.add_object!(builder, mesh; group="sensor", type="panel", id=10, rotate=(y=20, z=30, x=10), deg=true)
 ```
 
-`PlantGeom.add_ground!` and `write_scene` also work on prepared scenes:
+`PlantGeom.add_ground!` and `write_scene` also work on prepared scenes. This
+snippet is schematic because it assumes an existing `scene` and output `path`:
 
 ```julia
 PlantGeom.add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="pavement", type="Cobblestone")
@@ -126,7 +138,8 @@ write_scene(path, scene)
 
 ## Validation
 
-Use these to diagnose inputs before running:
+Use these to diagnose inputs before running. This block is schematic and uses
+placeholder inputs already introduced above:
 
 ```julia
 check_scene(scene)
@@ -142,7 +155,8 @@ Each function returns a `ValidationReport` with `errors`, `warnings`, and
 `infos`.
 
 The `summarize_*` helpers return structured summaries and print compact
-diagnostics for humans. Use them when you are not sure what ArchimedLight sees:
+diagnostics for humans. Use them when you are not sure what ArchimedLight sees.
+This schematic snippet assumes `scene`, `models`, `meteo`, and `options` exist:
 
 ```julia
 summarize_scene(scene; models=models)
@@ -152,7 +166,8 @@ summarize_meteo(meteo; options=options)
 ## Simulation Cache
 
 `LightSimulation` owns preparation and cache state. These helpers update inputs
-and invalidate cached data:
+and invalidate cached data. This block is schematic and assumes existing
+replacement inputs:
 
 ```julia
 update_scene!(sim, scene)
@@ -170,7 +185,8 @@ cache entries. The cache object itself is an implementation detail; use
 The explicit stage API is available as qualified, advanced API for debugging,
 research, and parity workflows. These calls may return stage containers such as
 `ArchimedLight.TurtleGrid` or `ArchimedLight.FirstOrderResult`, which are not
-exported in `0.1.x`.
+exported in `0.1.x`. This block is schematic because it assumes all previous
+stage inputs have already been prepared:
 
 ```julia
 ArchimedLight.compute_sky(row, options)
@@ -185,7 +201,9 @@ These functions and stage containers are intentionally not exported in `0.1.x`.
 Prefer `run_light` for application code unless you need to inspect or replace
 individual pipeline stages.
 
-For interactive synthetic scenes, `run_light` also accepts a prebuilt sky state:
+For interactive synthetic scenes, `run_light` also accepts a prebuilt sky state.
+This block is schematic because it assumes an existing `scene`, `models`,
+`options`, and `sky`:
 
 ```julia
 sim = LightSimulation(scene, models; options=options)
@@ -193,7 +211,7 @@ step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
 The low-level cache functions are still available for advanced work, but their
-cache object layout is internal:
+cache object layout is internal. This block is schematic and uses placeholders:
 
 ```julia
 cache = ArchimedLight.prepare_light_cache(scene, models, options; ...)
@@ -209,7 +227,8 @@ ArchimedLight.run_light_series(cache, meteo)
 
 ## Scene Attachment Helpers
 
-These functions attach computed values back onto the MTG using ARCHIMED attribute names:
+These functions attach computed values back onto the MTG using ARCHIMED
+attribute names. This block lists schematic call shapes:
 
 ```julia
 attach_node_values!(scene, attr, values; fill_value=nothing)
@@ -251,7 +270,8 @@ example `Dict(:absorbed_nir_flux => :Ra_SW_f)`.
 
 ## Visualization Helpers
 
-These helpers expose direct mesh coloring and the Makie package extension:
+These helpers expose direct mesh coloring and the Makie package extension. This
+block lists schematic call shapes:
 
 ```julia
 light_render_geometry(scene, models, options)
@@ -284,6 +304,8 @@ comparable.
 ## Backend Types
 
 The current public backend selectors are:
+
+This block lists schematic constructor calls:
 
 ```julia
 RasterCPUBackend()
