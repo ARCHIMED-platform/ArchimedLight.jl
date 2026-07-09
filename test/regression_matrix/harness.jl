@@ -275,6 +275,22 @@ end
 
 _release_func(name::Symbol) = Base.invokelatest(getfield, @__MODULE__, name)
 _release_call(name::Symbol, args...; kwargs...) = Base.invokelatest(_release_func(name), args...; kwargs...)
+_release_cache_pair_fixture_ids() = Set(["test-cached-radiation", "test-cached-radiation3"])
+
+function _release_cached_pair_fixture(fx)
+    cfg2 = joinpath(dirname(fx.config_path), "config2.yml")
+    isfile(cfg2) || error("$(fx.id): missing paired cached-radiation config2.yml")
+    return _release_call(
+        :JuliaFixture,
+        fx.id * "-config2",
+        cfg2,
+        fx.visual_metric,
+        true,
+        fx.scene_override,
+        fx.meteo_override,
+        fx.force_scattering,
+    )
+end
 
 function _release_regression_cases()
     _ensure_release_harness_loaded!()
@@ -451,6 +467,20 @@ function _compute_release_case(case::RegressionCase)
     fx = _release_call(:fixture_by_id, case.scenario.source_id)
     fx === nothing && error("Unknown release fixture $(repr(case.scenario.source_id))")
     data = _release_call(:fixture_runtime_data, fx)
+    if fx.id in _release_cache_pair_fixture_ids()
+        pair_fx = _release_cached_pair_fixture(fx)
+        pair_data = _release_call(:fixture_runtime_data, pair_fx)
+        return (
+            kind=:release_pair_outputs,
+            fx=fx,
+            data=data,
+            pair_fx=pair_fx,
+            pair_data=pair_data,
+            figure=nothing,
+            strict_result=(ok=true, detail=""),
+            meta=OrderedDict{String,Any}("fixture" => fx.id, "pair_fixture" => pair_fx.id),
+        )
+    end
     fig = _release_call(:render_fixture_montage, fx; data=data)
     return (
         kind=:release_outputs,
@@ -501,6 +531,12 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
     elseif data.kind == :release_outputs
         files = _release_call(:write_fixture_observed_outputs!, data.fx, observed_dir; data=data.data)
         image_path = _save_figure_png(joinpath(observed_dir, "$(data.fx.id)_montage.png"), data.figure)
+    elseif data.kind == :release_pair_outputs
+        out1 = joinpath(observed_dir, "config")
+        out2 = joinpath(observed_dir, "config2")
+        files1 = _release_call(:write_fixture_observed_outputs!, data.fx, out1; data=data.data)
+        files2 = _release_call(:write_fixture_observed_outputs!, data.pair_fx, out2; data=data.pair_data)
+        return (files=files1, pair_files=files2, image_path=nothing)
     else
         error("Unsupported observed data kind $(repr(data.kind))")
     end
@@ -542,6 +578,33 @@ function _baseline_image_path(case::RegressionCase, observed)
 end
 
 function _compare_case_against_baseline(case::RegressionCase, data, observed, observed_dir::AbstractString)
+    if data.kind == :release_pair_outputs
+        name = "component_values.csv"
+        obs_path = get(observed.files, name, "")
+        pair_path = get(observed.pair_files, name, "")
+        cmp =
+            if isempty(obs_path) || !isfile(obs_path)
+                (ok=false, missing=0, extra=0, mismatch=0, detail="observed file missing: $(name)", max_abs_error=Inf, max_rel_error=Inf)
+            elseif isempty(pair_path) || !isfile(pair_path)
+                (ok=false, missing=0, extra=0, mismatch=0, detail="paired observed file missing: $(name)", max_abs_error=Inf, max_rel_error=Inf)
+            else
+                compare_stable_csv_paths(obs_path, pair_path; label="$(case.id):$(name)")
+            end
+        ok = cmp.ok || !case.strict
+        status = case.strict ? (ok ? "strict_pass" : "strict_fail") : (ok ? "report_ok" : "report_drift")
+        return (
+            ok=ok,
+            status=status,
+            detail=cmp.ok ? "cached radiation pair matched" : "$(name): $(cmp.detail)",
+            total_missing=cmp.missing,
+            total_extra=cmp.extra,
+            total_mismatch=cmp.mismatch,
+            max_abs_error=cmp.max_abs_error,
+            max_rel_error=cmp.max_rel_error,
+            psnr=missing,
+        )
+    end
+
     baseline_dir = _case_baseline_dir(case)
     update = _regression_update_enabled() && case.scenario.source_kind != :release_fixture
     if update

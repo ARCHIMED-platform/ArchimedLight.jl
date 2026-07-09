@@ -420,7 +420,7 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
             )
             rows = _read_csv_rows(part_path)
             if !isempty(rows)
-                CSV.write(scat_path, rows; delim=';', append=!first_write, writeheader=first_write)
+                CSV.write(scat_path, rows; delim=';', append=!first_write, header=first_write)
                 first_write = false
             end
         end
