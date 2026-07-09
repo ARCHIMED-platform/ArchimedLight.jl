@@ -167,4 +167,4 @@ In particular:
 - scene, model, and meteo paths are active
 - the light options described on the configuration reference page are active
 - many Java-era output toggles remain as documentation or archival context
-- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime, because they are delegated to [Plantiophysics.jl](https://github.com/VEZY/PlantBiophysics.jl).
+- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime, because they are delegated to [PlantBiophysics.jl](https://github.com/VEZY/PlantBiophysics.jl).
