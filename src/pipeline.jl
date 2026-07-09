@@ -673,7 +673,7 @@ function _disable_nir_sky_local(sky::SkyState)
         sky.sun_azimuth_deg,
         sky.sun_elevation_deg,
         sky.ri_sw_f,
-        sky.ri_sw_f,
+        sky.ri_par_f,
         0.0,
         sky.direct_fraction,
         sky.diffuse_fraction,

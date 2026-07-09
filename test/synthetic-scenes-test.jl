@@ -232,6 +232,41 @@ end
     @test isapprox(sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
 end
 
+@testitem "Synthetic case NIR disabled preserves PAR from shortwave" tags = [:synthetic, :fast, :nir_interception] setup = [HelperModule] begin
+    using Dates
+
+    scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
+    models = HelperModule._default_synthetic_models()
+    options = ArchimedLight.LightOptions(
+        turtle_sectors=46,
+        all_in_turtle=true,
+        pixel_size=0.01,
+        toricity=true,
+        cache_radiation=false,
+        nir_interception=false,
+    )
+    meteo = [(
+        date=Date("2020-06-21"),
+        hour_start=Time(12),
+        hour_end=Time(13),
+        step_duration=3600.0,
+        latitude=15.0,
+        Ri_SW_f=200.0,
+        direct_fraction=1.0,
+        sun_azimut=180.0,
+        sun_elevation=80.0,
+    )]
+
+    series = ArchimedLight.run_light_series(scene, models, meteo, options)
+    step = only(series)
+
+    @test isapprox(step.sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(step.sky.ri_par_f, 0.48 * 200.0; atol=1e-9, rtol=1e-9)
+    @test isapprox(step.sky.ri_nir_f, 0.0; atol=1e-12, rtol=1e-12)
+    @test isapprox(sum(step.fluxes.par), step.sky.ri_par_f; atol=1e-9, rtol=1e-9)
+    @test isapprox(sum(step.fluxes.nir), 0.0; atol=1e-12, rtol=1e-12)
+end
+
 @testitem "Synthetic case overlapping meteo steps option" tags = [:synthetic, :fast, :overlapping_meteo_steps] setup = [HelperModule] begin
     using Dates
 
