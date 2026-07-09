@@ -273,10 +273,14 @@ function _ensure_release_harness_loaded!()
     return nothing
 end
 
+_release_func(name::Symbol) = Base.invokelatest(getfield, @__MODULE__, name)
+_release_call(name::Symbol, args...; kwargs...) = Base.invokelatest(_release_func(name), args...; kwargs...)
+
 function _release_regression_cases()
     _ensure_release_harness_loaded!()
     cases = RegressionCase[]
-    for fx in select_fixtures(julia_fixtures())
+    fixtures = _release_call(:select_fixtures, _release_call(:julia_fixtures))
+    for fx in fixtures
         scenario = RegressionScenario("release_$(fx.id)", :release_fixture, fx.id)
         opts = _default_case_options()
         push!(cases, RegressionCase("release_fixture__$(fx.id)", scenario, opts, true, true))
@@ -444,10 +448,10 @@ end
 
 function _compute_release_case(case::RegressionCase)
     _ensure_release_harness_loaded!()
-    fx = fixture_by_id(case.scenario.source_id)
+    fx = _release_call(:fixture_by_id, case.scenario.source_id)
     fx === nothing && error("Unknown release fixture $(repr(case.scenario.source_id))")
-    data = fixture_runtime_data(fx)
-    fig = render_fixture_montage(fx; data=data)
+    data = _release_call(:fixture_runtime_data, fx)
+    fig = _release_call(:render_fixture_montage, fx; data=data)
     return (
         kind=:release_outputs,
         fx=fx,
@@ -495,7 +499,7 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
         _write_sector_flux_csv(sector_path, data.turtle, data.fluxes; step_number=0)
         files["sector_flux.csv"] = sector_path
     elseif data.kind == :release_outputs
-        files = write_fixture_observed_outputs!(data.fx, observed_dir; data=data.data)
+        files = _release_call(:write_fixture_observed_outputs!, data.fx, observed_dir; data=data.data)
         image_path = _save_figure_png(joinpath(observed_dir, "$(data.fx.id)_montage.png"), data.figure)
     else
         error("Unsupported observed data kind $(repr(data.kind))")
@@ -507,9 +511,9 @@ end
 function _case_baseline_dir(case::RegressionCase)
     if case.scenario.source_kind == :release_fixture
         _ensure_release_harness_loaded!()
-        fx = fixture_by_id(case.scenario.source_id)
+        fx = _release_call(:fixture_by_id, case.scenario.source_id)
         fx === nothing && error("Unknown release fixture $(repr(case.scenario.source_id))")
-        return fixture_reference_dir(fx)
+        return _release_call(:fixture_reference_dir, fx)
     end
     return joinpath(_baseline_root(), _case_path_token(case.id))
 end
@@ -528,9 +532,9 @@ end
 function _baseline_image_path(case::RegressionCase, observed)
     if case.scenario.source_kind == :release_fixture
         _ensure_release_harness_loaded!()
-        fx = fixture_by_id(case.scenario.source_id)
+        fx = _release_call(:fixture_by_id, case.scenario.source_id)
         fx === nothing && return nothing
-        return fixture_reference_image_path(fx)
+        return _release_call(:fixture_reference_image_path, fx)
     elseif observed.image_path !== nothing
         return joinpath(_case_baseline_dir(case), basename(observed.image_path))
     end
