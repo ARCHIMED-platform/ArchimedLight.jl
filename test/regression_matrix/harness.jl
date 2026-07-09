@@ -41,7 +41,6 @@ const _KNOWN_OPTION_COLUMNS = [
     "nir_interception",
     "nir_scattering",
     "radiation_timestep",
-    "java_logged_turtle_dirs",
     "scattering_mode",
 ]
 
@@ -65,7 +64,6 @@ function _default_case_options()
         "nir_interception" => true,
         "nir_scattering" => true,
         "radiation_timestep" => 15,
-        "java_logged_turtle_dirs" => false,
         "scattering_mode" => :raycast,
     )
 end
@@ -110,7 +108,6 @@ function _apply_case_options(options0::ArchimedLight.LightOptions, options::Orde
         radiation_timestep_minutes=Float64(options["radiation_timestep"]),
         nir_interception=Bool(options["nir_interception"]),
         nir_scattering=Bool(options["nir_scattering"]),
-        java_logged_turtle_dirs=Bool(options["java_logged_turtle_dirs"]),
     )
 end
 
@@ -163,7 +160,6 @@ function _targeted_option_sets()
         OrderedDict("scattering" => true, "nir_scattering" => false),
         OrderedDict("radiation_timestep" => 5),
         OrderedDict("radiation_timestep" => 30),
-        OrderedDict("java_logged_turtle_dirs" => true, "sky_mode" => "16_all_in_turtle"),
         OrderedDict("scattering" => true, "scattering_mode" => :links),
         OrderedDict("scattering" => true, "scattering_mode" => :raycast),
         OrderedDict("sky_mode" => "1_direct", "cache_pixel_table" => true, "toricity" => true),
@@ -206,7 +202,6 @@ function regression_cases(; profile::String=_regression_profile())
             "nir_interception" => true,
             "nir_scattering" => true,
             "radiation_timestep" => 5,
-            "java_logged_turtle_dirs" => false,
             "scattering_mode" => :raycast,
         );
         strict=true,

@@ -28,7 +28,7 @@ function _component_sky_fraction_per_node(
     for (i, sector) in enumerate(step.turtle.sectors)
         sector.source == :sun && continue
         sky_count += 1
-        for (nid, area) in responses.projected_area_per_sector[i]
+        for (nid, area) in _sector_projected_area_pairs(responses, i)
             visible_sum[nid] = get(visible_sum, nid, 0.0) + area
         end
     end

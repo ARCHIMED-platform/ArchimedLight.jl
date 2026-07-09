@@ -18,7 +18,6 @@ function _synthetic_options(;
     radiation_timestep::Int=15,
     nir_interception::Bool=true,
     nir_scattering::Bool=true,
-    java_logged_turtle_dirs::Bool=false,
 )
     ArchimedLight.LightOptions(
         turtle_sectors=sectors,
@@ -32,7 +31,6 @@ function _synthetic_options(;
         radiation_timestep_minutes=radiation_timestep,
         nir_interception=nir_interception,
         nir_scattering=nir_scattering,
-        java_logged_turtle_dirs=java_logged_turtle_dirs,
     )
 end
 

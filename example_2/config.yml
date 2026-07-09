@@ -10,11 +10,11 @@ meteo: meteo.csv # Path to the meteo file
 meteo_range: 2, 3 # use only steps from 2 to 3 (inclusive, start from 1) in meteo file
 #meteo_range: 2016/07/01 8:00:00, 2016/07/01 12:00:00       # use only steps between given date/time
 scene_rotation: 0 # Rotation of the scene from the North axe (degrees)
-sky_sectors: 16 # Must be either 1, 6, 16, 46, 136 or 406
+sky_sectors: 46 # Must be either 1, 6, 16, 46, 136 or 406
 all_in_turtle: true # false: direct radiation is computed using the true sun position; true: direct radiation is computed using sky sectors
 radiation_timestep: 5 # [minutes] frequency for the computation of the sun's radiation within each timestep
 scattering: true # true: compute multiple scattering
-pixel_size: 0.3 # Size of the side of the pixel, relates to the number of rays sent in the scene for each direction (cm pixels-1). Decrease value for increased resolution.
+pixel_size: 0.1 # Size of the side of the pixel, relates to the number of rays sent in the scene for each direction (cm pixels-1). Decrease value for increased resolution.
 toricity: true # Make the scene toric (if false, increase the plot boundaries so all components are sampled)
 cache_pixel_table: false # true: pixel tables are cached on disc instead of kept in memory (slower but use less memory + allow to reuse them).
 cache_radiation: false # true : precomputed intercepted/scattered radiation to speed up simulation

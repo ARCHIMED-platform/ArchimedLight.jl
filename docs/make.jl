@@ -8,9 +8,6 @@ using Documenter
 
 DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
-include("generate_reference_figures.jl")
-generate_reference_figures()
-
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
@@ -47,6 +44,7 @@ makedocs(;
         "Advanced Usage" => [
             "Full Example" => "full_example.md",
             "Composable Stages" => "stages.md",
+            "GPU Backends And Benchmarks" => "gpu_backends.md",
             "Historical ARCHIMED Reference" => "archimed_reference.md",
         ],
         "API Reference" => "api.md",

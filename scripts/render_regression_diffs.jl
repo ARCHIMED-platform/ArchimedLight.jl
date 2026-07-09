@@ -135,7 +135,6 @@ function _default_options(; toricity::Bool=false, scattering::Bool=false, sky_mo
         nir_interception=true,
         nir_scattering=true,
         radiation_timestep_minutes=15.0,
-        java_logged_turtle_dirs=false,
     )
 end
 

@@ -13,6 +13,305 @@ Reference interception backend based on CPU raster projection.
 struct RasterCPUBackend <: InterceptionBackend end
 
 """
+    RasterGPUBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=nothing,
+        max_hits_per_pixel=32, tile_size=1, tile_face_capacity=32,
+        top_hit_tile_size=1, top_hit_tile_face_capacity=nothing,
+        edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
+        validate=false)
+
+Configuration for the native KernelAbstractions raster backend. The `backend`
+field is a KernelAbstractions backend; GPU packages are loaded by callers. The
+same device kernels are used for CPU-backed validation and GPU execution.
+"""
+struct RasterGPUBackendConfig{B}
+    backend::B
+    workgroupsize::Int
+    max_hits_per_pixel::Int
+    tile_size::Int
+    tile_face_capacity::Int
+    top_hit_tile_size::Int
+    top_hit_tile_face_capacity::Int
+    edge_accumulation::Symbol
+    dense_edge_limit_bytes::Int
+    validate::Bool
+
+    function RasterGPUBackendConfig(
+        backend::B,
+        workgroupsize::Integer,
+        max_hits_per_pixel::Integer,
+        tile_size::Integer,
+        tile_face_capacity::Integer,
+        top_hit_tile_size::Integer,
+        top_hit_tile_face_capacity::Integer,
+        edge_accumulation::Symbol,
+        dense_edge_limit_bytes::Integer,
+        validate::Bool,
+    ) where {B}
+        workgroupsize > 0 || error("RasterGPUBackendConfig workgroupsize must be positive.")
+        max_hits_per_pixel > 0 || error("RasterGPUBackendConfig max_hits_per_pixel must be positive.")
+        tile_size > 0 || error("RasterGPUBackendConfig tile_size must be positive.")
+        tile_face_capacity > 0 || error("RasterGPUBackendConfig tile_face_capacity must be positive.")
+        top_hit_tile_size > 0 || error("RasterGPUBackendConfig top_hit_tile_size must be positive.")
+        top_hit_tile_face_capacity > 0 ||
+            error("RasterGPUBackendConfig top_hit_tile_face_capacity must be positive.")
+        dense_edge_limit_bytes > 0 || error("RasterGPUBackendConfig dense_edge_limit_bytes must be positive.")
+        edge_accumulation in (:auto, :sparse_host_reduce, :dense_atomic) ||
+            error("Unsupported RasterGPU edge_accumulation: $edge_accumulation (supported: :auto, :sparse_host_reduce, :dense_atomic)")
+        return new{B}(
+            backend,
+            Int(workgroupsize),
+            Int(max_hits_per_pixel),
+            Int(tile_size),
+            Int(tile_face_capacity),
+            Int(top_hit_tile_size),
+            Int(top_hit_tile_face_capacity),
+            edge_accumulation,
+            Int(dense_edge_limit_bytes),
+            validate,
+        )
+    end
+end
+
+function RasterGPUBackendConfig(;
+    backend=KernelAbstractions.CPU(),
+    workgroupsize::Union{Nothing,Integer}=nothing,
+    max_hits_per_pixel::Integer=32,
+    tile_size::Integer=1,
+    tile_face_capacity::Integer=32,
+    top_hit_tile_size::Integer=1,
+    top_hit_tile_face_capacity::Union{Nothing,Integer}=nothing,
+    edge_accumulation::Symbol=:auto,
+    dense_edge_limit_bytes::Integer=512 * 1024^2,
+    validate::Bool=false,
+)
+    effective_top_hit_tile_face_capacity =
+        top_hit_tile_face_capacity === nothing ? tile_face_capacity : top_hit_tile_face_capacity
+    return RasterGPUBackendConfig(
+        backend,
+        workgroupsize === nothing ? 256 : workgroupsize,
+        max_hits_per_pixel,
+        tile_size,
+        tile_face_capacity,
+        top_hit_tile_size,
+        effective_top_hit_tile_face_capacity,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        validate,
+    )
+end
+
+"""
+    RasterGPUBackend(; kwargs...)
+    RasterGPUBackend(config::RasterGPUBackendConfig)
+
+Native GPU-oriented raster interception backend. It keeps projection,
+visibility stacks, visible-area reductions, and scattering-topology stack
+generation in KernelAbstractions kernels.
+"""
+struct RasterGPUBackend{C<:RasterGPUBackendConfig} <: InterceptionBackend
+    config::C
+end
+
+RasterGPUBackend(; kwargs...) = RasterGPUBackend(RasterGPUBackendConfig(; kwargs...))
+
+function _rastergpu_config_with(
+    config::RasterGPUBackendConfig;
+    backend=config.backend,
+    workgroupsize=config.workgroupsize,
+    max_hits_per_pixel=config.max_hits_per_pixel,
+    tile_size=config.tile_size,
+    tile_face_capacity=config.tile_face_capacity,
+    top_hit_tile_size=config.top_hit_tile_size,
+    top_hit_tile_face_capacity=config.top_hit_tile_face_capacity,
+    edge_accumulation=config.edge_accumulation,
+    dense_edge_limit_bytes=config.dense_edge_limit_bytes,
+    validate=config.validate,
+)
+    return RasterGPUBackendConfig(
+        backend,
+        workgroupsize,
+        max_hits_per_pixel,
+        tile_size,
+        tile_face_capacity,
+        top_hit_tile_size,
+        top_hit_tile_face_capacity,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        validate,
+    )
+end
+
+"""
+    RaycoreBackendConfig(; backend=KernelAbstractions.CPU(), workgroupsize=nothing,
+        max_hits_per_pixel=32, hit_epsilon=1.0f-4,
+        edge_accumulation=:auto, dense_edge_limit_bytes=512 * 1024^2,
+        propagation_backend=:auto, max_prechunk_instances=nothing,
+        scattering_eltype=nothing, toric_traversal=:replicated, validate=false)
+
+Shared configuration for Raycore-based interception and scattering backends.
+When `workgroupsize` is omitted, ArchimedLight uses a default of `256`. The
+`backend` field is a
+KernelAbstractions backend, not a CUDA/Metal package object; GPU packages are
+loaded by users or tests outside ArchimedLight core. `hit_epsilon` is forwarded
+to `Raycore.all_hits!` for stack deduplication; negative values request raw
+hit stacks when the loaded Raycore version supports that sentinel.
+`propagation_backend=:auto` uses the shared CPU dense solver for
+KernelAbstractions CPU and device propagation for GPU backends. Use `:device`
+or `:cpu` to force either path.
+`max_prechunk_instances` limits how many BLAS instances non-CPU prechunking can
+create; pass `0` or a negative value to disable the cap.
+`toric_traversal=:replicated` uses the historical finite 3x3 toric TLAS copy.
+`toric_traversal=:periodic` builds one fundamental-cell TLAS and wraps ray
+traversal through the periodic domain in the Raycore kernels.
+`validate=true` compares non-CPU Raycore traces against the CPU reference before
+running and throws `RaycoreValidationError` on mismatch. Validation is disabled
+by default, and Raycore backends never implicitly fall back to `RasterCPUBackend`.
+"""
+struct RaycoreBackendConfig{B}
+    backend::B
+    workgroupsize::Int
+    max_hits_per_pixel::Int
+    hit_epsilon::Float32
+    edge_accumulation::Symbol
+    dense_edge_limit_bytes::Int
+    propagation_backend::Symbol
+    max_prechunk_instances::Int
+    scattering_eltype::DataType
+    toric_traversal::Symbol
+    validate::Bool
+
+    function RaycoreBackendConfig(
+        backend::B,
+        workgroupsize::Integer,
+        max_hits_per_pixel::Integer,
+        hit_epsilon::Real,
+        edge_accumulation::Symbol,
+        dense_edge_limit_bytes::Integer,
+        propagation_backend::Symbol,
+        max_prechunk_instances::Integer,
+        scattering_eltype::Type{<:AbstractFloat},
+        toric_traversal::Symbol,
+        validate::Bool,
+    ) where {B}
+        workgroupsize > 0 || error("RaycoreBackendConfig workgroupsize must be positive.")
+        max_hits_per_pixel > 0 || error("RaycoreBackendConfig max_hits_per_pixel must be positive.")
+        isfinite(hit_epsilon) || error("RaycoreBackendConfig hit_epsilon must be finite.")
+        dense_edge_limit_bytes > 0 || error("RaycoreBackendConfig dense_edge_limit_bytes must be positive.")
+        edge_accumulation in (:auto, :sparse_host_reduce, :dense_atomic) ||
+            error("Unsupported Raycore edge_accumulation: $edge_accumulation (supported: :auto, :sparse_host_reduce, :dense_atomic)")
+        propagation_backend in (:auto, :device, :cpu) ||
+            error("Unsupported Raycore propagation_backend: $propagation_backend (supported: :auto, :device, :cpu)")
+        scattering_eltype in (Float32, Float64) ||
+            error("RaycoreBackendConfig scattering_eltype must be Float32 or Float64.")
+        toric_traversal in (:replicated, :periodic) ||
+            error("Unsupported Raycore toric_traversal: $toric_traversal (supported: :replicated, :periodic)")
+        max_prechunk_instances_value = Int(max_prechunk_instances)
+        return new{B}(
+            backend,
+            Int(workgroupsize),
+            Int(max_hits_per_pixel),
+            Float32(hit_epsilon),
+            edge_accumulation,
+            Int(dense_edge_limit_bytes),
+            propagation_backend,
+            max_prechunk_instances_value <= 0 ? typemax(Int) : max_prechunk_instances_value,
+            scattering_eltype,
+            toric_traversal,
+            validate,
+        )
+    end
+end
+
+struct RaycoreValidationError <: Exception
+    reason::Symbol
+    stage::Symbol
+    message::String
+    validation
+end
+
+function Base.showerror(io::IO, err::RaycoreValidationError)
+    print(io, "RaycoreValidationError(", err.reason, ", ", err.stage, "): ", err.message)
+end
+
+function _raycore_default_max_prechunk_instances()
+    raw = get(ENV, "ARCHIMEDLIGHT_RAYCORE_MAX_PRECHUNK_INSTANCES", "")
+    isempty(strip(raw)) && return 4096
+    value = parse(Int, raw)
+    return value <= 0 ? typemax(Int) : value
+end
+
+_raycore_default_scattering_eltype(backend) = backend isa KernelAbstractions.CPU ? Float64 : Float32
+
+function RaycoreBackendConfig(;
+    backend=KernelAbstractions.CPU(),
+    workgroupsize::Union{Nothing,Integer}=nothing,
+    max_hits_per_pixel::Integer=32,
+    hit_epsilon::Real=1.0f-4,
+    edge_accumulation::Symbol=:auto,
+    dense_edge_limit_bytes::Integer=512 * 1024^2,
+    propagation_backend::Symbol=:auto,
+    max_prechunk_instances::Union{Nothing,Integer}=nothing,
+    scattering_eltype::Union{Nothing,Type{<:AbstractFloat}}=nothing,
+    toric_traversal::Symbol=:replicated,
+    validate::Bool=false,
+)
+    return RaycoreBackendConfig(
+        backend,
+        workgroupsize === nothing ? 256 : workgroupsize,
+        max_hits_per_pixel,
+        hit_epsilon,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        propagation_backend,
+        max_prechunk_instances === nothing ? _raycore_default_max_prechunk_instances() : max_prechunk_instances,
+        scattering_eltype === nothing ? _raycore_default_scattering_eltype(backend) : scattering_eltype,
+        toric_traversal,
+        validate,
+    )
+end
+
+"""
+    RaycoreInterceptionBackend(; kwargs...)
+    RaycoreInterceptionBackend(config::RaycoreBackendConfig)
+
+Interception backend placeholder for Raycore/KernelAbstractions projection.
+"""
+struct RaycoreInterceptionBackend{C<:RaycoreBackendConfig} <: InterceptionBackend
+    config::C
+end
+
+RaycoreInterceptionBackend(; kwargs...) = RaycoreInterceptionBackend(RaycoreBackendConfig(; kwargs...))
+
+function _raycore_config_with(
+    config::RaycoreBackendConfig;
+    backend=config.backend,
+    workgroupsize=config.workgroupsize,
+    max_hits_per_pixel=config.max_hits_per_pixel,
+    hit_epsilon=config.hit_epsilon,
+    edge_accumulation=config.edge_accumulation,
+    dense_edge_limit_bytes=config.dense_edge_limit_bytes,
+    propagation_backend=config.propagation_backend,
+    max_prechunk_instances=config.max_prechunk_instances,
+    scattering_eltype=config.scattering_eltype,
+    toric_traversal=config.toric_traversal,
+    validate=config.validate,
+)
+    return RaycoreBackendConfig(
+        backend,
+        workgroupsize,
+        max_hits_per_pixel,
+        hit_epsilon,
+        edge_accumulation,
+        dense_edge_limit_bytes,
+        propagation_backend,
+        max_prechunk_instances,
+        scattering_eltype,
+        toric_traversal,
+        validate,
+    )
+end
+
+"""
     ScatteringBackend
 
 Abstract supertype for multiple-scattering backends.
@@ -33,6 +332,72 @@ struct RaycastScatteringBackend <: ScatteringBackend end
 Scattering backend that uses precomputed link-style transfer relationships.
 """
 struct LinksScatteringBackend <: ScatteringBackend end
+
+"""
+    RasterGPUScatteringBackend(interception_backend::RasterGPUBackend; kwargs...)
+    RasterGPUScatteringBackend(; kwargs...)
+
+Scattering backend that builds transfer topology from native raster GPU stacks.
+"""
+struct RasterGPUScatteringBackend{C<:RasterGPUBackendConfig} <: ScatteringBackend
+    config::C
+end
+
+RasterGPUScatteringBackend(; kwargs...) = RasterGPUScatteringBackend(RasterGPUBackendConfig(; kwargs...))
+
+function RasterGPUScatteringBackend(
+    interception_backend::RasterGPUBackend;
+    edge_accumulation::Symbol=interception_backend.config.edge_accumulation,
+    dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
+    tile_size::Integer=interception_backend.config.tile_size,
+    tile_face_capacity::Integer=interception_backend.config.tile_face_capacity,
+    validate::Bool=interception_backend.config.validate,
+)
+    return RasterGPUScatteringBackend(
+        _rastergpu_config_with(
+            interception_backend.config;
+            edge_accumulation=edge_accumulation,
+            dense_edge_limit_bytes=dense_edge_limit_bytes,
+            tile_size=tile_size,
+            tile_face_capacity=tile_face_capacity,
+            validate=validate,
+        ),
+    )
+end
+
+"""
+    RaycoreScatteringBackend(interception_backend::RaycoreInterceptionBackend; kwargs...)
+    RaycoreScatteringBackend(; kwargs...)
+
+Scattering backend placeholder for Raycore-generated visibility stacks.
+"""
+struct RaycoreScatteringBackend{C<:RaycoreBackendConfig} <: ScatteringBackend
+    config::C
+end
+
+RaycoreScatteringBackend(; kwargs...) = RaycoreScatteringBackend(RaycoreBackendConfig(; kwargs...))
+
+function RaycoreScatteringBackend(
+    interception_backend::RaycoreInterceptionBackend;
+    edge_accumulation::Symbol=interception_backend.config.edge_accumulation,
+    dense_edge_limit_bytes::Integer=interception_backend.config.dense_edge_limit_bytes,
+    propagation_backend::Symbol=interception_backend.config.propagation_backend,
+    max_prechunk_instances::Integer=interception_backend.config.max_prechunk_instances,
+    toric_traversal::Symbol=interception_backend.config.toric_traversal,
+    validate::Bool=interception_backend.config.validate,
+)
+    return RaycoreScatteringBackend(
+        _raycore_config_with(
+            interception_backend.config;
+            edge_accumulation=edge_accumulation,
+            dense_edge_limit_bytes=dense_edge_limit_bytes,
+            propagation_backend=propagation_backend,
+            max_prechunk_instances=max_prechunk_instances,
+            toric_traversal=toric_traversal,
+            validate=validate,
+        ),
+    )
+end
 
 """
     OpticalProperties(par=0.0, nir=0.0)
@@ -515,14 +880,8 @@ Fields:
   interception.
 - `nir_scattering`: include NIR in the multiple-scattering stage. This has no
   effect if `nir_interception=false`.
-- `java_logged_turtle_dirs`: use the Java-compatibility turtle direction path
-  used in parity/debug workflows.
 - `meteo_range`: optional historical range selector applied during meteo
   preparation, for example `"2, 5"` or a datetime range.
-- `debug`: enable debug-only compatibility hooks.
-- `log_debug`: emit additional debug logging where implemented.
-- `debug_drop_leading_hit`: optional `(node_id, x, y)` hook used to remove a
-  leading raster hit at one pixel for parity debugging.
 
 Typical starting point for simple runs:
 
@@ -547,11 +906,7 @@ Base.@kwdef struct LightOptions
     allow_overlapping_meteo_steps::Bool = false
     nir_interception::Bool = true
     nir_scattering::Bool = true
-    java_logged_turtle_dirs::Bool = false
     meteo_range::Union{Nothing,String} = nothing
-    debug::Bool = false
-    log_debug::Bool = false
-    debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}} = nothing
 end
 
 function LightOptions(old::LightOptions; kwargs...)
@@ -574,11 +929,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :allow_overlapping_meteo_steps => old.allow_overlapping_meteo_steps,
         :nir_interception => old.nir_interception,
         :nir_scattering => old.nir_scattering,
-        :java_logged_turtle_dirs => old.java_logged_turtle_dirs,
         :meteo_range => old.meteo_range,
-        :debug => old.debug,
-        :log_debug => old.log_debug,
-        :debug_drop_leading_hit => old.debug_drop_leading_hit,
     )
     for (k, v) in kwargs
         params[k] = v
@@ -817,6 +1168,23 @@ struct SpectralNodeValues
     nir::Dict{Int,Float64}
 end
 
+struct DenseSpectralNodeValues
+    par::Vector{Float64}
+    nir::Vector{Float64}
+end
+
+struct DenseFirstOrderResult
+    node_ids::Vector{Int}
+    projected_area_per_node::Vector{Float64}
+    incident_power::DenseSpectralNodeValues
+    hits_per_node::Vector{Int}
+end
+
+struct DenseScatteringResult
+    node_ids::Vector{Int}
+    added_power::DenseSpectralNodeValues
+end
+
 struct InitialTotalSpectralNodeValues
     initial::SpectralNodeValues
     total::SpectralNodeValues
@@ -832,7 +1200,14 @@ struct FirstOrderResult
     projected_area_per_node::Dict{Int,Float64}
     incident_power::SpectralNodeValues
     hits_per_node::Dict{Int,Int}
+    dense::Union{Nothing,DenseFirstOrderResult}
 end
+
+FirstOrderResult(
+    projected_area_per_node::Dict{Int,Float64},
+    incident_power::SpectralNodeValues,
+    hits_per_node::Dict{Int,Int},
+) = FirstOrderResult(projected_area_per_node, incident_power, hits_per_node, nothing)
 
 """
     ScatteringResult
@@ -844,7 +1219,14 @@ struct ScatteringResult
     added_power::SpectralNodeValues
     iterations::Int
     converged::Bool
+    dense::Union{Nothing,DenseScatteringResult}
 end
+
+ScatteringResult(
+    added_power::SpectralNodeValues,
+    iterations::Int,
+    converged::Bool,
+) = ScatteringResult(added_power, iterations, converged, nothing)
 
 """
     ScatteringPairCounts
@@ -886,6 +1268,90 @@ function ScatteringPairCounts(pair_counts::Dict{Tuple{Int,Int},Int})
     return ScatteringPairCounts(to_nodes, from_nodes, counts)
 end
 
+struct DenseScatteringStaticGraph
+    to_idx::Vector{Int}
+    from_idx::Vector{Int}
+    counts::Vector{Int}
+    coeff_par::Vector{Float64}
+    coeff_nir::Vector{Float64}
+    device_cache::IdDict{Any,Any}
+end
+
+function DenseScatteringStaticGraph(
+    pair_counts::ScatteringPairCounts,
+    node_ids::Vector{Int},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+)
+    node_index = Dict{Int,Int}(nid => i for (i, nid) in pairs(node_ids))
+    coeff_par = zeros(Float64, length(node_ids))
+    coeff_nir = zeros(Float64, length(node_ids))
+    @inbounds for (i, nid) in pairs(node_ids)
+        coeff_par[i] = get(coeff_par_by_node, nid, 0.0)
+        coeff_nir[i] = get(coeff_nir_by_node, nid, 0.0)
+    end
+
+    n_edges = length(pair_counts)
+    to_idx = Vector{Int}(undef, n_edges)
+    from_idx = Vector{Int}(undef, n_edges)
+    counts = copy(pair_counts.counts)
+    @inbounds for edge_idx in 1:n_edges
+        to_idx[edge_idx] = node_index[pair_counts.to_nodes[edge_idx]]
+        from_idx[edge_idx] = node_index[pair_counts.from_nodes[edge_idx]]
+    end
+    return DenseScatteringStaticGraph(to_idx, from_idx, counts, coeff_par, coeff_nir, IdDict{Any,Any}())
+end
+
+function DenseScatteringStaticGraph(
+    to_idx::Vector{Int},
+    from_idx::Vector{Int},
+    counts::Vector{Int},
+    node_ids::Vector{Int},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+)
+    coeff_par = zeros(Float64, length(node_ids))
+    coeff_nir = zeros(Float64, length(node_ids))
+    @inbounds for (i, nid) in pairs(node_ids)
+        coeff_par[i] = get(coeff_par_by_node, nid, 0.0)
+        coeff_nir[i] = get(coeff_nir_by_node, nid, 0.0)
+    end
+    return DenseScatteringStaticGraph(to_idx, from_idx, counts, coeff_par, coeff_nir, IdDict{Any,Any}())
+end
+
+struct DenseScatteringGraph
+    all_hits::Vector{Int}
+    static::DenseScatteringStaticGraph
+    device_cache::IdDict{Any,Any}
+end
+
+function DenseScatteringGraph(all_hits::Vector{Int}, static::DenseScatteringStaticGraph)
+    return DenseScatteringGraph(all_hits, static, IdDict{Any,Any}())
+end
+
+function DenseScatteringGraph(
+    all_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    static::DenseScatteringStaticGraph,
+)
+    hit_counts = zeros(Int, length(node_ids))
+    @inbounds for (i, nid) in pairs(node_ids)
+        hit_counts[i] = get(all_hits, nid, 0)
+    end
+    return DenseScatteringGraph(hit_counts, static, IdDict{Any,Any}())
+end
+
+function DenseScatteringGraph(
+    pair_counts::ScatteringPairCounts,
+    all_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+)
+    static = DenseScatteringStaticGraph(pair_counts, node_ids, coeff_par_by_node, coeff_nir_by_node)
+    return DenseScatteringGraph(all_hits, node_ids, static)
+end
+
 """
     ScatteringTransferGraph
 
@@ -903,6 +1369,37 @@ struct ScatteringTransferGraph
     coeff_nir_by_node::Dict{Int,Float64}
     default_coeff_par::Float64
     default_coeff_nir::Float64
+    dense::Base.RefValue{Union{Nothing,DenseScatteringGraph}}
+    dense_static::Union{Nothing,DenseScatteringStaticGraph}
+end
+
+function ScatteringTransferGraph(
+    pair_counts::ScatteringPairCounts,
+    all_hits::Dict{Int,Int},
+    node_ids::Vector{Int},
+    node_group::Dict{Int,String},
+    node_type::Dict{Int,String},
+    group_type_coeffs::Dict{Tuple{String,String},Dict{String,Float64}},
+    coeff_par_by_node::Dict{Int,Float64},
+    coeff_nir_by_node::Dict{Int,Float64},
+    default_coeff_par::Float64,
+    default_coeff_nir::Float64,
+    dense_static::Union{Nothing,DenseScatteringStaticGraph}=nothing,
+)
+    return ScatteringTransferGraph(
+        pair_counts,
+        all_hits,
+        node_ids,
+        node_group,
+        node_type,
+        group_type_coeffs,
+        coeff_par_by_node,
+        coeff_nir_by_node,
+        default_coeff_par,
+        default_coeff_nir,
+        Ref{Union{Nothing,DenseScatteringGraph}}(nothing),
+        dense_static,
+    )
 end
 
 function ScatteringTransferGraph(

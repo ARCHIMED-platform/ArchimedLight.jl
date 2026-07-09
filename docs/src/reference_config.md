@@ -34,14 +34,7 @@ scattering_coeff_par: 0.15
 scattering_coeff_nir: 0.30
 nir_interception: true
 nir_scattering: true
-java_logged_turtle_dirs: false
 meteo_range: 2, 3
-debug: false
-log_debug: false
-debug_drop_leading_hit:
-  node_id: 12
-  x: 40
-  y: 18
 
 component_variables:
   sky_fraction: false
@@ -70,7 +63,7 @@ read_simulation
   -> integrate_light
 ```
 
-What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `allow_overlapping_meteo_steps` also acts at that preparation stage by deciding whether overlapping meteo intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
+What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `allow_overlapping_meteo_steps` also acts at that preparation stage by deciding whether overlapping meteo intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `sky_sectors` and `all_in_turtle` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, and `pixel_hit_stack_mode` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
 
 This distinction is important for interpretation. Changing `pixel_size` or `sky_sectors` does not mean you have changed the plant or the atmosphere; it means you have changed the numerical approximation used to represent them. By contrast, changing `scattering`, `nir_interception`, or `nir_scattering` changes which physical processes are included in the simulation.
 
@@ -264,14 +257,6 @@ These options exist because the runtime carries PAR and NIR as separate waveband
 
 For normal scientific runs, these options are usually left enabled. Turning them off is mainly useful for parity work, reduced experiments, or targeted diagnostics. The distinction matters because `nir_scattering: false` still retains a first-order NIR contribution, whereas `nir_interception: false` removes the NIR branch much earlier and therefore changes the energy budget more strongly.
 
-### `java_logged_turtle_dirs`
-
-Compatibility/debug option for Java-style turtle direction logging.
-
-This parameter is there for parity rather than for modeling. In principle, two turtle constructions can be mathematically "the same" while still differing slightly because of ordering, logging history, or Float32-level implementation details. Those small differences matter when the goal is to reproduce historical Java results as closely as possible.
-
-When `java_logged_turtle_dirs` is enabled, `build_turtle` uses the compatibility path based on Java-style directions. That can be useful during fixture matching or debugging old workflows, but it should not be treated as a scientific calibration parameter. For ordinary use, the default behavior is usually the right choice.
-
 ### `meteo_range`
 
 Restrict the simulated meteo rows.
@@ -311,14 +296,6 @@ Supported values are:
 This option is purely about implementation strategy inside the raster code. It selects how per-pixel hit stacks are stored in memory, which can matter for performance or for low-level debugging, but it is not intended to represent any physical assumption.
 
 For most users, `auto` is the correct setting and should be left alone. The other modes are mainly there when you are investigating performance behavior or trying to isolate an implementation-level discrepancy in the interception code. They are not meant to change the semantics of the model.
-
-### `debug`, `log_debug`, `debug_drop_leading_hit`
-
-Low-level parity and debugging options used mainly while chasing differences with the Java implementation.
-
-These parameters are not part of the scientific interface. They are instrumentation and fault-injection controls used when chasing low-level mismatches, especially against the Java implementation. `debug` and `log_debug` enable extra tracing, while `debug_drop_leading_hit` goes further and deliberately removes the leading hit from one chosen pixel stack when a very specific condition is met.
-
-That last option is intentionally invasive: it changes the interception result in one localized place so that a mismatch can be isolated and understood. For that reason, all of these options should be thought of as developer tools, not user-facing model parameters. Outside parity investigations, they should remain disabled.
 
 ## Legacy Keys You May Still See
 
