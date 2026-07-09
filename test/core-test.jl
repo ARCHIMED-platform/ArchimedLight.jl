@@ -200,6 +200,67 @@ end
     @test occursin("tile_faces_dev=600", aggregate_msg)
 end
 
+@testitem "RasterGPU auto edge accumulation can exceed dense cap when it fits device budget" tags=[:core, :fast, :raster_gpu] begin
+    config = ArchimedLight.RasterGPUBackendConfig(
+        backend=:fake_gpu_backend,
+        max_hits_per_pixel=128,
+        tile_size=1,
+        tile_face_capacity=256,
+        edge_accumulation=:auto,
+    )
+
+    dense_pairs = Int128(22_373) * Int128(22_373)
+    dense_bytes = dense_pairs * Int128(sizeof(Int32))
+    @test dense_bytes > config.dense_edge_limit_bytes
+
+    sparse_total_bytes = Int128(24_585_595_926)
+    dense_total_bytes = Int128(14_400_000_000)
+    memory_info = (
+        working_set=Int128(30_150_672_384),
+        allocated=Int128(1_785_856),
+        free=Int128(30_148_886_528),
+    )
+
+    @test ArchimedLight._rastergpu_choose_dense_edge_accumulation(
+        config;
+        stackless_top_hit=false,
+        dense_pairs=dense_pairs,
+        dense_bytes=dense_bytes,
+        sparse_total_bytes=sparse_total_bytes,
+        dense_total_bytes=dense_total_bytes,
+        memory_info=memory_info,
+    )
+    @test !ArchimedLight._rastergpu_choose_dense_edge_accumulation(
+        config;
+        stackless_top_hit=false,
+        dense_pairs=dense_pairs,
+        dense_bytes=dense_bytes,
+        sparse_total_bytes=sparse_total_bytes,
+        dense_total_bytes=dense_total_bytes,
+        memory_info=nothing,
+    )
+    @test !ArchimedLight._rastergpu_choose_dense_edge_accumulation(
+        config;
+        stackless_top_hit=false,
+        dense_pairs=dense_pairs,
+        dense_bytes=dense_bytes,
+        sparse_total_bytes=sparse_total_bytes,
+        dense_total_bytes=Int128(25_000_000_000),
+        memory_info=memory_info,
+    )
+
+    explicit_dense = ArchimedLight._rastergpu_config_with(config; edge_accumulation=:dense_atomic)
+    @test !ArchimedLight._rastergpu_choose_dense_edge_accumulation(
+        explicit_dense;
+        stackless_top_hit=false,
+        dense_pairs=dense_pairs,
+        dense_bytes=dense_bytes,
+        sparse_total_bytes=sparse_total_bytes,
+        dense_total_bytes=dense_total_bytes,
+        memory_info=memory_info,
+    )
+end
+
 @testitem "RasterGPU top-hit scene data avoids full-stack scratch" tags=[:core, :fast, :raster_gpu] begin
     import KernelAbstractions
 

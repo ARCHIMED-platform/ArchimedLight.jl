@@ -7711,11 +7711,17 @@ function _rastergpu_checked_product(
 end
 
 _rastergpu_device_allocation_len(n::Int) = max(n, 1)
+_rastergpu_device_allocation_len(n::Int128) = max(n, Int128(1))
+
+function _rastergpu_device_buffer_bytes_i128(::Type{T}, count::Integer) where {T}
+    return _rastergpu_device_allocation_len(Int128(count)) * Int128(sizeof(T))
+end
+
 _rastergpu_allocate(backend, ::Type{T}, n::Integer) where {T} =
     KernelAbstractions.allocate(backend, T, _rastergpu_device_allocation_len(Int(n)); unified=false)
 
 function _rastergpu_device_buffer_bytes(::Type{T}, count::Integer) where {T}
-    return Int128(_rastergpu_device_allocation_len(Int(count))) * Int128(sizeof(T))
+    return _rastergpu_device_buffer_bytes_i128(T, Int(count))
 end
 
 function _rastergpu_largest_buffers(buffers, n::Int=6)
@@ -7731,21 +7737,16 @@ function _rastergpu_check_total_allocation_bytes(
     context::AbstractString="",
 )
     memory_info === nothing && return sum(last, buffers; init=Int128(0))
-    working_set = memory_info.working_set
-    working_set <= 0 && return sum(last, buffers; init=Int128(0))
 
     requested = sum(last, buffers; init=Int128(0))
-    allocated = memory_info.allocated
-    free = memory_info.free
-    working_budget = max(fld(working_set * Int128(3), Int128(4)) - allocated, Int128(0))
-    free_budget = fld(free * Int128(17), Int128(20))
-    budget = min(working_budget, free_budget)
+    budget = _rastergpu_total_allocation_budget(memory_info)
+    budget === nothing && return requested
 
     if requested > budget
         error(
             "RasterGPU aggregate device allocation preflight failed: requested_device_bytes=$requested, " *
-            "available_budget_bytes=$budget, metal_working_set_bytes=$working_set, " *
-            "metal_current_allocated_bytes=$allocated, metal_free_bytes=$free. " *
+            "available_budget_bytes=$budget, metal_working_set_bytes=$(memory_info.working_set), " *
+            "metal_current_allocated_bytes=$(memory_info.allocated), metal_free_bytes=$(memory_info.free). " *
             "Largest buffers: $(_rastergpu_largest_buffers(buffers)). " *
             "Config/context: $context. " *
             "Reduce RasterGPUBackendConfig(tile_face_capacity, tile_size, max_hits_per_pixel), " *
@@ -7754,6 +7755,45 @@ function _rastergpu_check_total_allocation_bytes(
         )
     end
     return requested
+end
+
+function _rastergpu_total_allocation_budget(memory_info)
+    memory_info === nothing && return nothing
+    working_set = memory_info.working_set
+    working_set <= 0 && return nothing
+    allocated = memory_info.allocated
+    free = memory_info.free
+    working_budget = max(fld(working_set * Int128(3), Int128(4)) - allocated, Int128(0))
+    free_budget = fld(free * Int128(17), Int128(20))
+    return min(working_budget, free_budget)
+end
+
+function _rastergpu_choose_dense_edge_accumulation(
+    config::RasterGPUBackendConfig;
+    stackless_top_hit::Bool,
+    dense_pairs::Int128,
+    dense_bytes::Int128,
+    sparse_total_bytes::Int128,
+    dense_total_bytes::Int128,
+    memory_info=nothing,
+)
+    stackless_top_hit && return false
+    dense_pairs <= Int128(typemax(Int)) || return false
+
+    dense_under_config_limit = dense_bytes <= Int128(config.dense_edge_limit_bytes)
+    dense_smaller_than_sparse = dense_total_bytes <= sparse_total_bytes
+
+    if config.edge_accumulation == :dense_atomic
+        return dense_under_config_limit
+    elseif config.edge_accumulation == :auto
+        !dense_smaller_than_sparse && return false
+        dense_under_config_limit && return true
+        budget = _rastergpu_total_allocation_budget(memory_info)
+        budget === nothing && return false
+        return dense_total_bytes <= budget
+    end
+
+    return false
 end
 
 function _rastergpu_scene_data(
@@ -7840,25 +7880,67 @@ function _rastergpu_scene_data(
         context=base_context,
     )
     max_edges = max(2 * (max_hits - 1), 0)
-    edge_key_capacity = stackless_top_hit ? 0 : _rastergpu_checked_product(
-        "RasterGPU edge_keys_dev",
-        UInt64,
-        (n_pixels, max_edges),
-        config;
-        backend_limit=buffer_limit,
-        context=base_context,
-    )
+    edge_key_capacity_i128 = stackless_top_hit ? Int128(0) : Int128(n_pixels) * Int128(max_edges)
     dense_pairs = Int128(n_nodes) * Int128(n_nodes)
     dense_bytes = dense_pairs * Int128(sizeof(Int32))
-    sparse_bytes = Int128(edge_key_capacity) * Int128(sizeof(UInt64)) + Int128(n_pixels) * Int128(sizeof(Int32))
-    dense_fits = dense_pairs <= Int128(typemax(Int)) && dense_bytes <= Int128(config.dense_edge_limit_bytes)
-    dense_enabled =
+    sparse_edge_bytes =
+        _rastergpu_device_buffer_bytes_i128(UInt64, edge_key_capacity_i128) +
+        _rastergpu_device_buffer_bytes_i128(Int32, n_pixels)
+    full_stack_len_i128 = stackless_top_hit ? Int128(0) : Int128(n_pixels) * Int128(max_hits)
+    full_stack_bytes =
+        _rastergpu_device_buffer_bytes_i128(UInt32, full_stack_len_i128) +
+        _rastergpu_device_buffer_bytes_i128(Float32, full_stack_len_i128)
+    stackless_stack_bytes =
+        _rastergpu_device_buffer_bytes_i128(UInt32, 1) +
+        _rastergpu_device_buffer_bytes_i128(Float32, 1)
+    fused_dense_candidate =
         !stackless_top_hit &&
-        dense_fits &&
-        (
-            config.edge_accumulation == :dense_atomic ||
-            (config.edge_accumulation == :auto && dense_bytes <= sparse_bytes)
-        )
+        dense_pairs <= Int128(typemax(Int)) &&
+        tile_size == 1 &&
+        _rastergpu_fused_dense_supported(config)
+
+    common_device_buffers = Pair{String,Int128}[
+        "vertex_x_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
+        "vertex_y_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
+        "vertex_z_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
+        "face_i_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
+        "face_j_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
+        "face_k_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
+        "face2node_index_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
+        "node_transparency_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
+        "virtual_node_mask_dev" => _rastergpu_device_buffer_bytes(Bool, n_nodes),
+        "pavement_node_mask_dev" => _rastergpu_device_buffer_bytes(Bool, n_nodes),
+        "node_ids_dev" => _rastergpu_device_buffer_bytes(Int, n_nodes),
+        "counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_pixels),
+        "overflow_dev" => _rastergpu_device_buffer_bytes(Bool, n_pixels),
+        "node_counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_nodes),
+        "projected_mesh_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
+        "projected_pixels_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
+        "sector_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
+        "tile_counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_tiles),
+        "tile_faces_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
+        "tile_unwrapped_i_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
+        "tile_unwrapped_j_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
+        "tile_overflow_dev" => _rastergpu_device_buffer_bytes(Bool, n_tiles),
+    ]
+    common_device_bytes = sum(last, common_device_buffers; init=Int128(0))
+    sparse_total_bytes = common_device_bytes + full_stack_bytes + sparse_edge_bytes
+    dense_total_bytes =
+        common_device_bytes +
+        (fused_dense_candidate ? stackless_stack_bytes : full_stack_bytes) +
+        _rastergpu_device_buffer_bytes_i128(Int32, dense_pairs)
+
+    _rastergpu_backend_maybe_collect(backend)
+    memory_info = _rastergpu_backend_memory_info(backend)
+    dense_enabled = _rastergpu_choose_dense_edge_accumulation(
+        config;
+        stackless_top_hit=stackless_top_hit,
+        dense_pairs=dense_pairs,
+        dense_bytes=dense_bytes,
+        sparse_total_bytes=sparse_total_bytes,
+        dense_total_bytes=dense_total_bytes,
+        memory_info=memory_info,
+    )
     if !stackless_top_hit && config.edge_accumulation == :dense_atomic && !dense_enabled
         error(
             "RasterGPU edge_accumulation=:dense_atomic requires a dense $n_nodes x $n_nodes edge matrix " *
@@ -7881,7 +7963,7 @@ function _rastergpu_scene_data(
                 tile_size=tile_size,
                 tile_face_capacity=tile_face_capacity,
                 max_hits=max_hits,
-                edge_key_capacity=edge_key_capacity,
+                edge_key_capacity=edge_key_capacity_i128,
                 dense_pairs=dense_pairs,
                 stackless_top_hit=stackless_top_hit,
             ),
@@ -7891,7 +7973,18 @@ function _rastergpu_scene_data(
         !stackless_top_hit &&
         !dense_enabled &&
         config.edge_accumulation != :dense_atomic &&
-        edge_key_capacity > 0
+        edge_key_capacity_i128 > 0
+    edge_key_capacity =
+        sparse_enabled ?
+        _rastergpu_checked_product(
+            "RasterGPU edge_keys_dev",
+            UInt64,
+            (n_pixels, max_edges),
+            config;
+            backend_limit=buffer_limit,
+            context=base_context,
+        ) :
+        0
     fused_dense_enabled = dense_enabled && tile_size == 1 && _rastergpu_fused_dense_supported(config)
     stackless_projection = stackless_top_hit || fused_dense_enabled
     stack_len = stackless_projection ? 0 : _rastergpu_checked_product(
@@ -7907,7 +8000,7 @@ function _rastergpu_scene_data(
             tile_size=tile_size,
             tile_face_capacity=tile_face_capacity,
             max_hits=max_hits,
-            edge_key_capacity=edge_key_capacity,
+            edge_key_capacity=edge_key_capacity_i128,
             dense_pairs=dense_pairs,
             stackless_top_hit=stackless_top_hit,
             fused_dense_edges=fused_dense_enabled,
@@ -7916,30 +8009,9 @@ function _rastergpu_scene_data(
     stack_alloc_len = stackless_projection ? 1 : stack_len
 
     device_buffers = Pair{String,Int128}[
-        "vertex_x_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
-        "vertex_y_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
-        "vertex_z_dev" => _rastergpu_device_buffer_bytes(Float32, n_vertices),
-        "face_i_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
-        "face_j_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
-        "face_k_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
-        "face2node_index_dev" => _rastergpu_device_buffer_bytes(Int32, n_faces),
-        "node_transparency_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
-        "virtual_node_mask_dev" => _rastergpu_device_buffer_bytes(Bool, n_nodes),
-        "pavement_node_mask_dev" => _rastergpu_device_buffer_bytes(Bool, n_nodes),
-        "node_ids_dev" => _rastergpu_device_buffer_bytes(Int, n_nodes),
-        "counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_pixels),
+        common_device_buffers...,
         "nodes_dev" => _rastergpu_device_buffer_bytes(UInt32, stack_alloc_len),
         "heights_dev" => _rastergpu_device_buffer_bytes(Float32, stack_alloc_len),
-        "overflow_dev" => _rastergpu_device_buffer_bytes(Bool, n_pixels),
-        "node_counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_nodes),
-        "projected_mesh_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
-        "projected_pixels_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
-        "sector_area_dev" => _rastergpu_device_buffer_bytes(Float32, n_nodes),
-        "tile_counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_tiles),
-        "tile_faces_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
-        "tile_unwrapped_i_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
-        "tile_unwrapped_j_dev" => _rastergpu_device_buffer_bytes(Int32, tile_candidate_len),
-        "tile_overflow_dev" => _rastergpu_device_buffer_bytes(Bool, n_tiles),
     ]
     dense_enabled && push!(
         device_buffers,
@@ -7949,11 +8021,10 @@ function _rastergpu_scene_data(
         push!(device_buffers, "edge_keys_dev" => _rastergpu_device_buffer_bytes(UInt64, edge_key_capacity))
         push!(device_buffers, "edge_key_counts_dev" => _rastergpu_device_buffer_bytes(Int32, n_pixels))
     end
-    _rastergpu_backend_maybe_collect(backend)
     _rastergpu_check_total_allocation_bytes(
         device_buffers,
         config;
-        memory_info=_rastergpu_backend_memory_info(backend),
+        memory_info=memory_info,
         context=_rastergpu_config_context(
             config;
             n_pixels=n_pixels,
@@ -7961,7 +8032,7 @@ function _rastergpu_scene_data(
             tile_size=tile_size,
             tile_face_capacity=tile_face_capacity,
             max_hits=max_hits,
-            edge_key_capacity=edge_key_capacity,
+            edge_key_capacity=edge_key_capacity_i128,
             dense_pairs=dense_pairs,
             stackless_top_hit=stackless_top_hit,
             fused_dense_edges=fused_dense_enabled,
