@@ -124,6 +124,18 @@ Write an ARCHIMED-style `component_values.csv` file from already-computed
 serializes the supplied results only; it does not run the simulation. Step
 numbers are 1-based by default. Use `step_index_base=0` only for historical
 harness compatibility.
+
+Arguments:
+
+- `path`: destination CSV file path.
+- `sim`: [`LightSimulation`](@ref) that supplies scene, model, and option
+  context for component rows.
+- `series`: one [`LightStepResult`](@ref) or a collection of results to
+  serialize.
+
+Keywords:
+
+- `step_index_base`: first step number written to the CSV. The default is `1`.
 """
 function write_component_values(
     path::AbstractString,

@@ -187,6 +187,10 @@ end
 Read one or more ARCHIMED model YAML files and return them as a
 [`LightModels`](@ref) collection.
 
+Arguments:
+
+- `path_or_paths`: a model source to read.
+
 `path_or_paths` can be:
 - the path to a single model YAML file containing a `Group`
 - the path to a config YAML file containing a `models:` list
@@ -227,6 +231,10 @@ end
 
 Normalize in-memory model definitions into a [`LightModels`](@ref) object.
 
+Arguments:
+
+- `models`: an in-memory model specification.
+
 Accepted inputs are an existing `LightModels`, a single [`GroupModel`](@ref), a
 vector of groups, or an `OrderedDict{String,GroupModel}`.
 """
@@ -254,6 +262,10 @@ Read runtime light options from a config YAML file.
 This parses the ARCHIMED configuration keys such as `sky_sectors`,
 `pixel_size`, `toricity`, scattering controls, and meteo-range options into a
 [`LightOptions`](@ref) instance.
+
+Arguments:
+
+- `path`: path to an ARCHIMED-style configuration YAML file.
 """
 function read_options(path::AbstractString)
     raw = _load_yaml_ordered(path)
@@ -385,6 +397,18 @@ end
 
 Read a complete file-based light simulation and return `(sim, meteo)`, where
 `sim` is a [`LightSimulation`](@ref).
+
+Arguments:
+
+- `path`: path to the ARCHIMED-style configuration YAML file.
+
+Keywords:
+
+- `plot_paving_override`: optional replacement paving count used when
+  materializing model-declared ground geometry.
+- `kwargs...`: keyword arguments forwarded to [`LightSimulation`](@ref), such as
+  `interception_backend`, `scattering_mode`, `scattering_backend`, and
+  `memory_limit_bytes`.
 """
 function read_simulation(path::AbstractString; plot_paving_override=nothing, kwargs...)
     options, scene, meteo, models = read_config(path; plot_paving_override=plot_paving_override)
@@ -407,6 +431,15 @@ Read a scene file (`.ops`, `.opf`, or `.gwa`) and return a prepared
 
 The scene is relabelled into a dense node-id space and immediately converted to
 the merged-mesh representation expected by the interception pipeline.
+
+Arguments:
+
+- `path`: path to an `.ops`, `.opf`, or `.gwa` scene file.
+
+Keywords:
+
+- `plantgeom_backend`: reserved PlantGeom backend selector. The current default
+  is `:auto`.
 """
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
@@ -445,6 +478,11 @@ Write an MTG-backed `PlantGeom.SceneGeometry` to `path`.
 
 Supported output formats are `.ops`, `.opf`, and `.gwa`. The function refreshes
 the reference-mesh registry and normalizes topology ids before export.
+
+Arguments:
+
+- `path`: output path ending in `.ops`, `.opf`, or `.gwa`.
+- `scene`: MTG-backed `PlantGeom.SceneGeometry` to write.
 """
 function write_scene(path::AbstractString, scene::PlantGeom.SceneGeometry)
     scene.mtg === nothing && error("write_scene requires an MTG-backed scene.")
@@ -535,12 +573,19 @@ end
 
 """
     read_meteo(path)::PlantMeteo.TimeStepTable
+    read_meteo(data)::PlantMeteo.TimeStepTable
 
 Read a meteorological forcing table from `path` and return it as a
 `PlantMeteo.TimeStepTable`.
 
 The resulting table keeps available metadata such as latitude, longitude,
 altitude, and source file path.
+
+Arguments:
+
+- `path`: path to a meteorological forcing file readable by PlantMeteo.
+- `data`: alternatively, a Tables.jl-compatible table or an existing
+  `PlantMeteo.TimeStepTable`.
 """
 function read_meteo(path::AbstractString)
     try

@@ -289,6 +289,13 @@ Base.getindex(models::LightModels, key) = models.groups[key]
 
 Build a [`TypeModel`](@ref) for an ordinary translucent component.
 
+Keywords:
+
+- `par`: PAR scattering fraction for the component.
+- `nir`: NIR scattering fraction for the component.
+- `transparency`: intercepted-light transparency fraction. The default `0.0`
+  makes the component opaque to interception.
+
 `par` and `nir` are scattering fractions for the built-in ARCHIMED wavebands.
 The absorbed fraction is therefore `1 - scattering_fraction`.
 """
@@ -307,6 +314,8 @@ end
 
 Build a [`TypeModel`](@ref) for virtual sensors. Virtual sensors receive light
 diagnostics while remaining transparent in interception and scattering logic.
+
+Arguments: none.
 """
 virtual_sensor() = TypeModel(interception=InterceptionModel(model="VirtualSensor", sensor=true))
 
@@ -314,6 +323,12 @@ virtual_sensor() = TypeModel(interception=InterceptionModel(model="VirtualSensor
     emitter(; radiance, par=0.48, nir=0.52)
 
 Build a [`TypeModel`](@ref) for an emitting component.
+
+Keywords:
+
+- `radiance`: emitted radiance assigned to the component emitter model.
+- `par`: PAR fraction of emitted radiation. The default is `0.48`.
+- `nir`: NIR fraction of emitted radiation. The default is `0.52`.
 """
 function emitter(; radiance::Real, par::Real=0.48, nir::Real=0.52)
     TypeModel(light_emitter=EmitterModel(radiance=radiance, gamma=OpticalProperties(par, nir)))
@@ -336,6 +351,11 @@ end
 
 Create [`LightModels`](@ref) from compact `(group => (type => model, ...))`
 pairs. Group and type names are matched against geometric scene nodes.
+
+Arguments:
+
+- `group_specs...`: one or more pairs where the left side is a scene group name
+  and the right side is an iterable of `type => TypeModel` pairs.
 
 Example:
 
@@ -520,6 +540,9 @@ Fields:
 Typical starting point for simple runs:
 
 `LightOptions(turtle_sectors=46, pixel_size=0.0025, scattering=true)`
+
+Constructor keywords are the field names above. `LightOptions(old; kwargs...)`
+copies an existing options value and overrides only the supplied keywords.
 """
 Base.@kwdef struct LightOptions
     all_in_turtle::Bool = false

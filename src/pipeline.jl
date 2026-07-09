@@ -783,6 +783,13 @@ end
 
 Return the effective meteo table after Java-like meteo controls are applied:
 sequence validation, optional `meteo_range`, and optional `active` filtering.
+
+Arguments:
+
+- `meteo`: a `PlantMeteo.TimeStepTable` or Tables.jl-compatible table of meteo
+  rows.
+- `options`: [`LightOptions`](@ref) controlling overlap validation,
+  `meteo_range`, and active-row filtering.
 """
 function prepare_meteo(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
     _prepare_meteo_for_series(meteo, options)
@@ -1173,6 +1180,22 @@ end
 
 Create a reusable light simulation. Expensive geometry preparation and radiation
 caches are built lazily by [`run_light`](@ref).
+
+Arguments:
+
+- `scene`: prepared `PlantGeom.SceneGeometry` used by the solver.
+- `models`: model specification accepted by [`prepare_models`](@ref).
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) controlling interception, scattering, and
+  caching.
+- `interception_backend`: interception backend selector or backend instance.
+  The default is `:raster_cpu`.
+- `scattering_mode`: scattering algorithm selector. The default is `:raycast`.
+- `scattering_backend`: optional scattering backend instance.
+- `memory_limit_bytes`: optional limit for resident directional-response cache
+  data. `nothing` uses the package default.
 """
 function LightSimulation(
     scene::PlantGeom.SceneGeometry,
@@ -1241,6 +1264,11 @@ end
 
 Replace the scene and immediately release all prepared data tied to the old
 scene. The next `run_light` call prepares the new scene lazily.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_scene`: replacement `PlantGeom.SceneGeometry`.
 """
 function update_scene!(sim::LightSimulation, new_scene::PlantGeom.SceneGeometry)
     _drop_light_cache!(sim)
@@ -1248,18 +1276,52 @@ function update_scene!(sim::LightSimulation, new_scene::PlantGeom.SceneGeometry)
     return sim
 end
 
+"""
+    update_models!(sim, new_models)
+
+Replace the model specification in `sim` and release all prepared cache data.
+The next [`run_light`](@ref) call prepares the new models lazily.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_models`: replacement model specification accepted by
+  [`prepare_models`](@ref).
+"""
 function update_models!(sim::LightSimulation, new_models)
     _drop_light_cache!(sim)
     sim.models = prepare_models(new_models)
     return sim
 end
 
+"""
+    update_options!(sim, new_options)
+
+Replace the runtime options in `sim` and release all prepared cache data. The
+next [`run_light`](@ref) call prepares data using the new options.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_options`: replacement [`LightOptions`](@ref).
+"""
 function update_options!(sim::LightSimulation, new_options::LightOptions)
     _drop_light_cache!(sim)
     sim.options = new_options
     return sim
 end
 
+"""
+    cache_summary(sim)
+
+Return a named tuple summarizing the current radiation cache state for a
+[`LightSimulation`](@ref).
+
+Arguments:
+
+- `sim`: simulation whose prepared cache should be summarized. If no cache has
+  been prepared yet, the summary reports `mode=:unprepared`.
+"""
 function cache_summary(sim::LightSimulation)
     sim.cache === nothing && return (
         mode=:unprepared,
@@ -1274,6 +1336,16 @@ function cache_summary(sim::LightSimulation)
     return cache_summary(sim.cache)
 end
 
+"""
+    check_scene(scene)::ValidationReport
+
+Validate basic scene readiness for light interception.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` to check for geometry nodes, faces, and a
+  valid xy domain.
+"""
 function check_scene(scene::PlantGeom.SceneGeometry)
     errors = String[]
     warnings = String[]
@@ -1319,6 +1391,17 @@ function _missing_models_snippet(missing::Vector{Tuple{String,String}})
     return join(lines, "\n")
 end
 
+"""
+    check_models(scene, models)::ValidationReport
+
+Validate that `models` cover the geometric group/type pairs present in `scene`.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` whose geometric nodes define the required
+  group/type pairs.
+- `models`: model specification accepted by [`prepare_models`](@ref).
+"""
 function check_models(scene::PlantGeom.SceneGeometry, models)
     lm = prepare_models(models)
     missing = _missing_model_pairs(scene, lm)
@@ -1338,6 +1421,15 @@ Return a `SceneSummary` describing the prepared scene domain, geometric nodes,
 faces, group/type pairs, object ids, and missing model pairs.
 
 Pass `models` to include a model coverage check in the summary.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` to summarize.
+
+Keywords:
+
+- `models`: optional model specification used to report missing group/type
+  coverage.
 """
 function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
     buckets = Dict{Tuple{String,String},NamedTuple}()
@@ -1393,6 +1485,22 @@ function _meteo_rows_for_check(meteo)
     return [meteo]
 end
 
+"""
+    check_meteo(meteo; options=LightOptions())::ValidationReport
+
+Validate meteo rows for required solar geometry, radiation inputs, and timestep
+duration data.
+
+Arguments:
+
+- `meteo`: a meteo row, `PlantMeteo.TimeStepTable`, or Tables.jl-compatible
+  table.
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) used for checks that depend on runtime
+  meteo handling.
+"""
 function check_meteo(meteo; options::LightOptions=LightOptions())
     rows = Any[]
     errors = String[]
@@ -1440,6 +1548,16 @@ end
 
 Return a `MeteoSummary` describing row count, columns, timestep duration,
 radiation inputs, and the detected solar-geometry path for a meteo table or row.
+
+Arguments:
+
+- `meteo`: a meteo row, `PlantMeteo.TimeStepTable`, or Tables.jl-compatible
+  table.
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) used for checks that depend on runtime
+  meteo handling.
 """
 function summarize_meteo(meteo; options::LightOptions=LightOptions())
     warnings = String[]
@@ -1494,6 +1612,24 @@ function _inferred_radiation_input_columns(row)
     return inputs
 end
 
+"""
+    check_simulation(sim)::ValidationReport
+    check_simulation(scene, meteo; models, options=LightOptions())::ValidationReport
+
+Validate a reusable simulation or the separate inputs needed to build and run
+one.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to validate.
+- `scene`: `PlantGeom.SceneGeometry` to validate when checking separate inputs.
+- `meteo`: meteo row or table to validate when checking separate inputs.
+
+Keywords:
+
+- `models`: required model specification when checking separate inputs.
+- `options`: [`LightOptions`](@ref) used for meteo validation.
+"""
 function check_simulation(sim::LightSimulation)
     _merge_reports(check_scene(sim.scene), check_models(sim.scene, sim.models))
 end
@@ -1964,6 +2100,13 @@ end
     run_light(sim, meteo_or_row)
 
 Run one light step for a meteo row, or a full series for a meteo table.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) containing the scene, models, options, and
+  lazy cache.
+- `meteo_or_row`: either a single meteo row for one step, or a
+  `PlantMeteo.TimeStepTable`/Tables.jl-compatible table for a series.
 """
 function run_light(sim::LightSimulation, meteo_or_row)
     meteo_report = check_meteo(meteo_or_row; options=sim.options)
@@ -1986,6 +2129,17 @@ end
 
 Run one light step from an already computed sky state. The step duration is
 required because there is no meteo row from which to infer it.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) containing the scene, models, options, and
+  lazy cache.
+- `sky`: precomputed [`SkyState`](@ref) used for one light step.
+
+Keywords:
+
+- `step_duration_seconds`: duration of the step in seconds. This is required
+  for energy integration.
 """
 function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=nothing)
     if step_duration_seconds === nothing
