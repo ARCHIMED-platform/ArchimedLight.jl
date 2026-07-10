@@ -36,6 +36,7 @@ makedocs(;
             "Meteo Inputs" => "reference_meteo.md",
         ],
         "Outputs" => "outputs.md",
+        "Performance Benchmarks" => "performance_benchmarks.md",
         "Under The Hood" => [
             "Pipeline Overview" => "theory_pipeline.md",
             "First-Order Interception" => "theory_interception.md",

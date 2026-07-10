@@ -10,6 +10,7 @@ java_implementation/*
 /test/regression_matrix/reports/
 /benchmark/results/*
 !/benchmark/results/artifact_scene_matrix_cpu.tsv
+!/benchmark/results/artifact_scene_matrix_summary.md
 /benchmark/.asv/
 /example_1/output/
 *.jl.*.cov

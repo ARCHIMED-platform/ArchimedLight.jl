@@ -10,9 +10,29 @@ It is designed around a simple workflow: build or read a scene, define optical
 models, create a `LightSimulation`, then call `run_light` for one meteo row or
 a complete meteo table.
 
-![Coffee scene light interception](assets/coffee_scene_light_interception.png)
+```@raw html
+<video
+  style="display:block; width:100%; border-radius:0.75rem;"
+  autoplay
+  muted
+  loop
+  playsinline
+  controls
+  preload="metadata"
+  poster="assets/coffee_scene_light_interception.png"
+  aria-label="Simulated light interception and moving ground shade over a representative day"
+>
+  <source src="assets/archimedlight_day_cycle.mp4" type="video/mp4">
+  Your browser does not support embedded video.
+</video>
+```
 
-The image above is generated from the bundled coffee example in `example_2/`. It loads the ARCHIMED coffee scene, runs one light step, attaches `Ri_PAR_f` onto the MTG, and renders the result with `PlantGeom.plantviz`.
+The animation runs the coffee and agrivoltaic wheat scenes from the
+`archimedlight-benchmark-scenes` artifact every 30 minutes over a representative
+clear-sky day. Each plot has about 2,500 explicit ground tiles, making the
+moving projected shade visible while the same color scale tracks incident PAR
+irradiance through the day. The reproducible generator is
+[`scripts/generate_home_video.jl`](https://github.com/VEZY/ArchimedLight.jl/blob/main/scripts/generate_home_video.jl).
 
 ## Scope
 
@@ -60,6 +80,7 @@ The simulation results are grouped by quantity and waveband in `LightBudget`. Wh
 - [Model Files Reference](reference_models.md)
 - [Meteo Inputs Reference](reference_meteo.md)
 - [Outputs](outputs.md)
+- [CPU Performance Benchmarks](performance_benchmarks.md)
 - [Pipeline Overview](theory_pipeline.md)
 - [First-Order Interception](theory_interception.md)
 - [Scattering And Optical Assumptions](theory_scattering.md)
