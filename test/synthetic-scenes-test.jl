@@ -761,6 +761,33 @@ end
 
     @test budget.incident_energy.total.par == step.budget.incident_energy.total.par
     @test first.projected_area_per_node == step.first_order.projected_area_per_node
+
+    fallback_row = merge(
+        row,
+        (
+            hour_end="not-a-time",
+            step_duration="not-a-duration",
+            duration=1800.0,
+        ),
+    )
+    fallback_budget = ArchimedLight.integrate_light(
+        scene,
+        models,
+        first,
+        nothing,
+        options;
+        meteo_row=fallback_row,
+    )
+    explicit_budget = ArchimedLight.integrate_light(
+        scene,
+        models,
+        first,
+        nothing,
+        options;
+        step_duration_seconds=1800.0,
+    )
+    @test fallback_budget.incident_energy.total.par ==
+          explicit_budget.incident_energy.total.par
 end
 
 @testitem "Synthetic case cache_radiation_parity" tags = [:synthetic, :fast, :cache_radiation_parity] setup = [HelperModule] begin
@@ -848,6 +875,8 @@ end
 end
 
 @testitem "Synthetic case generic table input" tags = [:synthetic, :fast, :generic_table_input] setup = [HelperModule] begin
+    using Dates
+
     PM = ArchimedLight.PlantMeteo
     scene = HelperModule._synthetic_horizontal_scene([(x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1)])
     models = HelperModule._default_synthetic_models()
@@ -869,6 +898,96 @@ end
     @test meteo_read isa PM.TimeStepTable
     @test first(selected).Ri_SW_f == 200.0
     @test isapprox(sky.ri_sw_f, 200.0; atol=1e-9, rtol=1e-9)
+
+    datetime_only = [
+        (date=DateTime(2020, 6, 21, 12), latitude=15.0, Ri_SW_f=200.0),
+        (date=DateTime(2020, 6, 21, 13), latitude=15.0, Ri_SW_f=220.0),
+    ]
+    inferred = ArchimedLight.prepare_meteo(datetime_only, options)
+    @test length(inferred) == 2
+    @test ArchimedLight._resolved_meteo_step_or_error(first(inferred), options).duration_seconds == 3600.0
+    datetime_range_options = ArchimedLight.LightOptions(
+        options;
+        meteo_range="2020-06-21-12:30,2020-06-21-12:45",
+    )
+    @test length(
+        ArchimedLight.prepare_meteo(datetime_only, datetime_range_options),
+    ) == 1
+
+    datetime_with_inactive_bad_row = [
+        (date="bad", latitude=15.0, Ri_SW_f=Inf, active=false),
+        (date=DateTime(2020, 6, 21, 12), latitude=15.0, Ri_SW_f=200.0, active=true),
+        (date=DateTime(2020, 6, 21, 13), latitude=15.0, Ri_SW_f=220.0, active=true),
+    ]
+    inferred_selected =
+        ArchimedLight.prepare_meteo(datetime_with_inactive_bad_row, options)
+    @test length(inferred_selected) == 2
+    @test ArchimedLight._resolved_meteo_step_or_error(
+        first(inferred_selected),
+        options,
+    ).duration_seconds == 3600.0
+end
+
+@testitem "Generic step_duration input and boundary execution overrides" tags = [:synthetic, :fast, :meteo] setup = [HelperModule] begin
+    using Tables
+
+    PM = ArchimedLight.PlantMeteo
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
+    ])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(cache_radiation=false)
+
+    row = (
+        step_duration=3600.0,
+        Ri_SW_f=100.0,
+        Ri_PAR_f=-5.0,
+        Ri_NIR_f=105.0,
+        sun_azimuth=180.0,
+        sun_elevation=45.0,
+        direct_fraction=0.5,
+    )
+    generic = [row]
+    column_table = Tables.columntable(generic)
+    meteo = ArchimedLight.read_meteo(generic)
+    @test meteo isa PM.TimeStepTable
+    @test first(meteo).step_duration == 3600.0
+    @test length(ArchimedLight.prepare_meteo(generic, options; check_boundaries=false)) == 1
+
+    strict_sim = ArchimedLight.LightSimulation(scene, models; options=options)
+    @test_throws ErrorException ArchimedLight.run_light(strict_sim, row)
+    @test strict_sim.cache === nothing
+
+    sim = ArchimedLight.LightSimulation(scene, models; options=options)
+    cache = ArchimedLight.prepare_light_cache(
+        scene,
+        models,
+        options;
+        memory_limit_bytes=0,
+    )
+    steps = Any[
+        ArchimedLight.run_light(sim, row; check_boundaries=false),
+        only(ArchimedLight.run_light(sim, meteo; check_boundaries=false)),
+        only(ArchimedLight.run_light(sim, column_table; check_boundaries=false)),
+        ArchimedLight.run_light_step(scene, models, row, options; check_boundaries=false),
+        ArchimedLight.run_light_step(cache, row; check_boundaries=false),
+        only(ArchimedLight.run_light_series(scene, models, meteo, options; check_boundaries=false)),
+        only(ArchimedLight.run_light_series(cache, meteo; check_boundaries=false)),
+    ]
+    @test all(step -> step.sky.ri_par_f == 0.0, steps)
+    @test all(step -> step.sky.ri_nir_f == 105.0, steps)
+
+    empty_meteo = ArchimedLight.read_meteo((
+        step_duration=Float64[],
+        Ri_SW_f=Float64[],
+        sun_azimuth=Float64[],
+        sun_elevation=Float64[],
+        direct_fraction=Float64[],
+    ))
+    empty_sim = ArchimedLight.LightSimulation(scene, models; options=options)
+    @test_throws ErrorException ArchimedLight.prepare_meteo(empty_meteo, options)
+    @test_throws ErrorException ArchimedLight.run_light(empty_sim, empty_meteo)
+    @test empty_sim.cache === nothing
 end
 
 @testitem "Synthetic case NIR disabled preserves PAR from shortwave" tags = [:synthetic, :fast, :nir_interception] setup = [HelperModule] begin
@@ -981,6 +1100,12 @@ end
     strict_options = HelperModule._synthetic_options(cache_radiation=false)
     @test_throws "invalid overlapping meteo steps at row 2" ArchimedLight.prepare_meteo(meteo, strict_options)
     @test_throws "invalid overlapping meteo steps at row 2" ArchimedLight.run_light_series(scene, models, meteo, strict_options)
+
+    active_meteo = ArchimedLight.PlantMeteo.TimeStepTable(
+        [merge(rows[1], (active=true,)), merge(rows[2], (active=false,))],
+        (; source="synthetic_overlap_inactive"),
+    )
+    @test length(ArchimedLight.prepare_meteo(active_meteo, strict_options)) == 1
 
     permissive_options = ArchimedLight.LightOptions(strict_options; allow_overlapping_meteo_steps=true)
     selected = ArchimedLight.prepare_meteo(meteo, permissive_options)

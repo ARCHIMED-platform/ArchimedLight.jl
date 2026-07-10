@@ -31,20 +31,104 @@ For most users, a meteo table should provide these fields:
 
 | Need | Accepted columns / metadata | Units | Required? |
 | --- | --- | --- | --- |
-| Date | `date` or a `DateTime`-like `date` | date or datetime | yes |
-| Time interval | `hour_start` + `hour_end`, or `duration` | time strings or Julia `Dates.Period` | yes |
+| Date | `date`, a `DateTime`-like `date`, or `dayofyear` (+ optional `year`) | date or datetime | required only for reconstructed sun/clearness paths |
+| Time interval | `hour_start` + `hour_end`, or `duration`/`step_duration` | time strings, seconds, or Julia `Dates.Period` | a positive duration is always required; start time is required only for reconstructed sun/clearness paths |
 | Site latitude | `latitude` or `lat` as a column or metadata | degrees | yes, unless sun position is explicit |
 | PAR irradiance | `RI_PAR_f`, `Ri_PAR_f`, `PAR`, or `par` | `W m^-2` | one radiation description is required |
 | NIR irradiance | `RI_NIR_f`, `Ri_NIR_f`, `NIR`, or `nir` | `W m^-2` | optional if total shortwave is given |
-| Total shortwave | `RI_SW_f`, `Ri_SW_f`, `Rg`, `sw_global`, or `global` | `W m^-2` | alternative to PAR/NIR |
+| Total shortwave | `RI_SW_f`, `Ri_SW_f`, `Rg`, `rg`, `sw_global`, or `global` | `W m^-2` | alternative to PAR/NIR |
 | Atmospheric clearness | `clearness` or `Kt` | fraction | alternative forcing input |
 | Sun position | `sun_azimuth`/`sun_azimut` and `sun_elevation` | degrees | optional |
-| Direct fraction | `direct_fraction` | fraction | optional |
+| Direct fraction | `direct_fraction`, `fDIR_SW`, or `Fd` | fraction | optional |
+| Direct/diffuse SW | `Ri_SW_f_direct`/`RI_SW_f_direct` and `Ri_SW_f_diffuse`/`RI_SW_f_diffuse` | `W m^-2` | optional partition or total-SW path |
 
 `run_light` accepts `PlantMeteo.TimeStepTable` and generic
 Tables.jl-compatible inputs such as vectors of named tuples or DataFrames.
 Use `summarize_meteo(meteo)` to see what ArchimedLight detected, and
 `check_meteo(meteo)` to diagnose missing columns before a simulation.
+
+### Canonical Names And Compatibility Aliases
+
+The canonical in-memory names follow PlantMeteo and use `Ri_`: `Ri_SW_f`,
+`Ri_PAR_f`, and `Ri_NIR_f`. ArchimedLight continues to accept the historical
+file spellings `RI_SW_f`, `RI_PAR_f`, and `RI_NIR_f`, plus the aliases listed in
+the table above. New Julia code should prefer the canonical `Ri_*` names.
+
+Aliases are resolved by value rather than by column order. If a PlantMeteo
+`Atmosphere` contributes its default `Ri_PAR_f=Inf` while a legacy
+`RI_PAR_f` column contains a finite measurement, the finite measurement is
+used. `missing`, blank strings, `NaN`, and positive or negative `Inf` are treated as
+unavailable sentinels. If two finite aliases for the same variable disagree,
+validation returns an error naming both columns and values.
+
+Historical `use` metadata remains accepted as a hint for file compatibility,
+but it does not suppress finite row values or force a broken input path. The
+resolver chooses the usable values actually present.
+
+Explicit `sun_azimuth`/`sun_azimut` and `sun_elevation` values are always in
+degrees. Small degree values are not reinterpreted as radians.
+
+### Radiation Derivation Rules
+
+The resolver obtains one consistent SW/PAR/NIR forcing using these rules:
+
+1. Preserve a finite total `Ri_SW_f` when provided.
+2. Otherwise derive SW from finite PAR + NIR, direct + diffuse SW components,
+   one direct/diffuse component plus `direct_fraction`, PAR alone, NIR alone,
+   or finally `clearness`, in that order.
+3. With total SW and one measured band, derive the other band as the residual.
+4. With total SW and no measured bands, use the ARCHIMED 0.48 PAR / 0.52 NIR
+   split.
+
+When `nir_interception=false`, NIR is not required. If finite PAR and NIR are
+the best available description, their sum still resolves total SW before the
+NIR branch is disabled; when finite SW and PAR are already available, an
+unusable NIR value does not block the PAR-only computation.
+
+Redundant finite inputs must agree within 1% or 1 W m^-2, whichever is larger.
+Nonfinite values do not conflict: they are ignored when another derivation path
+is available. An error is returned only when the forcing cannot be derived, the
+finite inputs conflict, or enabled boundary checks fail.
+
+Row values take precedence over `PlantMeteo.TimeStepTable` metadata. Metadata
+is used as a fallback when every row-level alias for a logical variable is
+absent or nonfinite.
+
+Optional custom bands use `Ri_<BAND>_f`/`RI_<BAND>_f`. They follow the same
+sentinel, alias-agreement, and nonnegative-boundary rules as the built-in light
+bands. `Ri_TIR_f` is thermal forcing and is intentionally not sent through the
+light interception/scattering pipeline.
+
+### Boundary Validation
+
+Boundary validation is enabled by default through
+`LightOptions(check_meteo_boundaries=true)`. It checks nonnegative irradiance,
+fractions and clearness in `[0, 1]`, latitude in `[-90, 90]`, sun azimuth in
+`[0, 360)`, sun elevation in `[-90, 90]`, and a positive timestep duration.
+For example:
+
+```julia
+report = check_meteo(meteo; options=options)
+```
+
+For an intentional out-of-range research input, disable only the physical
+range checks:
+
+```julia
+report = check_meteo(meteo; options=options, check_boundaries=false)
+prepared = prepare_meteo(meteo, options; check_boundaries=false)
+step = run_light(sim, row; check_boundaries=false)
+```
+
+Missing/nonfinite resolution, positive-duration checks, and conflicting-input
+checks remain active when `check_boundaries=false`; there is no general unsafe
+validation bypass.
+
+Date and time values needed by the chosen solar path are parsed strictly.
+Malformed or blank values are never replaced silently with noon or a default
+calendar date. They may be ignored only when a complete alternative path is
+available—for example, finite explicit sun coordinates plus a positive
+`step_duration`.
 
 ## 1. Time Intervals
 

@@ -67,7 +67,7 @@ function _scale_extra_band_energy(extra_q_per_band, step_duration_seconds::Float
 end
 
 """
-    integrate_light(scene, models, first, scat, options; meteo_row=nothing, extra_initial_energy_per_band=..., extra_energy_per_band=..., extra_emitter_escaped_power_per_band=..., step_duration_seconds=nothing, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
+    integrate_light(scene, models, first, scat, options; meteo_row=nothing, step_duration_seconds=nothing, check_boundaries=options.check_meteo_boundaries, ...)::LightBudget
 
 Combine first-order interception and scattering into per-node incident and
 absorbed light budgets.
@@ -90,8 +90,23 @@ function integrate_light(
     component_area_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_par_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
-    dt_seconds = step_duration_seconds === nothing ? _step_duration_seconds_local(meteo_row) : Float64(step_duration_seconds)
+    dt_seconds =
+        if step_duration_seconds !== nothing
+            _duration_seconds_strict(
+                step_duration_seconds;
+                field_name="step_duration_seconds",
+            )
+        elseif meteo_row !== nothing
+            _resolved_meteo_step_or_error(
+                meteo_row,
+                options;
+                check_boundaries=check_boundaries,
+            ).duration_seconds
+        else
+            error("integrate_light requires `step_duration_seconds` or a resolvable `meteo_row`.")
+        end
     node_ids = collect(keys(first.projected_area_per_node))
     budget = _zero_budget_components(node_ids)
     area_map = component_area_per_node === nothing ? _interception_area_per_node_local(scene, models, options) : component_area_per_node
@@ -742,23 +757,23 @@ function _step_duration_seconds_local(row)
 end
 
 function _row_datetime_interval_local(row; index::Int=0)
-    try
-        return PlantMeteo.row_datetime_interval(
-            row;
-            index=index,
-            date_cols=(:date,),
-            start_cols=(:hour_start, :hour, :date),
-            end_cols=(:hour_end,),
-            duration_cols=(:step_duration, :duration),
-            default_date=Dates.Date(2000, 1, 1),
-            default_duration_seconds=1.0,
-            allow_end_rollover=false,
-        )
-    catch err
-        msg = sprint(showerror, err)
-        occursin("end is before start", msg) && error("end is before start at meteo row $(index)")
-        rethrow(err)
-    end
+    errors = String[]
+    sources = Dict{Symbol,Symbol}()
+    temporal = _meteo_resolve_temporal!(errors, row, index, sources)
+    isempty(errors) || error(
+        "invalid datetime interval at meteo row $(index): $(join(errors, "; "))",
+    )
+    temporal.date !== nothing || error(
+        "invalid datetime interval at meteo row $(index): a finite date is required for datetime meteo_range selection",
+    )
+    temporal.start_hour !== nothing && temporal.end_hour !== nothing || error(
+        "invalid datetime interval at meteo row $(index): a start time and positive duration are required",
+    )
+
+    base = Dates.DateTime(temporal.date)
+    start = base + Dates.Millisecond(round(Int, temporal.start_hour * 3_600_000))
+    stop = base + Dates.Millisecond(round(Int, temporal.end_hour * 3_600_000))
+    return start, stop
 end
 
 function _cfg_meteo_range_spec_local(options::LightOptions)
@@ -852,9 +867,12 @@ function _parse_range_datetime_token_local(s::AbstractString)
     error("invalid meteo_range datetime token: $(repr(s))")
 end
 
-function _apply_meteo_range_local(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
+function _meteo_range_indices_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
     spec = _cfg_meteo_range_spec_local(options)
-    spec === nothing && return meteo
+    spec === nothing && return collect(1:length(meteo))
 
     parts = split(spec, ","; limit=2)
     length(parts) == 2 || error("invalid meteo_range format: $(repr(spec))")
@@ -870,7 +888,7 @@ function _apply_meteo_range_local(meteo::PlantMeteo.TimeStepTable, options::Ligh
         ia >= 1 || error("invalid meteo_range: start step must be >= 1")
         ib >= ia || error("invalid meteo_range: end step is before start step")
         ib <= n || error("invalid meteo_range: end step exceeds meteo size")
-        return meteo[ia:ib]
+        return collect(ia:ib)
     end
 
     t0 = _parse_range_datetime_token_local(a)
@@ -884,58 +902,138 @@ function _apply_meteo_range_local(meteo::PlantMeteo.TimeStepTable, options::Ligh
         s <= t1 && e >= t0 && push!(selected, i)
     end
     isempty(selected) && error("invalid meteo_range: selection is empty")
+    return selected
+end
+
+function _apply_meteo_range_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
+    selected = _meteo_range_indices_local(meteo, options)
+    length(selected) == length(meteo) && selected == collect(1:length(meteo)) &&
+        return meteo
     return meteo[selected]
 end
 
-function _apply_meteo_active_filter_local(meteo::PlantMeteo.TimeStepTable)
-    isempty(meteo) && return meteo
+function _meteo_active_indices_local(
+    meteo::PlantMeteo.TimeStepTable;
+    source_indices::AbstractVector{<:Integer}=collect(1:length(meteo)),
+)
+    isempty(meteo) && return Int[]
+    length(source_indices) == length(meteo) ||
+        error("Internal meteo row-index mismatch during active selection.")
     names = _row_propertynames(first(meteo))
-    :active in names || return meteo
+    :active in names || return collect(1:length(meteo))
 
     selected = Int[]
     for (i, row) in enumerate(meteo)
-        flag = _parse_bool_strict_local(getproperty(row, :active), "active")
+        flag = try
+            _parse_bool_strict_local(getproperty(row, :active), "active")
+        catch err
+            error(
+                "invalid active value at meteo row $(source_indices[i]): $(sprint(showerror, err))",
+            )
+        end
         flag && push!(selected, i)
     end
     isempty(selected) && error("invalid meteo: no active meteo step")
+    return selected
+end
+
+function _apply_meteo_active_filter_local(meteo::PlantMeteo.TimeStepTable)
+    selected = _meteo_active_indices_local(meteo)
+    length(selected) == length(meteo) && selected == collect(1:length(meteo)) &&
+        return meteo
     return meteo[selected]
 end
 
-function _validate_meteo_sequence_local(meteo::PlantMeteo.TimeStepTable)
-    try
-        PlantMeteo.check_non_overlapping_timesteps(
-            meteo;
-            date_cols=(:date,),
-            start_cols=(:hour_start, :hour, :date),
-            end_cols=(:hour_end,),
-            duration_cols=(:step_duration, :duration),
-            default_date=Dates.Date(2000, 1, 1),
-            default_duration_seconds=1.0,
-            allow_end_rollover=false,
-        )
-    catch err
-        msg = sprint(showerror, err)
-        if occursin("overlapping timesteps at row", msg)
-            m = match(r"row\s+(\d+)", msg)
-            i = m === nothing ? 0 : parse(Int, m.captures[1])
-            error("invalid overlapping meteo steps at row $(i)")
+function _select_meteo_with_source_indices_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
+    meteo_for_selection = _with_inferred_datetime_durations(meteo)
+    range_indices = _meteo_range_indices_local(meteo_for_selection, options)
+    ranged =
+        length(range_indices) == length(meteo_for_selection) &&
+        range_indices == collect(1:length(meteo_for_selection)) ?
+        meteo_for_selection : meteo_for_selection[range_indices]
+    active_indices = _meteo_active_indices_local(
+        ranged;
+        source_indices=range_indices,
+    )
+    selected =
+        length(active_indices) == length(ranged) &&
+        active_indices == collect(1:length(ranged)) ? ranged : ranged[active_indices]
+    selected = _with_inferred_datetime_durations(selected)
+    return selected, range_indices[active_indices]
+end
+
+function _resolved_datetime_interval_local(step::ResolvedMeteoStep)
+    step.start_hour !== nothing && step.end_hour !== nothing || return nothing
+    base = Dates.DateTime(something(step.date, Dates.Date(2000, 1, 1)))
+    start = base + Dates.Millisecond(round(Int, step.start_hour * 3_600_000))
+    stop = base + Dates.Millisecond(round(Int, step.end_hour * 3_600_000))
+    return start, stop
+end
+
+function _validate_meteo_sequence_local(steps::Vector{ResolvedMeteoStep})
+    previous_stop = nothing
+    for step in steps
+        interval = _resolved_datetime_interval_local(step)
+        interval === nothing && continue
+        start, stop = interval
+        if previous_stop !== nothing && start < previous_stop
+            error("invalid overlapping meteo steps at row $(step.row_index)")
         end
-        rethrow(err)
+        previous_stop = stop
     end
+    return nothing
 end
 
 _meteo_rows(meteo::PlantMeteo.TimeStepTable) = collect(meteo)
 
-function _prepare_meteo_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    isempty(meteo) && return meteo
-    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(meteo)
-    meteo = _apply_meteo_range_local(meteo, options)
-    meteo = _apply_meteo_active_filter_local(meteo)
-    meteo
+function _prepare_meteo_for_series(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    return_resolved::Bool=false,
+)
+    isempty(meteo) && error("invalid meteo: no meteo steps")
+    source_indices = Int[]
+    meteo, source_indices = _select_meteo_with_source_indices_local(meteo, options)
+    errors = String[]
+    warnings = String[]
+    infos = String[]
+    resolved_steps = ResolvedMeteoStep[]
+    for (i, row) in enumerate(meteo)
+        source_index = source_indices[i]
+        result = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(errors, result.errors)
+        append!(warnings, result.warnings)
+        append!(infos, result.infos)
+        result.step === nothing || push!(resolved_steps, result.step)
+    end
+    report = ValidationReport(unique(errors), unique(warnings), unique(infos))
+    if !isempty(report.errors)
+        error(_validation_error_message(
+            "Invalid meteo input",
+            report;
+            next="Run `check_meteo(meteo; options=options, check_boundaries=$(check_boundaries))` to inspect the failing rows and variables.",
+        ))
+    end
+    length(resolved_steps) == length(meteo) || error("Meteo resolution did not produce every selected step.")
+    options.allow_overlapping_meteo_steps ||
+        _validate_meteo_sequence_local(resolved_steps)
+    return return_resolved ? (meteo, resolved_steps) : meteo
 end
 
 """
-    prepare_meteo(meteo, options)::PlantMeteo.TimeStepTable
+    prepare_meteo(meteo, options; check_boundaries=options.check_meteo_boundaries)::PlantMeteo.TimeStepTable
 
 Return the effective meteo table after Java-like meteo controls are applied:
 sequence validation, optional `meteo_range`, and optional `active` filtering.
@@ -946,15 +1044,33 @@ Arguments:
   rows.
 - `options`: [`LightOptions`](@ref) controlling overlap validation,
   `meteo_range`, and active-row filtering.
+
+Keywords:
+
+- `check_boundaries`: check physical ranges for used meteo values. Missing,
+  nonfinite, derivability, and conflicting-input checks always remain enabled.
 """
-function prepare_meteo(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    _prepare_meteo_for_series(meteo, options)
+function prepare_meteo(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
+    _prepare_meteo_for_series(meteo, options; check_boundaries=check_boundaries)
 end
 
-function prepare_meteo(meteo, options::LightOptions)
+function prepare_meteo(
+    meteo,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
-    meteo isa PlantMeteo.TimeStepTable && return prepare_meteo(meteo, options)
-    prepare_meteo(_as_plantmeteo_table(meteo), options)
+    meteo isa PlantMeteo.TimeStepTable &&
+        return prepare_meteo(meteo, options; check_boundaries=check_boundaries)
+    prepare_meteo(
+        _as_plantmeteo_table(meteo),
+        options;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function _default_scattering_factor_local(options::LightOptions, band::String)
@@ -1063,6 +1179,18 @@ function _extra_band_irradiance(meteo_row, options::LightOptions)
     )
 end
 
+function _extra_band_irradiance(
+    resolved::ResolvedMeteoStep,
+    meteo_row,
+    options::LightOptions,
+)
+    scale = _radiation_input_effective_scale(meteo_row, options, resolved)
+    return Dict{String,Float64}(
+        band => max(irradiance, 0.0) * scale
+        for (band, irradiance) in resolved.extra_irradiance
+    )
+end
+
 function _include_emitter_extra_bands!(
     extras_irradiance::Dict{String,Float64},
     emitter_power_per_band::Dict{String,Dict{Int,Float64}},
@@ -1074,7 +1202,14 @@ function _include_emitter_extra_bands!(
     return extras_irradiance
 end
 
-function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, turtle::TurtleGrid, options::LightOptions)
+function _single_band_flux(
+    total_irradiance::Float64,
+    meteo_row,
+    sky::SkyState,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
+)
     total_irradiance <= 0.0 && return zeros(Float64, length(turtle.sectors))
 
     # Extra shortwave bands follow the same directional sky distribution as
@@ -1082,7 +1217,13 @@ function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, 
     # for clearness-only rows: re-running `_radiation_substeps` with a temporary
     # custom-band SkyState would otherwise replace the supplied custom-band
     # magnitude with a newly derived total shortwave irradiance.
-    reference = compute_directional_fluxes(meteo_row, sky, turtle, options)
+    reference = compute_directional_fluxes(
+        meteo_row,
+        sky,
+        turtle,
+        options;
+        resolved_step=resolved_step,
+    )
     reference_sw = reference.par .+ reference.nir
     reference_total = sum(reference_sw)
     if reference_total > 0.0
@@ -1113,10 +1254,12 @@ function _compute_extra_band_light(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
     responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
 )
     extras_irr =
         meteo_row === nothing ? Dict{String,Float64}() :
-        _extra_band_irradiance(meteo_row, options)
+        resolved_step === nothing ? _extra_band_irradiance(meteo_row, options) :
+        _extra_band_irradiance(resolved_step, meteo_row, options)
     emitter_power_per_band =
         responses_cache === nothing ?
         _emitter_power_per_band_per_node(scene, models) :
@@ -1132,7 +1275,14 @@ function _compute_extra_band_light(
     ids = [s.id for s in turtle.sectors]
     n = length(ids)
     for (band, total_irr) in extras_irr
-        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, options)
+        flux_band = _single_band_flux(
+            total_irr,
+            meteo_row,
+            sky,
+            turtle,
+            options;
+            resolved_step=resolved_step,
+        )
         first_band =
             if responses_cache === nothing
                 compute_first_order(
@@ -1737,14 +1887,37 @@ function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
     return SceneSummary(domain, length(scene.nodes), length(scene.face2node), length(object_ids), group_types, missing, warnings)
 end
 
-function _meteo_rows_for_check(meteo)
-    meteo isa PlantMeteo.TimeStepTable && return _meteo_rows(meteo)
-    Tables.istable(typeof(meteo)) && return _meteo_rows(_as_plantmeteo_table(meteo))
-    return [meteo]
+function _meteo_rows_and_indices_for_check(
+    meteo,
+    options::LightOptions;
+    apply_selection::Bool=true,
+)
+    table =
+        meteo isa PlantMeteo.TimeStepTable ? meteo :
+        Tables.istable(typeof(meteo)) ? _as_plantmeteo_table(meteo) : nothing
+    table === nothing && return Any[meteo], [1]
+    if apply_selection && !isempty(table)
+        table, source_indices = _select_meteo_with_source_indices_local(table, options)
+        return _meteo_rows(table), source_indices
+    end
+    return _meteo_rows(table), collect(1:length(table))
+end
+
+function _meteo_rows_for_check(
+    meteo,
+    options::LightOptions;
+    apply_selection::Bool=true,
+)
+    rows, _ = _meteo_rows_and_indices_for_check(
+        meteo,
+        options;
+        apply_selection=apply_selection,
+    )
+    return rows
 end
 
 """
-    check_meteo(meteo; options=LightOptions())::ValidationReport
+    check_meteo(meteo; options=LightOptions(), check_boundaries=options.check_meteo_boundaries)::ValidationReport
 
 Validate meteo rows for required solar geometry, radiation inputs, and timestep
 duration data.
@@ -1758,14 +1931,28 @@ Keywords:
 
 - `options`: [`LightOptions`](@ref) used for checks that depend on runtime
   meteo handling.
+- `check_boundaries`: check physical ranges for used meteo values. Missing,
+  nonfinite, derivability, and conflicting-input checks are always performed.
 """
-function check_meteo(meteo; options::LightOptions=LightOptions())
+function check_meteo(
+    meteo;
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    _apply_selection::Bool=true,
+    _row_indices::Union{Nothing,Vector{Int}}=nothing,
+)
     rows = Any[]
+    selected_indices = Int[]
     errors = String[]
     warnings = String[]
     infos = String[]
     try
-        rows = _meteo_rows_for_check(meteo)
+        rows, selected_indices = _meteo_rows_and_indices_for_check(
+            meteo,
+            options;
+            apply_selection=_apply_selection,
+        )
+        _row_indices === nothing || (selected_indices = _row_indices)
     catch err
         push!(errors, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
         return ValidationReport(errors, warnings, infos)
@@ -1773,36 +1960,28 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
     isempty(rows) && push!(errors, "Meteo input has no rows.")
     isempty(rows) && return ValidationReport(errors, warnings, infos)
 
+    length(selected_indices) == length(rows) || error("Internal meteo row-index mismatch.")
     for (i, row) in enumerate(rows)
-        names = _row_propertynames(row)
-        has_sun = (:sun_azimuth in names || :sun_azimut in names) && (:sun_elevation in names)
-        latitude = _row_value(row, [:latitude, :lat], NaN)
-        if !has_sun && !isfinite(latitude)
-            columns = join(string.(names), ", ")
-            push!(errors, "Meteo row $i needs `latitude` metadata/column unless `sun_azimuth` and `sun_elevation` are provided. Available columns: $columns.")
-        end
-        try
-            uses = _effective_radiation_use_tokens(row)
-            has_cl = _has_any_column(row, [:clearness, :Kt])
-            has_sw = _has_any_column(row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global])
-            has_par = _has_any_column(row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par])
-            has_nir = _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir])
-            _validate_meteo_radiation_inputs(uses, has_cl, has_sw, has_par, has_nir)
-        catch err
-            push!(errors, "Meteo row $i has invalid radiation inputs: $(sprint(showerror, err)). Expected one clear radiation source such as `RI_PAR_f` + `RI_NIR_f`, or `RI_SW_f`, or `clearness`.")
-        end
-        try
-            _row_step_hours(row)
-        catch err
-            push!(errors, "Meteo row $i has invalid time interval: $(sprint(showerror, err))")
+        source_index = selected_indices[i]
+        result = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(errors, result.errors)
+        append!(warnings, result.warnings)
+        append!(infos, result.infos)
+        if result.step === nothing && isempty(result.errors)
+            push!(errors, "Meteo row $source_index could not be resolved for an unknown reason.")
         end
     end
     push!(infos, "$(length(rows)) meteo row(s) checked.")
-    return ValidationReport(errors, warnings, infos)
+    return ValidationReport(unique(errors), unique(warnings), unique(infos))
 end
 
 """
-    summarize_meteo(meteo; options=LightOptions())
+    summarize_meteo(meteo; options=LightOptions(), check_boundaries=options.check_meteo_boundaries)
 
 Return a `MeteoSummary` describing row count, columns, timestep duration,
 radiation inputs, and the detected solar-geometry path for a meteo table or row.
@@ -1816,11 +1995,16 @@ Keywords:
 
 - `options`: [`LightOptions`](@ref) used for checks that depend on runtime
   meteo handling.
+- `check_boundaries`: check physical ranges while resolving the summary.
 """
-function summarize_meteo(meteo; options::LightOptions=LightOptions())
+function summarize_meteo(
+    meteo;
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
     warnings = String[]
-    rows = try
-        _meteo_rows_for_check(meteo)
+    rows, source_indices = try
+        _meteo_rows_and_indices_for_check(meteo, options)
     catch err
         push!(warnings, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
@@ -1831,31 +2015,68 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
     end
     first_row = first(rows)
     columns = Symbol[Symbol(name) for name in _row_propertynames(first_row)]
-    radiation_inputs = try
-        inputs = _effective_radiation_use_tokens(first_row)
-        isempty(inputs) ? _inferred_radiation_input_columns(first_row) : inputs
-    catch err
-        push!(warnings, "Could not resolve radiation inputs: $(sprint(showerror, err))")
-        String[]
+    first_resolution = _resolve_meteo_step(
+        first_row,
+        options;
+        row_index=first(source_indices),
+        check_boundaries=check_boundaries,
+    )
+    append!(warnings, first_resolution.errors)
+    append!(warnings, first_resolution.warnings)
+    radiation_inputs = String[]
+    solar_geometry = "unknown"
+    if first_resolution.step !== nothing && isempty(first_resolution.errors)
+        step = first_resolution.step
+        for (logical_name, label) in (
+            (:ri_sw_f, "RI_SW_f"),
+            (:ri_par_f, "RI_PAR_f"),
+            (:ri_nir_f, "RI_NIR_f"),
+            (:ri_sw_direct, "RI_SW_f_direct"),
+            (:ri_sw_diffuse, "RI_SW_f_diffuse"),
+            (:direct_fraction, "direct_fraction"),
+            (:clearness, "clearness"),
+        )
+            source = get(step.sources, logical_name, nothing)
+            source === nothing && continue
+            source in getproperty(_METEO_ALIASES, logical_name) || continue
+            push!(radiation_inputs, label)
+        end
+        solar_geometry =
+            step.solar_geometry_source == :explicit ? "explicit sun_azimuth/sun_elevation" :
+            step.solar_geometry_source == :zero_forcing_default ? "irrelevant for zero radiation" :
+            "reconstructed from date/time and latitude"
+    else
+        has_sun =
+            (:sun_azimuth in columns || :sun_azimut in columns) &&
+            (:sun_elevation in columns)
+        latitude = _row_value(first_row, [:latitude, :lat], NaN)
+        solar_geometry =
+            has_sun ? "explicit sun_azimuth/sun_elevation" :
+            isfinite(latitude) ? "reconstructed from date/time and latitude" :
+            "missing latitude or explicit sun position"
     end
-    has_sun = (:sun_azimuth in columns || :sun_azimut in columns) && (:sun_elevation in columns)
-    latitude = _row_value(first_row, [:latitude, :lat], NaN)
-    solar_geometry =
-        has_sun ? "explicit sun_azimuth/sun_elevation" :
-        isfinite(latitude) ? "reconstructed from date/time and latitude" :
-        "missing latitude or explicit sun position"
     duration_values = Float64[]
     for (i, row) in enumerate(rows)
-        try
-            push!(duration_values, _step_duration_seconds_local(row))
-        catch err
-            push!(warnings, "Row $i has invalid duration: $(sprint(showerror, err))")
-        end
+        source_index = source_indices[i]
+        resolution = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(warnings, resolution.errors)
+        append!(warnings, resolution.warnings)
+        resolution.step === nothing ||
+            push!(duration_values, resolution.step.duration_seconds)
     end
     duration_seconds = isempty(duration_values) ? nothing : first(duration_values)
     variable_duration =
         !isempty(duration_values) && any(v -> !isapprox(v, first(duration_values); rtol=0.0, atol=1e-9), duration_values)
-    report = check_meteo(meteo; options=options)
+    report = check_meteo(
+        meteo;
+        options=options,
+        check_boundaries=check_boundaries,
+    )
     append!(warnings, report.errors)
     append!(warnings, report.warnings)
     return MeteoSummary(length(rows), columns, duration_seconds, variable_duration, radiation_inputs, solar_geometry, unique(warnings))
@@ -1872,7 +2093,7 @@ end
 
 """
     check_simulation(sim)::ValidationReport
-    check_simulation(scene, meteo; models, options=LightOptions())::ValidationReport
+    check_simulation(scene, meteo; models, options=LightOptions(), check_boundaries=options.check_meteo_boundaries)::ValidationReport
 
 Validate a reusable simulation or the separate inputs needed to build and run
 one.
@@ -1887,13 +2108,28 @@ Keywords:
 
 - `models`: required model specification when checking separate inputs.
 - `options`: [`LightOptions`](@ref) used for meteo validation.
+- `check_boundaries`: check physical ranges for used meteo values.
 """
 function check_simulation(sim::LightSimulation)
     _merge_reports(check_scene(sim.scene), check_models(sim.scene, sim.models))
 end
 
-function check_simulation(scene::PlantGeom.SceneGeometry, meteo; models, options::LightOptions=LightOptions())
-    _merge_reports(check_scene(scene), check_models(scene, models), check_meteo(meteo; options=options))
+function check_simulation(
+    scene::PlantGeom.SceneGeometry,
+    meteo;
+    models,
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
+    _merge_reports(
+        check_scene(scene),
+        check_models(scene, models),
+        check_meteo(
+            meteo;
+            options=options,
+            check_boundaries=check_boundaries,
+        ),
+    )
 end
 
 @inline _series_progress_enabled(io::IO=stderr) = io isa Base.TTY
@@ -2177,8 +2413,9 @@ function _compute_extra_band_light_cached(
     meteo_row,
     sky::SkyState,
     turtle::TurtleGrid,
+    resolved_step::ResolvedMeteoStep,
 )
-    extras_irr = _extra_band_irradiance(meteo_row, cache.options)
+    extras_irr = _extra_band_irradiance(resolved_step, meteo_row, cache.options)
     _include_emitter_extra_bands!(
         extras_irr,
         entry.responses_cache.prepared.emitter_power_per_band_per_node,
@@ -2193,7 +2430,14 @@ function _compute_extra_band_light_cached(
     ids = [s.id for s in turtle.sectors]
     n = length(ids)
     for (band, total_irr) in extras_irr
-        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, cache.options)
+        flux_band = _single_band_flux(
+            total_irr,
+            meteo_row,
+            sky,
+            turtle,
+            cache.options;
+            resolved_step=resolved_step,
+        )
         first_band = _combine_sector_responses(
             entry.responses_cache,
             DirectionalFluxes(ids, flux_band, zeros(Float64, n));
@@ -2250,6 +2494,8 @@ function _run_light_step_cached(
     cache::LightSimulationCache,
     meteo_row;
     use_full_response::Bool=(cache.mode != :topology_fallback),
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
 )
     scene = cache.scene
     models = cache.models
@@ -2257,15 +2503,34 @@ function _run_light_step_cached(
     ib = cache.resolved_interception_backend
     nir_interception = _nir_interception_enabled_local(options)
     nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
-    sky = compute_sky(meteo_row, options)
+    resolved =
+        resolved_step === nothing ?
+        _resolved_meteo_step_or_error(
+            meteo_row,
+            options;
+            check_boundaries=check_boundaries,
+        ) : resolved_step
+    sky = compute_sky(
+        meteo_row,
+        options;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
     nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(options, sky)
-    fluxes = compute_directional_fluxes(meteo_row, sky, turtle, options)
+    fluxes = compute_directional_fluxes(
+        meteo_row,
+        sky,
+        turtle,
+        options;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 
     prepared = cache.prepared
     responses_cache = nothing
     scattering_topology = nothing
-    extra_irr = _extra_band_irradiance(meteo_row, options)
+    extra_irr = _extra_band_irradiance(resolved, meteo_row, options)
     first = nothing
     scat = nothing
     if use_full_response && cache.mode != :topology_fallback
@@ -2274,7 +2539,14 @@ function _run_light_step_cached(
         first = _combine_sector_responses(responses_cache, fluxes)
         scat = _assemble_cached_scattering(cache, entry, fluxes, nir_scattering)
         extra_0_q, extra_q, extra_irr, extra_emitter_escaped_power =
-            _compute_extra_band_light_cached(cache, entry, meteo_row, sky, turtle)
+            _compute_extra_band_light_cached(
+                cache,
+                entry,
+                meteo_row,
+                sky,
+                turtle,
+                resolved,
+            )
     else
         if ib isa RasterCPUBackend && options.scattering && isempty(extra_irr)
             prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
@@ -2311,6 +2583,7 @@ function _run_light_step_cached(
                 scattering_mode=cache.scattering_mode,
                 scattering_backend=cache.scattering_backend,
                 responses_cache=responses_cache,
+                resolved_step=resolved,
             )
     end
     nir_interception || (first = _disable_nir_first_order_local(first))
@@ -2320,7 +2593,7 @@ function _run_light_step_cached(
         first,
         scat,
         options;
-        meteo_row=meteo_row,
+        step_duration_seconds=resolved.duration_seconds,
         extra_initial_energy_per_band=extra_0_q,
         extra_energy_per_band=extra_q,
         extra_emitter_escaped_power_per_band=extra_emitter_escaped_power,
@@ -2428,32 +2701,88 @@ end
 
 function _is_meteo_series_input(x)
     x isa PlantMeteo.TimeStepTable && return true
-    x isa AbstractVector && return !isempty(x) && all(row -> row isa NamedTuple, x)
-    Tables.istable(typeof(x)) && return !(x isa NamedTuple)
+    if x isa AbstractVector
+        (isempty(x) && eltype(x) <: NamedTuple) && return true
+        (!isempty(x) && all(row -> row isa NamedTuple, x)) && return true
+        Tables.istable(typeof(x)) && return true
+        return false
+    end
+    if x isa NamedTuple
+        return !isempty(x) && all(column -> column isa AbstractVector, values(x))
+    end
+    Tables.istable(typeof(x)) && return true
     return false
 end
 
-function _run_light_series_sim(sim::LightSimulation, meteo)
-    cache = _ensure_light_cache!(sim)
-    meteo_local = meteo isa PlantMeteo.TimeStepTable ? meteo : _as_plantmeteo_table(meteo)
-    rows_eff = _prepare_meteo_for_series(meteo_local, sim.options)
+function _run_light_series_resolved(
+    cache::LightSimulationCache,
+    rows_eff::PlantMeteo.TimeStepTable,
+    resolved_steps::Vector{ResolvedMeteoStep};
+    use_full_response::Bool=(cache.mode != :topology_fallback),
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
+)
+    length(rows_eff) == length(resolved_steps) ||
+        error("Internal meteo/resolved-step length mismatch.")
     out = Vector{LightStepResult}(undef, length(rows_eff))
     io = stderr
     started_ns = time_ns()
     last_report_ns = Ref(started_ns)
-    use_full_response = _use_full_response_for_sim(sim, cache)
     if !isempty(rows_eff)
-        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
+        _report_series_progress!(
+            io,
+            cache,
+            0,
+            length(rows_eff),
+            started_ns,
+            last_report_ns;
+            force=true,
+        )
     end
     for (i, row) in enumerate(rows_eff)
-        out[i] = _run_light_step_cached(cache, row; use_full_response=use_full_response)
-        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
+        out[i] = _run_light_step_cached(
+            cache,
+            row;
+            use_full_response=use_full_response,
+            check_boundaries=check_boundaries,
+            resolved_step=resolved_steps[i],
+        )
+        _report_series_progress!(
+            io,
+            cache,
+            i,
+            length(rows_eff),
+            started_ns,
+            last_report_ns;
+            force=(i == length(rows_eff)),
+        )
     end
     return out
 end
 
+function _run_light_series_sim(
+    sim::LightSimulation,
+    meteo;
+    check_boundaries::Bool=sim.options.check_meteo_boundaries,
+)
+    meteo_local = meteo isa PlantMeteo.TimeStepTable ? meteo : _as_plantmeteo_table(meteo)
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo_local,
+        sim.options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
+    cache = _ensure_light_cache!(sim)
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        use_full_response=_use_full_response_for_sim(sim, cache),
+        check_boundaries=check_boundaries,
+    )
+end
+
 """
-    run_light(sim, meteo_or_row)
+    run_light(sim, meteo_or_row; check_boundaries=sim.options.check_meteo_boundaries)
 
 Run one light step for a meteo row, or a full series for a meteo table.
 
@@ -2463,21 +2792,37 @@ Arguments:
   lazy cache.
 - `meteo_or_row`: either a single meteo row for one step, or a
   `PlantMeteo.TimeStepTable`/Tables.jl-compatible table for a series.
+
+Keywords:
+
+- `check_boundaries`: check physical ranges for used meteo values. Derivability
+  and conflicting-input checks are always performed.
 """
-function run_light(sim::LightSimulation, meteo_or_row)
-    meteo_report = check_meteo(meteo_or_row; options=sim.options)
-    if !isempty(meteo_report.errors)
-        error(_validation_error_message(
-            "Invalid meteo input",
-            meteo_report;
-            next="Run `check_meteo(meteo; options=sim.options)` and `summarize_meteo(meteo; options=sim.options)` to inspect expected columns and units.",
-        ))
-    end
+function run_light(
+    sim::LightSimulation,
+    meteo_or_row;
+    check_boundaries::Bool=sim.options.check_meteo_boundaries,
+)
     if _is_meteo_series_input(meteo_or_row)
-        return _run_light_series_sim(sim, meteo_or_row)
+        return _run_light_series_sim(
+            sim,
+            meteo_or_row;
+            check_boundaries=check_boundaries,
+        )
     end
+    resolved = _resolved_meteo_step_or_error(
+        meteo_or_row,
+        sim.options;
+        check_boundaries=check_boundaries,
+    )
     cache = _ensure_light_cache!(sim)
-    return _run_light_step_cached(cache, meteo_or_row; use_full_response=_use_full_response_for_sim(sim, cache))
+    return _run_light_step_cached(
+        cache,
+        meteo_or_row;
+        use_full_response=_use_full_response_for_sim(sim, cache),
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 """
@@ -2528,7 +2873,13 @@ function run_light_step(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
+    resolved = _resolved_meteo_step_or_error(
+        meteo_row,
+        options;
+        check_boundaries=check_boundaries,
+    )
     cache = prepare_light_cache(
         scene,
         models,
@@ -2538,14 +2889,31 @@ function run_light_step(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return _run_light_step_cached(cache, meteo_row; use_full_response=false)
+    return _run_light_step_cached(
+        cache,
+        meteo_row;
+        use_full_response=false,
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 function run_light_step(
     cache::LightSimulationCache,
-    meteo_row,
+    meteo_row;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
-    return _run_light_step_cached(cache, meteo_row)
+    resolved = _resolved_meteo_step_or_error(
+        meteo_row,
+        cache.options;
+        check_boundaries=check_boundaries,
+    )
+    return _run_light_step_cached(
+        cache,
+        meteo_row;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 """
@@ -2565,7 +2933,14 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo,
+        options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
     if _can_use_series_radiation_cache(_resolve_interception_backend(interception_backend)) && options.cache_radiation
         cache = prepare_light_cache(
             scene,
@@ -2575,7 +2950,12 @@ function run_light_series(
             scattering_mode=scattering_mode,
             scattering_backend=scattering_backend,
         )
-        return run_light_series(cache, meteo)
+        return _run_light_series_resolved(
+            cache,
+            rows_eff,
+            resolved_steps;
+            check_boundaries=check_boundaries,
+        )
     end
 
     cache = prepare_light_cache(
@@ -2587,35 +2967,46 @@ function run_light_series(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return run_light_series(cache, meteo)
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo::PlantMeteo.TimeStepTable,
+    meteo::PlantMeteo.TimeStepTable;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
-    rows_eff = _prepare_meteo_for_series(meteo, cache.options)
-    out = Vector{LightStepResult}(undef, length(rows_eff))
-    io = stderr
-    started_ns = time_ns()
-    last_report_ns = Ref(started_ns)
-    if !isempty(rows_eff)
-        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
-    end
-    for (i, row) in enumerate(rows_eff)
-        out[i] = _run_light_step_cached(cache, row)
-        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
-    end
-    return out
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo,
+        cache.options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function run_light_series(
     cache::LightSimulationCache,
     meteo;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo)
-    return run_light_series(cache, _as_plantmeteo_table(meteo))
+    meteo isa PlantMeteo.TimeStepTable &&
+        return run_light_series(cache, meteo; check_boundaries=check_boundaries)
+    return run_light_series(
+        cache,
+        _as_plantmeteo_table(meteo);
+        check_boundaries=check_boundaries,
+    )
 end
 
 function run_light_series(
@@ -2626,8 +3017,28 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
     Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
-    run_light_series(scene, models, _as_plantmeteo_table(meteo), options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
+    meteo isa PlantMeteo.TimeStepTable &&
+        return run_light_series(
+            scene,
+            models,
+            meteo,
+            options;
+            interception_backend=interception_backend,
+            scattering_mode=scattering_mode,
+            scattering_backend=scattering_backend,
+            check_boundaries=check_boundaries,
+        )
+    run_light_series(
+        scene,
+        models,
+        _as_plantmeteo_table(meteo),
+        options;
+        interception_backend=interception_backend,
+        scattering_mode=scattering_mode,
+        scattering_backend=scattering_backend,
+        check_boundaries=check_boundaries,
+    )
 end

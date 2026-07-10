@@ -232,6 +232,7 @@ end
             hour_end="13:00:00",
             sun_azimuth=180.0,
             sun_elevation=60.0,
+            direct_fraction=0.5,
             RI_PAR_f=120.0,
             RI_NIR_f=80.0,
         ),

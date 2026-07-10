@@ -544,6 +544,9 @@ Fields:
 - `scene_rotation_deg`: clockwise rotation, in degrees, from geographic north
   to the scene's local coordinates. The geographic sun is transformed into
   the fixed local turtle basis before directional weights are computed.
+- `check_meteo_boundaries`: validate physical ranges for meteorological inputs
+  before preparation or execution. Derivability and conflicting-input checks
+  remain enabled even when this is `false`.
 - `allow_overlapping_meteo_steps`: keep overlapping meteo intervals instead of
   rejecting the series during meteo preparation.
 - `nir_interception`: include NIR in directional fluxes and first-order
@@ -584,6 +587,7 @@ Base.@kwdef struct LightOptions
     radiation_timestep_minutes::Float64 = 15.0
     radiation_input_semantics::Symbol = :interval_mean
     scene_rotation_deg::Float64 = 0.0
+    check_meteo_boundaries::Bool = true
     allow_overlapping_meteo_steps::Bool = false
     nir_interception::Bool = true
     nir_scattering::Bool = true
@@ -611,6 +615,7 @@ Base.@kwdef struct LightOptions
         radiation_timestep_minutes,
         radiation_input_semantics,
         scene_rotation_deg,
+        check_meteo_boundaries,
         allow_overlapping_meteo_steps,
         nir_interception,
         nir_scattering,
@@ -647,6 +652,7 @@ Base.@kwdef struct LightOptions
             Float64(radiation_timestep_minutes),
             semantics,
             rotation,
+            Bool(check_meteo_boundaries),
             Bool(allow_overlapping_meteo_steps),
             Bool(nir_interception),
             Bool(nir_scattering),
@@ -702,6 +708,7 @@ function LightOptions(
         radiation_timestep_minutes,
         :interval_mean,
         0.0,
+        true,
         allow_overlapping_meteo_steps,
         nir_interception,
         nir_scattering,
@@ -732,6 +739,7 @@ function LightOptions(old::LightOptions; kwargs...)
         :radiation_timestep_minutes => old.radiation_timestep_minutes,
         :radiation_input_semantics => old.radiation_input_semantics,
         :scene_rotation_deg => old.scene_rotation_deg,
+        :check_meteo_boundaries => old.check_meteo_boundaries,
         :allow_overlapping_meteo_steps => old.allow_overlapping_meteo_steps,
         :nir_interception => old.nir_interception,
         :nir_scattering => old.nir_scattering,

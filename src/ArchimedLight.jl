@@ -15,6 +15,7 @@ import CSV
 
 include("types.jl")
 include("io.jl")
+include("meteo.jl")
 include("sky.jl")
 include("turtle.jl")
 include("interception.jl")
