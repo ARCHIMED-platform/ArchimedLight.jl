@@ -6,7 +6,7 @@ The current Julia package exposes light results in three increasingly concrete f
 2. attached back onto MTG nodes as ARCHIMED-style attributes
 3. written to disk when you export the enriched scene
 
-This page documents those three layers and then explains the ARCHIMED-style CSV outputs that still appear in the examples and regression harness.
+This page documents those three layers and then explains the ARCHIMED-style CSV outputs used by the public writer and regression harness.
 
 ## 1. In-Memory Outputs: `LightBudget`
 
@@ -142,19 +142,15 @@ This is currently the main disk output mechanism of `ArchimedLight.jl`: attach n
 
 ## ARCHIMED-Style CSV Tables
 
-You will still see files such as:
+The public writer produces `component_values.csv`. Historical fixture datasets
+and internal regression tools may also contain files such as:
 
 - `component_values.csv`
 - `scene_values.csv`
 - `summary.csv`
 
-in:
-
-- the archived Java outputs
-- the example comparison folder
-- the regression and release harnesses under `test/`
-
-Those files remain valuable because they are the main parity targets against the historical implementation.
+The example writes a fresh `component_values.csv` on demand, while the regression
+and release harnesses under `test/` keep their own isolated reference data.
 
 ### `component_values.csv`
 
@@ -194,4 +190,4 @@ Grouped aggregation, usually by item, group, and type.
 
 - use `LightBudget` when staying inside Julia
 - use `attach_light_step!` when you want visual inspection or downstream scene export
-- use the ARCHIMED-style CSVs when doing parity work with historical datasets or harnesses
+- use `component_values.csv` when you need a portable component-scale table

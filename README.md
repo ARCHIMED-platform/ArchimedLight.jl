@@ -13,6 +13,23 @@ Julia reimplementation of the ARCHIMED light interception pipeline with a compos
 
 The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script loads a scene, models, options, and meteo rows, adds explicit ground geometry, runs one light step, attaches `Ri_PAR_f` onto the MTG, and then renders the colored scene with `plantviz(..., color=:Ri_PAR_f)`.
 
+## Installation
+
+ArchimedLight.jl requires Julia 1.10 or newer. Install the registered package
+from the Julia package manager:
+
+```julia
+using Pkg
+Pkg.add("ArchimedLight")
+```
+
+Plotting is provided through the optional Makie extension. Install a Makie
+backend such as GLMakie when you need figures:
+
+```julia
+Pkg.add("GLMakie")
+```
+
 ## Scope
 
 ARCHIMED computes:
@@ -132,9 +149,10 @@ budget = ArchimedLight.integrate_light(scene, models, first_order, scat, options
 
 For ordinary simulations prefer `LightSimulation` and `run_light`.
 
-## Full Example
+## File-Based Example
 
-- Self-contained files and script are under `example_1/`.
+- A self-contained one-step file workflow is under `example_1/`.
+- It uses `read_simulation`, `run_light`, and the public output helpers.
 - Run with:
 
 ```bash

@@ -1,34 +1,33 @@
-# Full Featured Example
+# File-Based Example
 
-This example is a self-contained light-only run using copied fixture data.
+This directory contains a small, self-contained light-interception simulation.
+It uses the same public workflow as a user project: load a configuration with
+`read_simulation`, then pass one meteo row to `run_light`.
 
 ## Files
+
 - `config.yml`: ARCHIMED-style options file
 - `meteo.csv`: weather input with PAR and custom band
 - `scene/simple.ops` and `scene/opf/simple_OPF_shapes.opf`: geometry scene
 - `model_simple.yml`, `model_soil.yml`: optical properties
-- `full_featured_example.jl`: runnable end-to-end script
+- `full_featured_example.jl`: runnable one-step simulation
 
 ## Run
+
 From the repository root:
 
 ```bash
 julia --project=. example_1/full_featured_example.jl
 ```
 
-The script demonstrates:
-- explicit scene/models/options loading
-- stage-by-stage calls (`compute_sky` -> `integrate_light`)
-- backend selection in pipeline calls (`run_light_step`, `run_light_series`)
-- custom waveband handling (`RI_custom_f`)
-- 3D scene rendering with PlantGeom colored by intercepted PAR after `attach_light_step!` (`example_1/output/scene_3d_par_intercepted.png`)
-- optional reference comparison using `component_values.csv` from `example_1/output/000001/`
-- per-component comparison table: `example_1/output/component_values_reference_vs_julia.csv`
-- 3D scene colored with reference PAR: `example_1/output/scene_3d_par_reference.png`
+The script:
 
-## Reference Comparison Input
-If you have a reference `component_values.csv` for this scene, place it at:
+- loads the scene, models, options, and meteorology with `read_simulation`
+- prints compact scene and meteo summaries
+- runs the first meteo row with `run_light`
+- prints the resulting `LightStepResult` summary
+- attaches PAR results to the scene with `attach_light_step!`
+- writes `output/component_values.csv`
+- writes `output/scene_with_light.opf`
 
-- `example_1/output/000001/component_values.csv`
-
-When this file exists, the script automatically computes reference-vs-Julia per-component differences.
+The `output/` directory is generated when the example runs and is not tracked.

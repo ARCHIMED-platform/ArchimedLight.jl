@@ -11,6 +11,7 @@ The example folder contains:
 
 ```text
 example_1/
+├── README.md
 ├── config.yml
 ├── meteo.csv
 ├── model_simple.yml
@@ -28,6 +29,7 @@ The roles of those files are:
 - `simple_OPF_shapes.opf`: plant topology and meshes
 - `model_simple.yml`, `model_soil.yml`: optical properties by functional group and type
 - `meteo.csv`: one or more simulation time steps
+- `full_featured_example.jl`: the public `read_simulation`/`run_light` workflow
 
 ## Step 1: Load Everything From The Config
 
