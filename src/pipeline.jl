@@ -2978,6 +2978,109 @@ function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=no
     )
 end
 
+function _sky_series_durations(skies::AbstractVector{<:SkyState}, step_duration_seconds)
+    if step_duration_seconds === nothing
+        error(
+            "run_light(sim, skies::AbstractVector{<:SkyState}) requires `step_duration_seconds`; " *
+            "pass one duration for every state or a vector with length $(length(skies)).",
+        )
+    elseif step_duration_seconds isa Real
+        duration = _duration_seconds_strict(
+            step_duration_seconds;
+            field_name="step_duration_seconds",
+        )
+        return fill(duration, length(skies))
+    elseif step_duration_seconds isa AbstractVector
+        length(step_duration_seconds) == length(skies) || throw(
+            ArgumentError(
+                "`step_duration_seconds` has length $(length(step_duration_seconds)), " *
+                "but the SkyState vector has length $(length(skies)).",
+            ),
+        )
+        durations = Vector{Float64}(undef, length(step_duration_seconds))
+        for (i, duration) in enumerate(step_duration_seconds)
+            duration isa Real || throw(
+                ArgumentError(
+                    "`step_duration_seconds[$i]` must be a real number of seconds, " *
+                    "got $(typeof(duration)).",
+                ),
+            )
+            durations[i] = _duration_seconds_strict(
+                duration;
+                field_name="step_duration_seconds[$i]",
+            )
+        end
+        return durations
+    end
+    throw(
+        ArgumentError(
+            "`step_duration_seconds` must be a real number or a vector of real numbers, " *
+            "got $(typeof(step_duration_seconds)).",
+        ),
+    )
+end
+
+"""
+    run_light(sim, skies::AbstractVector{<:SkyState}; step_duration_seconds)
+
+Run a series of already computed sky states. The step duration is required
+because sky states do not contain timing metadata.
+
+`step_duration_seconds` may be either one positive duration shared by every
+state or a vector of positive durations with the same length as `skies`. The
+results are returned as a `Vector{LightStepResult}` in input order, while the
+simulation's prepared scene and radiation cache are reused across the series.
+
+# Examples
+
+```julia
+series = run_light(sim, skies; step_duration_seconds=1800.0)
+series = run_light(sim, skies; step_duration_seconds=[900.0, 1800.0, 900.0])
+```
+"""
+function run_light(
+    sim::LightSimulation,
+    skies::AbstractVector{<:SkyState};
+    step_duration_seconds=nothing,
+)
+    durations = _sky_series_durations(skies, step_duration_seconds)
+    cache = _ensure_light_cache!(sim)
+    use_full_response = _use_full_response_for_sim(sim, cache)
+    out = Vector{LightStepResult}(undef, length(skies))
+    io = stderr
+    started_ns = time_ns()
+    last_report_ns = Ref(started_ns)
+    if !isempty(skies)
+        _report_series_progress!(
+            io,
+            cache,
+            0,
+            length(skies),
+            started_ns,
+            last_report_ns;
+            force=true,
+        )
+    end
+    for (i, (sky, duration)) in enumerate(zip(skies, durations))
+        out[i] = _run_light_sky_cached(
+            cache,
+            sky;
+            step_duration_seconds=duration,
+            use_full_response=use_full_response,
+        )
+        _report_series_progress!(
+            io,
+            cache,
+            i,
+            length(skies),
+            started_ns,
+            last_report_ns;
+            force=(i == length(skies)),
+        )
+    end
+    return out
+end
+
 """
     run_light_step(scene, models, meteo_row, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::LightStepResult
 

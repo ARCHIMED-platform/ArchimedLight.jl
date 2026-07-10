@@ -219,6 +219,17 @@ sim = LightSimulation(scene, models; options=options)
 step = run_light(sim, sky; step_duration_seconds=1800.0)
 ```
 
+A vector of sky states runs as a series. Supply either one duration shared by
+all states or one duration per state:
+
+```julia
+series = run_light(sim, skies; step_duration_seconds=1800.0)
+series = run_light(sim, skies; step_duration_seconds=[900.0, 1800.0, 900.0])
+```
+
+The result order matches `skies`, and the prepared scene and radiation cache
+are reused throughout the series.
+
 The low-level cache functions are still available for advanced work, but their
 cache object layout is internal. This block is schematic and uses placeholders:
 

@@ -187,6 +187,29 @@ end
     step = run_light(sim, sky; step_duration_seconds=1800.0)
     @test step.budget.incident_energy.total.par == old_budget.incident_energy.total.par
     @test_throws ErrorException run_light(sim, sky)
+
+    skies = [
+        sky,
+        SkyState(180.0, 45.0, 120.0, 130.0, 0.0, 1.0),
+    ]
+    shared_duration = run_light(sim, skies; step_duration_seconds=1800.0)
+    @test shared_duration isa Vector{LightStepResult}
+    @test length(shared_duration) == length(skies)
+    @test shared_duration[1].budget.incident_energy.total.par ==
+          step.budget.incident_energy.total.par
+
+    durations = [900.0, 3600.0]
+    variable_duration = run_light(sim, skies; step_duration_seconds=durations)
+    for i in eachindex(skies)
+        individual = run_light(sim, skies[i]; step_duration_seconds=durations[i])
+        @test variable_duration[i].budget.incident_energy.total.par ==
+              individual.budget.incident_energy.total.par
+    end
+
+    @test isempty(run_light(sim, SkyState[]; step_duration_seconds=1800.0))
+    @test_throws ErrorException run_light(sim, skies)
+    @test_throws ArgumentError run_light(sim, skies; step_duration_seconds=[1800.0])
+    @test_throws ErrorException run_light(sim, skies; step_duration_seconds=[1800.0, 0.0])
 end
 
 @testitem "Beginner API meteo validation" tags = [:beginner_api, :fast] begin

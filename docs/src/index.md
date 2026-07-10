@@ -19,10 +19,10 @@ a complete meteo table.
   playsinline
   controls
   preload="metadata"
-  poster="assets/coffee_scene_light_interception.png"
+  poster="assets/archimedlight_day_cycle_1.png"
   aria-label="Simulated light interception and moving ground shade over a representative day"
 >
-  <source src="assets/archimedlight_day_cycle.mp4" type="video/mp4">
+  <source src="assets/archimedlight_day_cycle_1.mp4" type="video/mp4">
   Your browser does not support embedded video.
 </video>
 ```
