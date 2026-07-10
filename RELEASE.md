@@ -89,6 +89,20 @@ julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; 
 
 ## 3. Run The Documentation Gate
 
+Generate the README and documentation videos on a local machine with enough
+memory:
+
+```bash
+julia docs/make_video.jl
+```
+
+This creates `archimedlight_day_cycle_1.mp4`,
+`archimedlight_day_cycle_2.mp4`, and their poster PNGs in
+`docs/src/assets/`. Review the four generated files and commit them with the
+release changes. Video rendering is intentionally a manual release step rather
+than part of the `Docs` workflow because the agrivoltaic scene requires more
+memory than the CI runner provides.
+
 Build the manual:
 
 ```bash
