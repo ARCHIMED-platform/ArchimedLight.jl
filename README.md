@@ -11,7 +11,7 @@ Julia reimplementation of the ARCHIMED light interception pipeline with a compos
 
 | A wheat plant | A wheat AgriPV system |
 |:---:|:---:|
-| [![A wheat plant](docs/src/assets/archimedlight_day_cycle_1.png)](docs/src/assets/archimedlight_day_cycle_1.mp4) | [![A wheat AgriPV system](docs/src/assets/archimedlight_day_cycle.png)](docs/src/assets/archimedlight_day_cycle.mp4) |
+| [![A wheat plant](docs/src/assets/archimedlight_day_cycle_1.png)](docs/src/assets/archimedlight_day_cycle_1.mp4) | [![A wheat AgriPV system](docs/src/assets/archimedlight_day_cycle_2.png)](docs/src/assets/archimedlight_day_cycle_2.mp4) |
 
 <details>
 <summary>Reproducing the figures</summary>
