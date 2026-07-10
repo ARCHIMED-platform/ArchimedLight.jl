@@ -1,7 +1,6 @@
 using Pkg
-Pkg.activate(joinpath(dirname(@__DIR__), "benchmark"))
+Pkg.activate(@__DIR__)
 
-using PlantGeom # For the growth and visualization API
 using GLMakie
 using ArchimedLight
 using PlantMeteo
@@ -9,7 +8,7 @@ using Dates
 using Artifacts: artifact_hash, artifact_path
 using Pkg.Artifacts: ensure_artifact_installed
 
-const REPO_ROOT = dirname(@__DIR__)
+const REPO_ROOT = dirname(dirname(@__DIR__))
 const ARTIFACT_NAME = "archimedlight-benchmark-scenes"
 const ARTIFACTS_TOML = joinpath(REPO_ROOT, "Artifacts.toml")
 const BENCH_STEP_SECONDS = 1800.0
