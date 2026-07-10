@@ -1,15 +1,80 @@
-@testitem "Java light-source fixture uses physical Lambertian accounting" tags = [:emitter, :java_fixture, :slow] begin
-    fixture_root = joinpath(
-        @__DIR__,
-        "..",
-        "java_implementation",
-        "archimed-lib-2018",
-        "tests",
-        "test-lightsource1",
+@testitem "Java light-source fixture uses physical Lambertian accounting" tags = [:emitter, :java_fixture, :slow] setup = [HelperModule] begin
+    using Dates
+
+    # Reconstruct the historical Java `test-lightsource1` input in code. The
+    # full Java source tree is deliberately ignored by this repository, while
+    # the regression only needs its two horizontal-plate topologies, optical
+    # coefficients, and meteorological rows (not Java-generated output).
+    opaque_surface() = ArchimedLight.TypeModel(
+        interception=ArchimedLight.InterceptionModel(
+            model="Translucent",
+            transparency=0.0,
+            optical_properties=ArchimedLight.OpticalProperties(0.15, 0.9),
+        ),
     )
-    config = joinpath(fixture_root, "config2.yml")
-    options, scene, meteo, models = ArchimedLight.read_config(config)
-    row = first(ArchimedLight.prepare_meteo(meteo, options))
+    emitter_surface() = ArchimedLight.TypeModel(
+        interception=ArchimedLight.InterceptionModel(
+            model="Translucent",
+            transparency=0.0,
+            optical_properties=ArchimedLight.OpticalProperties(0.15, 0.9),
+        ),
+        light_emitter=ArchimedLight.EmitterModel(
+            radiance=100.0,
+            gamma=ArchimedLight.OpticalProperties(0.2, 0.5),
+        ),
+    )
+    function surface_groups(include_emitter)
+        groups = ArchimedLight.GroupModel[
+            ArchimedLight.GroupModel(
+                "plate1";
+                types=HelperModule.OrderedDict("pave" => opaque_surface()),
+            ),
+            ArchimedLight.GroupModel(
+                "pavement";
+                types=HelperModule.OrderedDict("Cobblestone" => opaque_surface()),
+            ),
+        ]
+        include_emitter && push!(
+            groups,
+            ArchimedLight.GroupModel(
+                "plate2";
+                types=HelperModule.OrderedDict("pave" => emitter_surface()),
+            ),
+        )
+        return groups
+    end
+    models = ArchimedLight.prepare_models(surface_groups(true))
+    sun_models = ArchimedLight.prepare_models(surface_groups(false))
+
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate1", type="pave", object_id=1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=2.0, group="plate2", type="pave", object_id=2),
+    ])
+    sun_scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=0.0, group="pavement", type="Cobblestone", object_id=-1),
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate1", type="pave", object_id=1),
+    ])
+    options = ArchimedLight.LightOptions(
+        turtle_sectors=16,
+        all_in_turtle=true,
+        radiation_timestep_minutes=15.0,
+        scattering=false,
+        pixel_size=0.003,
+        cache_pixel_table=false,
+        toricity=true,
+        cache_radiation=false,
+    )
+    historical_row(ri_sw_f) = (
+        date=Date(2016, 6, 12),
+        hour_start=Time(11),
+        hour_end=Time(11, 30),
+        step_duration=1800.0,
+        latitude=15.0,
+        altitude=100.0,
+        RI_SW_f=ri_sw_f,
+    )
+    row = historical_row(0.0)
     sky = ArchimedLight.compute_sky(row, options)
     turtle = ArchimedLight.build_turtle(options, sky)
     fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
@@ -46,26 +111,24 @@
     @test isapprox(received_par / (pi * source_area), 20.0; atol=1e-8, rtol=1e-8)
     @test isapprox(received_nir / (pi * source_area), 50.0; atol=1e-8, rtol=1e-8)
 
-    # The fixture README's transfer oracle compares the one-plate solar scene
-    # with the two-plate lamp scene: after removing the source magnitude, the
-    # lower plate and ground must receive the same geometric shares.
-    sun_options, sun_scene, sun_meteo, sun_models =
-        ArchimedLight.read_config(joinpath(fixture_root, "config1.yml"))
-    sun_row = first(ArchimedLight.prepare_meteo(sun_meteo, sun_options))
-    sun_sky = ArchimedLight.compute_sky(sun_row, sun_options)
-    sun_turtle = ArchimedLight.build_turtle(sun_options, sun_sky)
+    # The historical fixture's transfer oracle compares the one-plate solar
+    # scene with the two-plate lamp scene: after removing the source magnitude,
+    # the lower plate and ground must receive the same geometric shares.
+    sun_row = historical_row(100.0)
+    sun_sky = ArchimedLight.compute_sky(sun_row, options)
+    sun_turtle = ArchimedLight.build_turtle(options, sun_sky)
     sun_fluxes = ArchimedLight.compute_directional_fluxes(
         sun_row,
         sun_sky,
         sun_turtle,
-        sun_options,
+        options,
     )
     sun_first = ArchimedLight.compute_first_order(
         sun_scene,
         sun_models,
         sun_turtle,
         sun_fluxes,
-        sun_options,
+        options,
     )
 
     function group_power(first_order, fixture_scene, group, band)
