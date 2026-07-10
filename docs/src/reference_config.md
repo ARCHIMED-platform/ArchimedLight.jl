@@ -29,6 +29,7 @@ toricity: true
 cache_pixel_table: false
 pixel_hit_stack_mode: auto
 cache_radiation: false
+check_meteo_boundaries: true
 allow_overlapping_meteo_steps: false
 scattering_max_iter: 20
 scattering_stop_ratio: 0.01
@@ -72,7 +73,7 @@ read_simulation
   -> integrate_light
 ```
 
-What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `allow_overlapping_meteo_steps` also acts at that preparation stage by deciding whether overlapping meteo intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `radiation_input_semantics` determines how supplied irradiance is converted to a full-step mean, while `scene_rotation` maps the geographic sun into the scene-local directional basis. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
+What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `check_meteo_boundaries` validates the selected forcing values, while `allow_overlapping_meteo_steps` decides whether overlapping intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `radiation_input_semantics` determines how supplied irradiance is converted to a full-step mean, while `scene_rotation` maps the geographic sun into the scene-local directional basis. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
 
 This distinction is important for interpretation. Changing `pixel_size` or `sky_sectors` does not mean you have changed the plant or the atmosphere; it means you have changed the numerical approximation used to represent them. By contrast, changing `scattering`, `nir_interception`, or `nir_scattering` changes which physical processes are included in the simulation.
 
@@ -341,6 +342,24 @@ meteo_range: 2016/07/01 08:00:00, 2016/07/01 12:00:00
 `meteo_range` simply helps select the meteo rows. That makes it useful whenever a full meteo file contains more data than the run you are trying to reproduce, inspect, or debug.
 
 The range is applied during `prepare_meteo`, after the sequence has been validated, and it can be expressed either with row indices or with datetimes. After that, the optional `active` field in the meteo table can still remove rows one by one.
+
+### `check_meteo_boundaries`
+
+Enable physical range checks for the selected meteorological forcing. The
+default is `true`. It rejects negative irradiance, clearness or direct fractions
+outside `[0, 1]`, invalid latitude and sun-angle ranges, and nonpositive
+durations before numerical work begins.
+
+Set this to `false` only for a deliberate research or compatibility input:
+
+```yaml
+check_meteo_boundaries: false
+```
+
+This disables range checks only. ArchimedLight still requires a positive
+duration, a derivable radiation and solar-geometry path, and consistency among
+redundant finite inputs. In Julia, a one-call override is also available as
+`run_light(sim, meteo; check_boundaries=false)`.
 
 ### `allow_overlapping_meteo_steps`
 

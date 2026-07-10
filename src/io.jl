@@ -294,6 +294,10 @@ function read_options(path::AbstractString)
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
         radiation_input_semantics=_as_radiation_input_semantics(get(raw, "radiation_input_semantics", nothing)),
         scene_rotation_deg=_as_float(get(raw, "scene_rotation", 0.0), 0.0),
+        check_meteo_boundaries=_as_bool(
+            _config_get(raw, ("check_meteo_boundaries", "checkMeteoBoundaries", "check_boundaries")),
+            true,
+        ),
         allow_overlapping_meteo_steps=_as_bool(
             _config_get(raw, ("allow_overlapping_meteo_steps", "allowOverlappingMeteoSteps", "allowOverlappingMeteo")),
             false,
@@ -402,7 +406,7 @@ function read_config(path::AbstractString; plot_paving_override=nothing)
 end
 
 """
-    read_simulation(path; plot_paving_override=nothing, kwargs...)
+    read_simulation(path; plot_paving_override=nothing, check_boundaries=nothing, kwargs...)
 
 Read a complete file-based light simulation and return `(sim, meteo)`, where
 `sim` is a [`LightSimulation`](@ref).
@@ -415,6 +419,9 @@ Keywords:
 
 - `plot_paving_override`: optional replacement paving count used when
   materializing model-declared ground geometry.
+- `check_boundaries`: optional boundary-validation policy applied while reading
+  meteo and stored in the returned simulation. Derivability and conflict checks
+  are always performed.
 - `kwargs...`: keyword arguments forwarded to [`LightSimulation`](@ref), such as
   `interception_backend`, `scattering_mode`, `scattering_backend`, and
   `memory_limit_bytes`.
@@ -446,10 +453,21 @@ julia> println(step)
 LightStepResult(PAR=291.777 kJ, NIR=316.092 kJ, sky=463.139 W m^-2 PAR / 501.734 W m^-2 NIR, sectors=1 [sky=1, sun=0], scattering=off)
 ```
 """
-function read_simulation(path::AbstractString; plot_paving_override=nothing, kwargs...)
+function read_simulation(
+    path::AbstractString;
+    plot_paving_override=nothing,
+    check_boundaries=nothing,
+    kwargs...,
+)
     options, scene, meteo, models = read_config(path; plot_paving_override=plot_paving_override)
-    meteo_eff = prepare_meteo(meteo, options)
-    sim_options = options.meteo_range === nothing ? options : LightOptions(options; meteo_range=nothing)
+    check_boundaries_eff =
+        check_boundaries === nothing ? options.check_meteo_boundaries : Bool(check_boundaries)
+    meteo_eff = prepare_meteo(meteo, options; check_boundaries=check_boundaries_eff)
+    sim_options = LightOptions(
+        options;
+        meteo_range=nothing,
+        check_meteo_boundaries=check_boundaries_eff,
+    )
     return LightSimulation(scene, models; options=sim_options, kwargs...), meteo_eff
 end
 
@@ -590,6 +608,27 @@ function _with_meteo_metadata(table::PlantMeteo.TimeStepTable, metadata)
     PlantMeteo.TimeStepTable(getfield(table, :names), meta, getfield(table, :ts))
 end
 
+function _with_inferred_datetime_durations(data)
+    columns = Tables.columntable(data)
+    names = Tables.columnnames(columns)
+    any(name -> name in names, (:duration, :step_duration, :hour_end)) &&
+        return data
+    time_name = :DateTime in names ? :DateTime : :date in names ? :date : nothing
+    time_name === nothing && return data
+    timestamps = getproperty(columns, time_name)
+    length(timestamps) >= 2 || return data
+    all(value -> value isa Dates.DateTime, timestamps) || return data
+    duration_periods = PlantMeteo.timesteps_durations(
+        Dates.DateTime[timestamps...];
+        verbose=false,
+    )
+    durations = Float64[Dates.toms(period) * 1.0e-3 for period in duration_periods]
+    with_duration = merge(columns, (duration=durations,))
+    return data isa PlantMeteo.TimeStepTable ?
+           PlantMeteo.TimeStepTable(with_duration, getfield(data, :metadata)) :
+           with_duration
+end
+
 function _as_plantmeteo_table(data; metadata=_table_metadata_namedtuple(data))
     data isa PlantMeteo.TimeStepTable && return data
     transformed = Tables.columntable(data)
@@ -599,10 +638,13 @@ function _as_plantmeteo_table(data; metadata=_table_metadata_namedtuple(data))
         column_names = Tables.columnnames(transformed)
     end
     transformed = _normalize_raw_meteo_dates(transformed)
-    column_names = Tables.columnnames(transformed)
-    if !(:duration in column_names)
-        duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
-        transformed = PlantMeteo.set_column(transformed, :duration, duration)
+    column_names = Tuple(Symbol.(Tables.columnnames(transformed)))
+    if isempty(column_names) || isempty(getproperty(transformed, first(column_names)))
+        return PlantMeteo.TimeStepTable(
+            column_names,
+            _meta_to_namedtuple(metadata),
+            NamedTuple[],
+        )
     end
     PlantMeteo.TimeStepTable(transformed, _meta_to_namedtuple(metadata))
 end

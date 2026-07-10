@@ -7,6 +7,52 @@ Use a clean branch and keep a short release log with the version, date, commit
 SHA, Julia version, platform, fixture artifact SHA256, and the result of each
 gate below.
 
+## v0.1.3 Registry Baseline
+
+`0.1.3` is the compatibility baseline for ArchimedLight's first release in
+Julia's General registry. Earlier GitHub `0.1.x` tags were development
+snapshots and are outside this stability promise.
+
+The v0.1.3 reference refresh covers the corrected sunset hour angle and its
+downstream radiation fields, plus two already-reviewed light-transfer
+corrections included in the release commit: transparency in the fast upper-hit
+path and authoritative explicit sun/partition inputs in directional substeps.
+The reviewed release-fixture manifest is:
+
+| Fixture | Affected step(s) | Accepted reason |
+| --- | --- | --- |
+| `test-cached-radiation` | 0, 12:00-12:30 | the fast upper-hit path now applies the model's `transparency: 0.1`; paired cache paths must still agree |
+| `test-cached-radiation3` | 1, 05:30-06:00; sunlit steps 1-4 | corrected dawn overlap plus the fast upper-hit transparency correction; paired cache paths must still agree |
+| `test-cached-radiation4` | 1, 05:30-06:00 | corrected dawn overlap |
+| `test-compare-cafeier1` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier1-lowsun` | 1, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier1-lowsun1800` | 0, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier2` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier3` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier4` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-compare-cafeier5` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-links-pixeltable2` | 20, 18:00-18:30 | corrected sunset overlap |
+| `test-timestep2-manysteps` | 3, 05:30-05:35 | corrected interval is before dawn and therefore has zero radiation |
+| `test-timestep2-onestep` | 0, 05:15-05:45 | corrected dawn overlap |
+| `test-timestep3-manysteps` | 2, 18:25-18:30 | corrected interval is after sunset and therefore has zero radiation |
+| `test-timestep3-onestep` | 0, 05:15-05:45 | corrected dawn overlap |
+| `test-hitcount` | 0, 11:50-11:51 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-hitcount2` | 0, 12:00-12:30 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-links` | 0, 08:00-08:30 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-links2` | 0, 08:00-08:30 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-links3` | 0, 08:00-08:30 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-links4` | 0, 08:00-08:30 | the fast upper-hit path now applies the model's `transparency: 0.1` |
+| `test-toricity-two-simpleplants-border` | 0, 09:00-09:30 | explicit sun coordinates and direct fraction are now retained by directional substeps |
+| `test-weighted-sun` | 2 and 28 | corrected dawn/sunset overlap and duration-weighted representative sun |
+
+For the solar and explicit-partition fixtures, only solar-position, radiation,
+derived flux/energy, and radiative image coloring may change. Meteo inputs,
+geometry, topology, camera, silhouettes, component area, barycentres, and sky
+fractions must remain stable. For the eight transparency fixtures, incident
+flux/energy, `sky_fraction`, and radiative coloring may change by the model's
+10% transparent share; sky forcing, meteo inputs, geometry, topology, camera,
+silhouettes, component area, and barycentres must remain stable.
+
 ## 1. Choose The Version
 
 1. Pick the SemVer version to register, for example `0.1.3`.
@@ -124,9 +170,9 @@ timestamp. Record these in the release log. The URL does not need to exist yet,
 but the tarball uploaded later must match the SHA256 recorded in
 `Artifacts.toml`.
 
-After TagBot creates the GitHub release, upload the exact tarball asset named in
-the `Artifacts.toml` URL. Do not rebuild or refresh references at that point
-unless you are deliberately preparing a new release commit.
+Upload the exact verified tarball asset named in the `Artifacts.toml` URL to the
+GitHub release before General registration. Do not rebuild or refresh references
+at that point: the uploaded bytes must be the same bytes tested locally.
 
 ## 5. Run The Regression Matrix
 
@@ -205,18 +251,21 @@ Repository automation relevant to release:
 
 ## 8. Register The Release
 
-1. Commit the final release changes.
-2. Push the release commit to `main`.
-3. Wait for `Test` and `Docs` to pass on `main`.
-4. Dispatch the `Register Package` workflow with the chosen version, for
-   example `0.1.3`.
-5. Wait for the Julia General registry PR to pass and merge.
-6. Confirm TagBot creates tag `v0.1.3` and the GitHub release.
-7. Upload the release fixture tarball to that GitHub release if the artifact URL
-   points to a release asset.
-8. Verify the artifact can be installed from `Artifacts.toml`.
-9. Confirm `Test` and `Docs` pass on the tag.
-10. Confirm the stable docs URL resolves:
+1. Commit the final release changes and record the exact commit SHA.
+2. Push the release commit to `main` and wait for `Test` and `Docs` to pass.
+3. Tag that exact verified commit as `v0.1.3`, push the tag, and create the
+   GitHub release.
+4. Upload the already-tested release fixture tarball to that release without
+   rebuilding it.
+5. From an empty Julia depot, install the tagged package, download the artifact
+   through `Artifacts.toml`, and run the smoke test.
+6. Dispatch the `Register Package` workflow with version `0.1.3` only after the
+   tagged install and artifact download succeed.
+7. Wait for the Julia General registry PR to pass and merge. If TagBot runs,
+   confirm it recognizes the existing exact tag/release rather than replacing
+   them.
+8. Confirm `Test` and `Docs` pass on the tag.
+9. Confirm the stable docs URL resolves:
     `https://VEZY.github.io/ArchimedLight.jl/stable`.
 
 ## 9. Post-Release Checks

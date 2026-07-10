@@ -411,23 +411,37 @@ function build_turtle(options::LightOptions, sky::SkyState)
     TurtleGrid(sectors)
 end
 
-function _directional_flux_substeps(meteo_row, sky::SkyState, options::LightOptions)
-    latitude_deg = _row_value(meteo_row, [:latitude, :lat], 0.0)
-    latitude_rad = deg2rad(latitude_deg)
-    date = _row_date(meteo_row)
+function _directional_flux_substeps(
+    meteo_row,
+    sky::SkyState,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
+)
+    resolved =
+        resolved_step === nothing ?
+        _resolved_meteo_step_or_error(
+            meteo_row,
+            options;
+            check_boundaries=check_boundaries,
+        ) : resolved_step
+
+    if resolved.latitude_deg === nothing || !_meteo_has_resolved_solar_interval(resolved)
+        return NamedTuple[], 0.0, resolved.duration_seconds / 3600.0
+    end
+
+    latitude_rad = deg2rad(resolved.latitude_deg)
+    date = resolved.date
     doy = Dates.dayofyear(date)
-    start_h, end_h = _row_step_hours(meteo_row)
+    start_h = resolved.start_hour
+    end_h = resolved.end_hour
 
-    ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global], NaN)
-    ri_par_raw = _row_value(meteo_row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par], NaN)
-    ri_nir_raw = _row_value(meteo_row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir], NaN)
-    global_from_input = !isnan(ri_sw_raw) || !isnan(ri_par_raw) || !isnan(ri_nir_raw)
+    global_from_input = resolved.radiation_source != :clearness
 
-    clearness_raw = _row_value(meteo_row, [:clearness, :Kt], NaN)
-    clearness_provided = !isnan(clearness_raw)
+    clearness_provided = resolved.clearness !== nothing
     clearness =
         if clearness_provided
-            clearness_raw
+            resolved.clearness
         else
             _clearness_from_global_wm2(sky.ri_sw_f, latitude_rad, doy, start_h, end_h)
         end
@@ -458,13 +472,34 @@ end
 Java-parity directional flux integration using meteo substeps:
 directional fluxes are computed at each substep sun position then averaged over the full meteo step.
 """
-function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid, options::LightOptions)
-    substeps, start_h, end_h = _directional_flux_substeps(meteo_row, sky, options)
+function compute_directional_fluxes(
+    meteo_row,
+    sky::SkyState,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
+)
+    resolved =
+        resolved_step === nothing ?
+        _resolved_meteo_step_or_error(
+            meteo_row,
+            options;
+            check_boundaries=check_boundaries,
+        ) : resolved_step
+    substeps, start_h, end_h = _directional_flux_substeps(
+        meteo_row,
+        sky,
+        options;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
     step_duration_h = end_h - start_h
     (isempty(substeps) || step_duration_h <= 0.0) && return compute_directional_fluxes(sky, turtle, options)
 
-    explicit_direct_fraction = _provided_direct_fraction(meteo_row)
-    provided_sun = _provided_sun_position_deg(meteo_row)
+    explicit_direct_fraction =
+        resolved.direct_fraction === nothing ? NaN : resolved.direct_fraction
+    provided_sun = resolved.solar_geometry_source == :explicit
 
     n = length(turtle.sectors)
     par_acc = zeros(Float64, n)
@@ -479,8 +514,8 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
             isnan(explicit_direct_fraction) ?
             clamp(ss.direct_w / total_w, 0.0, 1.0) :
             clamp(explicit_direct_fraction, 0.0, 1.0)
-        sun_azimuth = provided_sun === nothing ? ss.sun_azimuth_deg : sky.sun_azimuth_deg
-        sun_elevation = provided_sun === nothing ? ss.sun_elevation_deg : sky.sun_elevation_deg
+        sun_azimuth = provided_sun ? sky.sun_azimuth_deg : ss.sun_azimuth_deg
+        sun_elevation = provided_sun ? sky.sun_elevation_deg : ss.sun_elevation_deg
         sky_sub = SkyState(
             sun_azimuth,
             sun_elevation,

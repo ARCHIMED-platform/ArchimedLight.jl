@@ -48,6 +48,8 @@ ARCHIMED does not assume that a meteo time step is radiatively uniform. The user
 
 In Java, `TurtleFluxes.createRadiativeFluxes` constructs these substeps. The active implementation uses evenly sized substeps whose duration is bounded by `radiationTimestep`. Within each substep, the sun position is taken at the middle of the substep. Only the daylight portion is considered: sunrise and sunset are used to clip the effective sunlit part of the meteorological interval. Each substep therefore has its own solar geometry and its own decomposition of global radiation into direct and diffuse parts.
 
+The sunset hour angle uses the standard denominator `cos(latitude) * cos(declination)`, intentionally correcting an operator-precedence error in the legacy Java implementation. Polar day and polar night are represented explicitly so that daylight clipping covers either the complete civil day or none of it.
+
 The Julia function `compute_sky` reproduces this logic in the style of the port. It parses the meteo row, computes a Java-compatible solar position, checks time consistency, and derives the extraterrestrial radiation and sky state needed for later partitioning. The Julia code also supports rows defined either through explicit durations or through start and end times, because the meteo files encountered in practice use both conventions.
 
 ## From global meteo radiation to directional sky fluxes

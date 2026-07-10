@@ -5,11 +5,15 @@ For normal use, create a `LightSimulation` and call `run_light`.
 
 ## API Stability
 
-For the `0.1.x` series, the stable public API is the set of names exported by
-`ArchimedLight`. This includes the high-level simulation workflow, input
-readers, model helpers, validation helpers, user-facing result containers,
-attachment/output helpers, visualization helpers, and concrete backend
-selectors.
+Version `0.1.3` is the compatibility baseline for ArchimedLight's first release
+in Julia's General registry. Earlier `0.1.x` tags were development snapshots
+and are not covered by this stability promise. Starting with `0.1.3`, the
+supported public API is the set of names exported by `ArchimedLight`. This
+includes the high-level simulation workflow, input readers, model helpers,
+validation helpers, user-facing result containers, attachment/output helpers,
+visualization helpers, and concrete backend selectors. Patch releases after
+`0.1.3` are expected to preserve those names; incompatible changes will use a
+new minor version and include migration notes.
 
 Some lower-level stage functions are available as qualified calls such as
 `ArchimedLight.compute_sky(...)`. These are intended for debugging, research,
@@ -152,7 +156,9 @@ summarize_meteo(meteo; options=LightOptions())
 ```
 
 Each function returns a `ValidationReport` with `errors`, `warnings`, and
-`infos`.
+`infos`. Meteo-aware checks and execution methods accept
+`check_boundaries=false` as a one-call override; derivability, duration, and
+finite-input consistency checks remain enabled.
 
 The `summarize_*` helpers return structured summaries and print compact
 diagnostics for humans. Use them when you are not sure what ArchimedLight sees.

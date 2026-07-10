@@ -224,6 +224,69 @@ end
     @test isapprox(sum(flux.nir), sky.ri_nir_f; atol=1e-10, rtol=1e-10)
 end
 
+@testitem "Automatic representative sun uses the resolved partition" tags=[:core, :fast, :radiation_semantics] begin
+    using Dates
+
+    row = (
+        date=Date(2016, 6, 12),
+        hour_start="05:30:00",
+        hour_end="07:30:00",
+        step_duration=7200.0,
+        latitude=15.0,
+        clearness=0.75,
+        direct_fraction=0.2,
+    )
+    options = ArchimedLight.LightOptions(
+        turtle_sectors=6,
+        all_in_turtle=false,
+        scattering=false,
+        radiation_timestep_minutes=15.0,
+    )
+
+    resolved = ArchimedLight._resolved_meteo_step_or_error(row, options)
+    sky = ArchimedLight.compute_sky(row, options; resolved_step=resolved)
+    substeps = ArchimedLight._radiation_substeps(
+        resolved.date,
+        resolved.start_hour,
+        resolved.end_hour,
+        deg2rad(resolved.latitude_deg),
+        ArchimedLight._cfg_radiation_timestep_hours(options),
+        resolved.ri_sw_f,
+        resolved.clearness,
+        false,
+        true,
+    )
+
+    direct_energies = [
+        substep.global_w * resolved.direct_fraction * substep.duration for
+        substep in substeps
+    ]
+    directions = [
+        ArchimedLight._sun_direction_from_az_el_deg(
+            substep.sun_azimuth_deg,
+            substep.sun_elevation_deg,
+        ) for substep in substeps
+    ]
+    sx = sum(direction[1] * energy for (direction, energy) in zip(directions, direct_energies))
+    sy = sum(direction[2] * energy for (direction, energy) in zip(directions, direct_energies))
+    sz = sum(direction[3] * energy for (direction, energy) in zip(directions, direct_energies))
+    expected_azimuth, expected_elevation =
+        ArchimedLight._az_el_from_direction_deg(sx, sy, sz)
+
+    @test sky.direct_fraction == 0.2
+    @test isapprox(sky.sun_azimuth_deg, expected_azimuth; atol=1.0e-12, rtol=0.0)
+    @test isapprox(sky.sun_elevation_deg, expected_elevation; atol=1.0e-12, rtol=0.0)
+
+    turtle = ArchimedLight.build_turtle(options, sky)
+    sun_sector = only(filter(sector -> sector.source == :sun, turtle.sectors))
+    @test isapprox(
+        sun_sector.direction,
+        ArchimedLight._scene_local_sun_direction(sky, options);
+        atol=1.0e-12,
+        rtol=0.0,
+    )
+end
+
 @testitem "Sunlit semantics honor explicit sun without interval metadata" tags=[:core, :fast, :radiation_semantics] begin
     options = ArchimedLight.LightOptions(
         radiation_input_semantics=:sunlit_intensity,
@@ -232,6 +295,7 @@ end
     night_row = (
         RI_PAR_f=100.0,
         RI_NIR_f=50.0,
+        step_duration=3600.0,
         sun_azimut=180.0,
         sun_elevation=-12.0,
         direct_fraction=1.0,
@@ -260,7 +324,11 @@ end
     @test copied.scene_rotation_deg == 37.5
 
     legacy_names = filter(
-        name -> name ∉ (:radiation_input_semantics, :scene_rotation_deg),
+        name -> name ∉ (
+            :radiation_input_semantics,
+            :scene_rotation_deg,
+            :check_meteo_boundaries,
+        ),
         fieldnames(ArchimedLight.LightOptions),
     )
     legacy = ArchimedLight.LightOptions(
@@ -268,6 +336,7 @@ end
     )
     @test legacy.radiation_input_semantics == :interval_mean
     @test legacy.scene_rotation_deg == 0.0
+    @test legacy.check_meteo_boundaries
 
     mktempdir() do dir
         path = joinpath(dir, "config.yml")

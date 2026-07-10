@@ -470,13 +470,14 @@ function _compute_release_case(case::RegressionCase)
     if fx.id in _release_cache_pair_fixture_ids()
         pair_fx = _release_cached_pair_fixture(fx)
         pair_data = _release_call(:fixture_runtime_data, pair_fx)
+        fig = _release_call(:render_fixture_montage, fx; data=data)
         return (
             kind=:release_pair_outputs,
             fx=fx,
             data=data,
             pair_fx=pair_fx,
             pair_data=pair_data,
-            figure=nothing,
+            figure=fig,
             strict_result=(ok=true, detail=""),
             meta=OrderedDict{String,Any}("fixture" => fx.id, "pair_fixture" => pair_fx.id),
         )
@@ -536,7 +537,11 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
         out2 = joinpath(observed_dir, "config2")
         files1 = _release_call(:write_fixture_observed_outputs!, data.fx, out1; data=data.data)
         files2 = _release_call(:write_fixture_observed_outputs!, data.pair_fx, out2; data=data.pair_data)
-        return (files=files1, pair_files=files2, image_path=nothing)
+        image_path = _save_figure_png(
+            joinpath(observed_dir, "$(data.fx.id)_montage.png"),
+            data.figure,
+        )
+        return (files=files1, pair_files=files2, image_path=image_path)
     else
         error("Unsupported observed data kind $(repr(data.kind))")
     end
@@ -578,11 +583,12 @@ function _baseline_image_path(case::RegressionCase, observed)
 end
 
 function _compare_case_against_baseline(case::RegressionCase, data, observed, observed_dir::AbstractString)
+    pair_cmp = nothing
     if data.kind == :release_pair_outputs
         name = "component_values.csv"
         obs_path = get(observed.files, name, "")
         pair_path = get(observed.pair_files, name, "")
-        cmp =
+        pair_cmp =
             if isempty(obs_path) || !isfile(obs_path)
                 (ok=false, missing=0, extra=0, mismatch=0, detail="observed file missing: $(name)", max_abs_error=Inf, max_rel_error=Inf)
             elseif isempty(pair_path) || !isfile(pair_path)
@@ -590,19 +596,6 @@ function _compare_case_against_baseline(case::RegressionCase, data, observed, ob
             else
                 compare_stable_csv_paths(obs_path, pair_path; label="$(case.id):$(name)")
             end
-        ok = cmp.ok || !case.strict
-        status = case.strict ? (ok ? "strict_pass" : "strict_fail") : (ok ? "report_ok" : "report_drift")
-        return (
-            ok=ok,
-            status=status,
-            detail=cmp.ok ? "cached radiation pair matched" : "$(name): $(cmp.detail)",
-            total_missing=cmp.missing,
-            total_extra=cmp.extra,
-            total_mismatch=cmp.mismatch,
-            max_abs_error=cmp.max_abs_error,
-            max_rel_error=cmp.max_rel_error,
-            psnr=missing,
-        )
     end
 
     baseline_dir = _case_baseline_dir(case)
@@ -660,6 +653,16 @@ function _compare_case_against_baseline(case::RegressionCase, data, observed, ob
             ok = false
             push!(details, "missing baseline image")
         end
+    end
+
+    if pair_cmp !== nothing
+        ok &= pair_cmp.ok || !case.strict
+        total_missing += pair_cmp.missing
+        total_extra += pair_cmp.extra
+        total_mismatch += pair_cmp.mismatch
+        max_abs_error = max(max_abs_error, pair_cmp.max_abs_error)
+        max_rel_error = max(max_rel_error, pair_cmp.max_rel_error)
+        pair_cmp.ok || push!(details, "cached radiation pair: $(pair_cmp.detail)")
     end
 
     status =
