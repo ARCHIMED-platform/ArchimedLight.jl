@@ -288,6 +288,10 @@ function read_options(path::AbstractString)
         scattering_coeff_nir=_as_float(get(raw, "scattering_coeff_nir", 0.30), 0.30),
         cache_radiation=_as_bool(get(raw, "cache_radiation", false), false),
         include_sky_fraction=_config_output_variable_enabled(raw, "sky_fraction"),
+        store_node_metadata=_as_bool(get(raw, "store_node_metadata", true), true),
+        node_metadata_attributes=_normalize_node_metadata_attributes(
+            get(raw, "node_metadata_attributes", ()),
+        ),
         cache_pixel_table=_as_bool(get(raw, "cache_pixel_table", false), false),
         pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),

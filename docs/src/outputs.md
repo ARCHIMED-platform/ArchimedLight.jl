@@ -77,7 +77,120 @@ the per-node visible-sky fraction when `options.include_sky_fraction=true`.
 When using a YAML config, `read_options` enables that option when
 `component_variables.sky_fraction` or `opf_variables.sky_fraction` is `true`.
 
-## 2. Attached Outputs: ARCHIMED Attribute Names
+## 2. Query Values By Scene Metadata
+
+`light_metric_values` combines a light result with its scene metadata and
+returns a Tables.jl-compatible column table:
+
+```@example outputs
+coffee_leaves = light_metric_values(
+    sim,
+    step,
+    :absorbed_par_energy;
+    species="coffee",
+    object_id=1,
+    symbol=:Leaf,
+)
+
+propertynames(coffee_leaves)
+```
+
+The table includes the timestep, runtime and source node identifiers, object
+and output grouping identifiers, group/type, MTG symbol and scale, and the
+selected `value`. A series produces the same columns in long form:
+
+```@example outputs
+coffee_series = light_metric_values(
+    sim,
+    [step],
+    :Ra_PAR_q;
+    species="coffee",
+)
+
+unique(coffee_series.step_number)
+```
+
+All filters combine. `group` and `species` are aliases, `object_id` identifies
+one placed scene object, `source_topology_id` identifies its source component,
+and `node_ids` accepts one runtime node id or a collection. `symbol`, `scale`,
+`type`, exact `attributes`, and a custom `where` node predicate provide
+progressively more specific selection.
+
+Selections can be reused:
+
+```@example outputs
+leaf_ids = light_node_ids(sim; species="coffee", symbol=:Leaf)
+leaf_par = light_metric_values(sim, step, :Ra_PAR_q; node_ids=leaf_ids)
+leaf_nir = light_metric_values(sim, step, :Ra_NIR_q; node_ids=leaf_ids)
+length(leaf_par.value) == length(leaf_nir.value)
+```
+
+Use `reduce=sum` for a total. For example, these compute the whole-scene
+absorbed PAR and the plant-only total after excluding paving:
+
+```@example outputs
+scene_absorbed_par = light_metric_values(
+    sim,
+    step,
+    :absorbed_par_energy;
+    reduce=sum,
+)
+
+plant_ids = setdiff(
+    light_node_ids(sim),
+    light_node_ids(sim; group="pavement"),
+)
+plant_absorbed_par = light_metric_values(
+    sim,
+    step,
+    :absorbed_par_energy;
+    node_ids=plant_ids,
+    reduce=sum,
+)
+
+scene_absorbed_par >= plant_absorbed_par
+```
+
+Adding `by`, such as `by=:object_id` or `by=(:group, :type)`, returns a grouped
+table. For a series, `step_number` is retained automatically. `sink=DataFrame`
+can materialize detailed or grouped results when DataFrames.jl is loaded.
+
+Summing per-component energy (`*_energy` or historical `*_q`) gives an energy
+total. Flux values are normalized independently by each component's area, so
+their direct sum generally is not a meaningful scene-scale flux.
+
+### Dynamic scenes
+
+Each result retains a lightweight node metadata snapshot by default. All steps
+computed without changing the scene share the same snapshot. After
+`update_scene!`, the next result receives a new snapshot, allowing one series
+to contain several runtime node-id layouts safely:
+
+```julia
+steps = LightStepResult[]
+for (new_scene, row) in zip(scenes, meteo)
+    update_scene!(sim, new_scene)
+    push!(steps, run_light(sim, row))
+end
+
+second_coffee_leaf = light_metric_values(
+    sim,
+    steps,
+    :absorbed_par_energy;
+    species="coffee",
+    object_id=2,
+    source_topology_id=42,
+)
+```
+
+The stable component identity is normally `(object_id, source_topology_id)`;
+runtime `node_id` remains local to one scene version. To retain additional
+scalar identifiers, construct options with
+`node_metadata_attributes=(:organ_id, ...)` and filter with
+`attributes=(organ_id=...,)`. Set `store_node_metadata=false` when results are
+queried immediately and minimum retained memory is more important.
+
+## 3. Attached Outputs: ARCHIMED Attribute Names
 
 The convenience layer for visual inspection is `attach_light_step!`:
 
@@ -134,7 +247,7 @@ attach_light_step!(
 );
 ```
 
-## 3. Disk Outputs: Exported Scenes
+## 4. Disk Outputs: Exported Scenes
 
 Once results are attached, you can export the enriched scene:
 

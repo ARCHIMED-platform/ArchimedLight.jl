@@ -46,19 +46,7 @@ function _component_sky_fraction_per_node(
 end
 
 function _component_display_type(scene::PlantGeom.SceneGeometry, models::LightModels, nid::Int)
-    group = _scene_group(scene, nid, "")
-    t = strip(_scene_type(scene, nid, ""))
-    if isempty(t) || lowercase(t) == "mesh"
-        if haskey(models, group)
-            group_model = models[group]
-            if length(group_model.types) == 1
-                return first(keys(group_model.types))
-            end
-        elseif group == "pavement"
-            return "Cobblestone"
-        end
-    end
-    return t
+    _scene_display_type(scene, models, nid)
 end
 
 function _component_rows_for_step(

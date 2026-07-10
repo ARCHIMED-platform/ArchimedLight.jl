@@ -29,6 +29,8 @@ toricity: true
 cache_pixel_table: false
 pixel_hit_stack_mode: auto
 cache_radiation: false
+store_node_metadata: true
+node_metadata_attributes: []
 check_meteo_boundaries: true
 allow_overlapping_meteo_steps: false
 scattering_max_iter: 20
@@ -73,7 +75,7 @@ read_simulation
   -> integrate_light
 ```
 
-What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `check_meteo_boundaries` validates the selected forcing values, while `allow_overlapping_meteo_steps` decides whether overlapping intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `radiation_input_semantics` determines how supplied irradiance is converted to a full-step mean, while `scene_rotation` maps the geographic sun into the scene-local directional basis. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
+What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `check_meteo_boundaries` validates the selected forcing values, while `allow_overlapping_meteo_steps` decides whether overlapping intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `radiation_input_semantics` determines how supplied irradiance is converted to a full-step mean, while `scene_rotation` maps the geographic sun into the scene-local directional basis. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps. `store_node_metadata` controls the lightweight per-scene metadata snapshot referenced by results, while `node_metadata_attributes` opts additional scalar MTG identifiers into that snapshot. Requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
 
 This distinction is important for interpretation. Changing `pixel_size` or `sky_sectors` does not mean you have changed the plant or the atmosphere; it means you have changed the numerical approximation used to represent them. By contrast, changing `scattering`, `nir_interception`, or `nir_scattering` changes which physical processes are included in the simulation.
 

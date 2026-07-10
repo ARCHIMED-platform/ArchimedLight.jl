@@ -2998,22 +2998,26 @@ function _prepare_interception_data(
     )
 end
 
-function _interception_output_keys(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
-    geometry = _scene_geometry_for_interception(scene, models, options)
+function _interception_output_keys_for_node_ids(scene::PlantGeom.SceneGeometry, node_ids)
     keys_by_node = Dict{Int,Tuple{Int,Int}}()
 
-    pavement_ids = sort(Int[nid for nid in geometry.node_ids if get(geometry.node_group, nid, "") == "pavement"])
+    pavement_ids = sort(Int[nid for nid in node_ids if _scene_group(scene, nid, "") == "pavement"])
     for (i, nid) in enumerate(pavement_ids)
         keys_by_node[nid] = (-1, i + 1)
     end
 
-    for nid in geometry.node_ids
+    for nid in node_ids
         haskey(keys_by_node, nid) && continue
         object_id = _scene_object_id(scene, nid, 1)
         source_topology_id = _scene_source_topology_id(scene, nid, nid + 1)
         keys_by_node[nid] = (object_id, source_topology_id)
     end
     keys_by_node
+end
+
+function _interception_output_keys(scene::PlantGeom.SceneGeometry, models::LightModels, options::LightOptions)
+    geometry = _scene_geometry_for_interception(scene, models, options)
+    _interception_output_keys_for_node_ids(scene, geometry.node_ids)
 end
 
 """

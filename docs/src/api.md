@@ -184,7 +184,10 @@ cache_summary(sim)
 
 `update_scene!` immediately releases old scene-dependent prepared data and
 cache entries. The cache object itself is an implementation detail; use
-`cache_summary(sim)` when you need to inspect cache behavior.
+`cache_summary(sim)` when you need to inspect cache behavior. Its
+`node_metadata_count` and `node_metadata_bytes` fields report the size of the
+current lightweight metadata snapshot independently of the radiation-response
+cache budget.
 
 ## Advanced Light Pipeline
 
@@ -273,6 +276,70 @@ attribute has the same vector shape as the light fields.
 
 Use `names=Dict(selector => attr)` to override default attribute names, for
 example `Dict(:absorbed_nir_flux => :Ra_SW_f)`.
+
+## Scene-Aware Light Queries
+
+Use these functions to select geometric nodes and query a step or complete
+series without first attaching values to the MTG:
+
+```julia
+light_node_ids(
+    scene_or_sim;
+    node_ids=nothing,
+    source_topology_id=nothing,
+    group=nothing,
+    species=nothing,
+    object_id=nothing,
+    symbol=nothing,
+    scale=nothing,
+    type=nothing,
+    attributes=NamedTuple(),
+    inherit_attributes=false,
+    where=nothing,
+)
+
+light_metric_values(
+    scene_or_sim,
+    step_or_series,
+    selector;
+    # the same node filters
+    reduce=nothing,
+    by=nothing,
+    sink=nothing,
+)
+```
+
+The default result is a Tables.jl-compatible long-form column table. A reducer
+without `by` returns one scalar for a step or one value per timestep for a
+series. A reducer with `by` returns a grouped table. Native selectors and
+ARCHIMED names are interchangeable, for example `:absorbed_par_energy` and
+`:Ra_PAR_q`.
+
+`group`/`species` and `object_id` inherit metadata from scene object roots.
+Arbitrary `attributes` are node-local unless `inherit_attributes=true`.
+Explicit `node_ids` are runtime identifiers in one prepared scene.
+`source_topology_id` identifies the source topology component; combine it with
+`object_id` when the same source plant is instantiated more than once.
+
+Results retain a lightweight metadata snapshot by default. Consequently,
+`light_metric_values(sim, dynamic_series, ...)` applies semantic filters to
+each step's own scene version after `update_scene!`, even when runtime node ids
+changed. `light_node_ids(step; ...)` queries one retained snapshot directly.
+
+Configure retention with:
+
+```julia
+LightOptions(
+    store_node_metadata=true,
+    node_metadata_attributes=(:organ_id, :cohort),
+)
+```
+
+Extra attributes must be lightweight scalar values. Set
+`store_node_metadata=false` to minimize retained results; those results must be
+queried with their original live scene. A custom `where` predicate also needs a
+live MTG, so dynamic-series queries should capture its scalar inputs through
+`node_metadata_attributes` and use `attributes=(...)` instead.
 
 ## Visualization Helpers
 

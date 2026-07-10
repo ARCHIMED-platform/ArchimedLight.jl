@@ -328,6 +328,8 @@ end
             :radiation_input_semantics,
             :scene_rotation_deg,
             :check_meteo_boundaries,
+            :store_node_metadata,
+            :node_metadata_attributes,
         ),
         fieldnames(ArchimedLight.LightOptions),
     )
@@ -337,13 +339,23 @@ end
     @test legacy.radiation_input_semantics == :interval_mean
     @test legacy.scene_rotation_deg == 0.0
     @test legacy.check_meteo_boundaries
+    @test legacy.store_node_metadata
+    @test isempty(legacy.node_metadata_attributes)
 
     mktempdir() do dir
         path = joinpath(dir, "config.yml")
-        write(path, "radiation_input_semantics: sunlit_intensity\nscene_rotation: 37.5\n")
+        write(
+            path,
+            "radiation_input_semantics: sunlit_intensity\n" *
+            "scene_rotation: 37.5\n" *
+            "store_node_metadata: false\n" *
+            "node_metadata_attributes: [organ_id, cohort]\n",
+        )
         parsed = ArchimedLight.read_options(path)
         @test parsed.radiation_input_semantics == :sunlit_intensity
         @test parsed.scene_rotation_deg == 37.5
+        @test !parsed.store_node_metadata
+        @test parsed.node_metadata_attributes == (:organ_id, :cohort)
     end
 end
 

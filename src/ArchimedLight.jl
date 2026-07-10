@@ -24,8 +24,10 @@ include("pipeline.jl")
 include("attach.jl")
 include("outputs.jl")
 include("visualization.jl")
+include("query.jl")
 
 export LightRenderGeometry
+export LightNodeMetadata
 export LightModels
 export GroupModel
 export TypeModel
@@ -72,6 +74,7 @@ export attach_light_series!
 export write_component_values
 export light_render_geometry
 export tile_light_geometry
+export light_node_ids
 export light_metric_values
 export light_face_values
 export light_vertex_values

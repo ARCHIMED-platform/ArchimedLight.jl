@@ -531,6 +531,12 @@ Fields:
   [`LightStepResult`](@ref). Leave `false` unless downstream code needs it.
   When options are read from a config file, this is enabled by requesting
   `sky_fraction` in `component_variables` or `opf_variables`.
+- `store_node_metadata`: retain a lightweight per-scene node metadata snapshot
+  shared by all results computed from that scene. This keeps queries valid
+  after [`update_scene!`](@ref).
+- `node_metadata_attributes`: optional scalar MTG attribute names to add to the
+  standard node metadata snapshot. Standard identity and group/type fields are
+  always included when `store_node_metadata=true`.
 - `cache_pixel_table`: cache raster pixel tables for repeated projections.
 - `pixel_hit_stack_mode`: storage mode for per-pixel hit stacks. Supported
   values are `"auto"`, `"small"`, and `"vector"`.
@@ -596,6 +602,8 @@ Base.@kwdef struct LightOptions
     debug::Bool = false
     log_debug::Bool = false
     debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}} = nothing
+    store_node_metadata::Bool = true
+    node_metadata_attributes::Tuple = ()
 
     function LightOptions(
         all_in_turtle,
@@ -624,6 +632,8 @@ Base.@kwdef struct LightOptions
         debug,
         log_debug,
         debug_drop_leading_hit,
+        store_node_metadata,
+        node_metadata_attributes,
     )
         semantics_string = lowercase(strip(string(radiation_input_semantics)))
         startswith(semantics_string, ':') && (semantics_string = semantics_string[2:end])
@@ -633,6 +643,7 @@ Base.@kwdef struct LightOptions
         ))
         rotation = Float64(scene_rotation_deg)
         isfinite(rotation) || throw(ArgumentError("scene_rotation_deg must be finite, got $(repr(scene_rotation_deg))"))
+        metadata_attributes = _normalize_node_metadata_attributes(node_metadata_attributes)
 
         new(
             Bool(all_in_turtle),
@@ -661,8 +672,90 @@ Base.@kwdef struct LightOptions
             Bool(debug),
             Bool(log_debug),
             debug_drop_leading_hit,
+            Bool(store_node_metadata),
+            metadata_attributes,
         )
     end
+end
+
+function _normalize_node_metadata_attributes(attributes)
+    attributes === nothing && return ()
+    values = if attributes isa Symbol || attributes isa AbstractString
+        (attributes,)
+    elseif attributes isa Tuple || attributes isa AbstractVector || attributes isa AbstractSet
+        attributes
+    else
+        throw(ArgumentError(
+            "node_metadata_attributes must be an attribute name or a collection of names.",
+        ))
+    end
+    normalized = unique!(Symbol[Symbol(value) for value in values])
+    forbidden = intersect(Set(normalized), Set((:geometry, :ref_meshes, :scene_transformation)))
+    isempty(forbidden) || throw(ArgumentError(
+        "node_metadata_attributes cannot retain heavyweight scene attribute(s): " *
+        join(string.(sort!(collect(forbidden))), ", "),
+    ))
+    Tuple(normalized)
+end
+
+function LightOptions(
+    all_in_turtle,
+    turtle_sectors,
+    pixel_size,
+    area_ratio,
+    scattering,
+    scattering_max_iter,
+    scattering_stop_ratio,
+    scattering_coeff_par,
+    scattering_coeff_nir,
+    cache_radiation,
+    include_sky_fraction,
+    cache_pixel_table,
+    pixel_hit_stack_mode,
+    toricity,
+    radiation_timestep_minutes,
+    radiation_input_semantics,
+    scene_rotation_deg,
+    check_meteo_boundaries,
+    allow_overlapping_meteo_steps,
+    nir_interception,
+    nir_scattering,
+    java_logged_turtle_dirs,
+    meteo_range,
+    debug,
+    log_debug,
+    debug_drop_leading_hit,
+)
+    LightOptions(
+        all_in_turtle,
+        turtle_sectors,
+        pixel_size,
+        area_ratio,
+        scattering,
+        scattering_max_iter,
+        scattering_stop_ratio,
+        scattering_coeff_par,
+        scattering_coeff_nir,
+        cache_radiation,
+        include_sky_fraction,
+        cache_pixel_table,
+        pixel_hit_stack_mode,
+        toricity,
+        radiation_timestep_minutes,
+        radiation_input_semantics,
+        scene_rotation_deg,
+        check_meteo_boundaries,
+        allow_overlapping_meteo_steps,
+        nir_interception,
+        nir_scattering,
+        java_logged_turtle_dirs,
+        meteo_range,
+        debug,
+        log_debug,
+        debug_drop_leading_hit,
+        true,
+        (),
+    )
 end
 
 function LightOptions(
@@ -717,6 +810,8 @@ function LightOptions(
         debug,
         log_debug,
         debug_drop_leading_hit,
+        true,
+        (),
     )
 end
 
@@ -748,6 +843,8 @@ function LightOptions(old::LightOptions; kwargs...)
         :debug => old.debug,
         :log_debug => old.log_debug,
         :debug_drop_leading_hit => old.debug_drop_leading_hit,
+        :store_node_metadata => old.store_node_metadata,
+        :node_metadata_attributes => old.node_metadata_attributes,
     )
     for (k, v) in kwargs
         params[k] = v
@@ -767,6 +864,30 @@ struct LightRenderGeometry
     vertices
     faces
     face2node::Vector{Int}
+end
+
+"""
+    LightNodeMetadata
+
+Lightweight columnar scene-node metadata captured for one prepared scene.
+Every [`LightStepResult`](@ref) computed from the same simulation cache shares
+the same snapshot, so semantic queries remain valid after [`update_scene!`](@ref).
+
+`attributes` stores requested node-local scalar attributes, while
+`inherited_attributes` stores their nearest inherited values.
+"""
+struct LightNodeMetadata
+    node_id::Vector{Int}
+    source_topology_id::Vector{Int}
+    object_id::Vector{Int}
+    item_id::Vector{Int}
+    component_id::Vector{Int}
+    group::Vector{String}
+    type::Vector{String}
+    symbol::Vector{Symbol}
+    scale::Vector{Int}
+    attributes::NamedTuple
+    inherited_attributes::NamedTuple
 end
 
 function _scene_node_field(scene::PlantGeom.SceneGeometry, node_id::Integer, field::Symbol, default)
@@ -841,6 +962,24 @@ function _scene_type(scene::PlantGeom.SceneGeometry, node_id::Integer, default="
     node === nothing && return default
     s = string(MultiScaleTreeGraph.symbol(node))
     isempty(s) ? default : s
+end
+
+function _scene_display_type(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    node_id::Integer,
+)
+    group = _scene_group(scene, node_id, "")
+    type_name = strip(_scene_type(scene, node_id, ""))
+    if isempty(type_name) || lowercase(type_name) == "mesh"
+        if haskey(models, group)
+            group_model = models[group]
+            length(group_model.types) == 1 && return first(keys(group_model.types))
+        elseif group == "pavement"
+            return "Cobblestone"
+        end
+    end
+    type_name
 end
 
 function _scene_object_id(scene::PlantGeom.SceneGeometry, node_id::Integer, default=-1)
@@ -1126,6 +1265,8 @@ directional fluxes, first-order interception, optional scattering, and the
 integrated [`LightBudget`](@ref). When requested, the result can also store a
 per-node `sky_fraction` map. Results returned by `run_light_step` and
 `run_light_series` also carry the render geometry needed by `lightplot`.
+By default they retain a shared [`LightNodeMetadata`](@ref) snapshot for
+scene-aware queries across dynamic scene updates.
 """
 struct LightStepResult
     sky::SkyState
@@ -1137,6 +1278,7 @@ struct LightStepResult
     extra_band_irradiance::Dict{String,Float64}
     sky_fraction::Union{Nothing,Dict{Int,Float64}}
     render_geometry::Union{Nothing,LightRenderGeometry}
+    node_metadata::Union{Nothing,LightNodeMetadata}
 end
 
 LightStepResult(
@@ -1147,7 +1289,7 @@ LightStepResult(
     scattering::Union{Nothing,ScatteringResult},
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing, nothing)
 
 LightStepResult(
     sky::SkyState,
@@ -1158,7 +1300,30 @@ LightStepResult(
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
     sky_fraction::Union{Nothing,Dict{Int,Float64}},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing, nothing)
+
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+    sky_fraction::Union{Nothing,Dict{Int,Float64}},
+    render_geometry::Union{Nothing,LightRenderGeometry},
+) = LightStepResult(
+    sky,
+    turtle,
+    fluxes,
+    first_order,
+    scattering,
+    budget,
+    extra_band_irradiance,
+    sky_fraction,
+    render_geometry,
+    nothing,
+)
 
 function _format_decimal(value::Real; digits::Int=3)
     x = round(Float64(value); digits=digits)

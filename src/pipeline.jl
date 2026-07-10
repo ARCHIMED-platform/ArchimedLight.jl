@@ -1379,12 +1379,108 @@ mutable struct LightSimulationCache
     scattering_backend::Union{Nothing,ScatteringBackend}
     prepared::Union{Nothing,PreparedInterceptionData}
     render_geometry::LightRenderGeometry
+    node_metadata::Union{Nothing,LightNodeMetadata}
     mode::Symbol
     estimated_entry_bytes::Int
     memory_limit_bytes::Int
     resident_bytes::Int
     tick::Int
     entries::Dict{UInt64,TurtleLightCacheEntry}
+end
+
+function _node_metadata_narrow(values::Vector{Any})
+    isempty(values) && return Any[]
+    value_type = foldl((acc, value) -> typejoin(acc, typeof(value)), values; init=Union{})
+    value_type === Union{} && return Any[]
+    value_type[values...]
+end
+
+function _node_metadata_attribute_table(names::Tuple, columns::AbstractVector)
+    narrowed = Tuple(_node_metadata_narrow(column) for column in columns)
+    NamedTuple{names}(narrowed)
+end
+
+function _validate_lightweight_node_metadata_value(value, attribute::Symbol, nid::Int)
+    lightweight = value === nothing || value === missing || value isa Number ||
+                  value isa AbstractString || value isa Symbol || value isa Char || isbits(value)
+    lightweight && return value
+    throw(ArgumentError(
+        "node_metadata_attributes requested `$attribute`, but node $nid stores " *
+        "a non-scalar $(typeof(value)). Only lightweight scalar identifiers can be retained.",
+    ))
+end
+
+function _build_light_node_metadata(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    options::LightOptions,
+    geometry_node_ids,
+)
+    node_ids = sort!(collect(Int, geometry_node_ids))
+    output_keys = _interception_output_keys_for_node_ids(scene, node_ids)
+    source_topology_ids = Int[]
+    object_ids = Int[]
+    item_ids = Int[]
+    component_ids = Int[]
+    groups = String[]
+    types = String[]
+    symbols = Symbol[]
+    scales = Int[]
+    attribute_names = options.node_metadata_attributes
+    local_columns = [Any[] for _ in attribute_names]
+    inherited_columns = [Any[] for _ in attribute_names]
+
+    scene.mtg === nothing && throw(
+        ArgumentError("store_node_metadata=true requires an MTG-backed scene."),
+    )
+    available_attributes = Set(Symbol.(MultiScaleTreeGraph.get_attributes(scene.mtg)))
+    missing_attributes = Symbol[name for name in attribute_names if !(name in available_attributes)]
+    isempty(missing_attributes) || throw(ArgumentError(
+        "Unknown node_metadata_attributes: $(join(string.(missing_attributes), ", ")).",
+    ))
+
+    for nid in node_ids
+        node = _scene_mtg_node(scene, nid)
+        node === nothing && throw(ArgumentError("Geometric node id $nid is absent from the scene MTG."))
+        source_topology_id = _scene_source_topology_id(scene, nid, nid)
+        object_id = _scene_object_id(scene, nid, -1)
+        item_id, component_id = get(output_keys, nid, (object_id, source_topology_id))
+        push!(source_topology_ids, source_topology_id)
+        push!(object_ids, object_id)
+        push!(item_ids, item_id)
+        push!(component_ids, component_id)
+        push!(groups, _scene_group(scene, nid, ""))
+        push!(types, _scene_display_type(scene, models, nid))
+        push!(symbols, Symbol(MultiScaleTreeGraph.symbol(node)))
+        push!(scales, Int(MultiScaleTreeGraph.scale(node)))
+
+        for (i, attribute) in enumerate(attribute_names)
+            local_value = MultiScaleTreeGraph.attribute(node, attribute; default=nothing)
+            inherited_value = _inherited_attr(scene, nid, (attribute,), nothing)
+            push!(
+                local_columns[i],
+                _validate_lightweight_node_metadata_value(local_value, attribute, nid),
+            )
+            push!(
+                inherited_columns[i],
+                _validate_lightweight_node_metadata_value(inherited_value, attribute, nid),
+            )
+        end
+    end
+
+    LightNodeMetadata(
+        node_ids,
+        source_topology_ids,
+        object_ids,
+        item_ids,
+        component_ids,
+        groups,
+        types,
+        symbols,
+        scales,
+        _node_metadata_attribute_table(attribute_names, local_columns),
+        _node_metadata_attribute_table(attribute_names, inherited_columns),
+    )
 end
 
 function _default_light_cache_memory_limit()
@@ -1520,12 +1616,12 @@ function prepare_light_cache(
 )
     ib = _resolve_interception_backend(interception_backend)
     prepared = ib isa RasterCPUBackend ? _prepare_interception_data(scene, models, options; include_budget_maps=true) : nothing
-    render_geometry =
-        if prepared === nothing
-            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
-        else
-            _light_render_geometry(prepared.geometry)
-        end
+    interception_geometry =
+        prepared === nothing ? _scene_geometry_for_interception(scene, models, options) : prepared.geometry
+    render_geometry = _light_render_geometry(interception_geometry)
+    node_metadata =
+        options.store_node_metadata && scene.mtg !== nothing ?
+        _build_light_node_metadata(scene, models, options, interception_geometry.node_ids) : nothing
     limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
     limit = max(limit, 1)
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
@@ -1540,6 +1636,7 @@ function prepare_light_cache(
         scattering_backend,
         prepared,
         render_geometry,
+        node_metadata,
         mode,
         estimated,
         limit,
@@ -1563,6 +1660,8 @@ function cache_summary(cache::LightSimulationCache)
         mode=cache.mode,
         estimated_entry_bytes=cache.estimated_entry_bytes,
         resident_bytes=cache.resident_bytes,
+        node_metadata_bytes=cache.node_metadata === nothing ? 0 : Base.summarysize(cache.node_metadata),
+        node_metadata_count=cache.node_metadata === nothing ? 0 : length(cache.node_metadata.node_id),
         cached_turtle_count=length(cache.entries),
         cached_sector_count=cached_sector_count,
         cached_full_response_sector_count=cached_full_response_sector_count,
@@ -1735,6 +1834,8 @@ function cache_summary(sim::LightSimulation)
         mode=:unprepared,
         estimated_entry_bytes=0,
         resident_bytes=0,
+        node_metadata_bytes=0,
+        node_metadata_count=0,
         cached_turtle_count=0,
         cached_sector_count=0,
         cached_full_response_sector_count=0,
@@ -2611,7 +2712,18 @@ function _run_light_step_cached(
             prepared=prepared,
             responses_cache=responses_cache,
         ) : nothing
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, sky_fraction, cache.render_geometry)
+    return LightStepResult(
+        sky,
+        turtle,
+        fluxes,
+        first,
+        scat,
+        budget,
+        extra_irr,
+        sky_fraction,
+        cache.render_geometry,
+        cache.node_metadata,
+    )
 end
 
 function _run_light_sky_cached(
@@ -2692,7 +2804,18 @@ function _run_light_sky_cached(
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, nothing, cache.render_geometry)
+    return LightStepResult(
+        sky,
+        turtle,
+        fluxes,
+        first,
+        scat,
+        budget,
+        extra_irr,
+        nothing,
+        cache.render_geometry,
+        cache.node_metadata,
+    )
 end
 
 function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
