@@ -8,7 +8,8 @@ java_implementation/*
 .julia_depot
 .archimedlight_cache/
 /test/regression_matrix/reports/
-/benchmark/results/
+/benchmark/results/*
+!/benchmark/results/artifact_scene_matrix_cpu.tsv
 /benchmark/.asv/
 /example_1/output/
 *.jl.*.cov

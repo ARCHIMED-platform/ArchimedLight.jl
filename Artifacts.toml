@@ -1,3 +1,11 @@
+[archimedlight-benchmark-scenes]
+git-tree-sha1 = "0fe06e0ad6ecab2e7db5f97aff7d0ee11bb34555"
+lazy = true
+
+    [[archimedlight-benchmark-scenes.download]]
+    sha256 = "6e761152d6024ed1f4ccbc30979f64fc643c9acfbb16fd593c5a851cb76affa7"
+    url = "https://zenodo.org/records/21291758/files/benchmark-scenes.tar.gz?download=1"
+
 [archimedlight-release-fixtures]
 git-tree-sha1 = "68ce0ccf594ed2ff4fb7369f19735f75b7a4085e"
 lazy = true
