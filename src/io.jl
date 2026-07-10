@@ -418,6 +418,33 @@ Keywords:
 - `kwargs...`: keyword arguments forwarded to [`LightSimulation`](@ref), such as
   `interception_backend`, `scattering_mode`, `scattering_backend`, and
   `memory_limit_bytes`.
+
+This smoke example uses coarse, non-scattering options so it remains quick:
+
+```jldoctest
+julia> repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."));
+
+julia> config = joinpath(repo_root, "example_2", "config.yml");
+
+julia> sim, meteo = read_simulation(config; plot_paving_override=0);
+
+julia> update_options!(
+           sim,
+           LightOptions(
+               sim.options;
+               turtle_sectors=1,
+               pixel_size=0.1,
+               area_ratio=false,
+               scattering=false,
+               toricity=false,
+           ),
+       );
+
+julia> step = run_light(sim, first(meteo));
+
+julia> println(step)
+LightStepResult(PAR=291.777 kJ, NIR=316.092 kJ, sky=463.139 W m^-2 PAR / 501.734 W m^-2 NIR, sectors=1 [sky=1, sun=0], scattering=off)
+```
 """
 function read_simulation(path::AbstractString; plot_paving_override=nothing, kwargs...)
     options, scene, meteo, models = read_config(path; plot_paving_override=plot_paving_override)

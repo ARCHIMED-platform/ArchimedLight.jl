@@ -18,9 +18,6 @@ end
 
 trial = @benchmark run_archimed($config_path)
 display(trial)
-# With java version:  java -jar ./example_1/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar example_2/config.yml
-# 2026-03-18 12:03:14.891 - Simulation time 14.448s0.0ms
-# 2026-03-18 12:03:14.892 - maximum memory usage 2277,72 MB
 
 # With Julia: 
 # Single result which took 1.6243 s (12.79%) to evaluate,

@@ -42,7 +42,7 @@ makedocs(;
             "Scattering And Assumptions" => "theory_scattering.md",
         ],
         "Advanced Usage" => [
-            "Full Example" => "full_example.md",
+            "File-Based Example" => "full_example.md",
             "Composable Stages" => "stages.md",
             "Historical ARCHIMED Reference" => "archimed_reference.md",
         ],

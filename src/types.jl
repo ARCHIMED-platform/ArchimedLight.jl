@@ -303,6 +303,13 @@ Keywords:
 
 `par` and `nir` are scattering fractions for the built-in ARCHIMED wavebands.
 The absorbed fraction is therefore `1 - scattering_fraction`.
+
+```jldoctest
+julia> model = translucent(par=0.15, nir=0.90, transparency=0.1);
+
+julia> (model.interception.model, model.interception.transparency, model.interception.optical_properties.par)
+("Translucent", 0.1, 0.15)
+```
 """
 function translucent(; par::Real, nir::Real, transparency::Real=0.0)
     TypeModel(
@@ -364,16 +371,19 @@ Arguments:
 
 Example:
 
-```julia
-models = models_for(
-    "coffee" => (
-        "Leaf" => translucent(par=0.15, nir=0.90),
-        "Stem" => translucent(par=0.20, nir=0.50),
-    ),
-    "soil" => (
-        "ground" => translucent(par=0.10, nir=0.40),
-    ),
-)
+```jldoctest
+julia> models = models_for(
+           "coffee" => (
+               "Leaf" => translucent(par=0.15, nir=0.90),
+               "Stem" => translucent(par=0.20, nir=0.50),
+           ),
+           "soil" => (
+               "ground" => translucent(par=0.10, nir=0.40),
+           ),
+       );
+
+julia> (collect(keys(models)), models["coffee"].types["Leaf"].interception.model)
+(["coffee", "soil"], "Translucent")
 ```
 """
 function models_for(group_specs::Pair...)
