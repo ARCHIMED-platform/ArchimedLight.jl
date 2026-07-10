@@ -1,3 +1,5 @@
+using Pkg
+Pkg.activate(joinpath(dirname(@__DIR__), "benchmark"))
 
 using PlantGeom # For the growth and visualization API
 using GLMakie
@@ -94,4 +96,4 @@ end
 # Sole wheat plant:
 ASSETS_DIR = joinpath(REPO_ROOT, "docs", "src", "assets")
 @time generate_video(scenes[7], joinpath(ASSETS_DIR, "archimedlight_day_cycle_1.mp4"); toricity=false)
-@time generate_video(scenes[1], joinpath(ASSETS_DIR, "archimedlight_day_cycle_2.mp4"); toricity=true, nx=15, ny=3)
+@time generate_video(scenes[1], joinpath(ASSETS_DIR, "archimedlight_day_cycle_2.mp4"); toricity=true, nx=10, ny=3)

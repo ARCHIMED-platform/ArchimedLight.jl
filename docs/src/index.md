@@ -11,28 +11,35 @@ models, create a `LightSimulation`, then call `run_light` for one meteo row or
 a complete meteo table.
 
 ```@raw html
-<video
-  style="display:block; width:100%; border-radius:0.75rem;"
-  autoplay
-  muted
-  loop
-  playsinline
-  controls
-  preload="metadata"
-  poster="assets/archimedlight_day_cycle_1.png"
-  aria-label="Simulated light interception and moving ground shade over a representative day"
->
-  <source src="assets/archimedlight_day_cycle_1.mp4" type="video/mp4">
-  Your browser does not support embedded video.
-</video>
+<div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem;">
+  <video
+    style="width:100%; border-radius:0.75rem;"
+    autoplay muted loop playsinline controls preload="metadata"
+    poster="assets/archimedlight_day_cycle_1.png"
+    aria-label="ARCHIMED light simulation day cycle 1">
+    <source src="assets/archimedlight_day_cycle_1.mp4" type="video/mp4">
+  </video>
+
+  <video
+    style="width:100%; border-radius:0.75rem;"
+    autoplay muted loop playsinline controls preload="metadata"
+    poster="assets/archimedlight_day_cycle_2.png"
+    aria-label="ARCHIMED light simulation day cycle 2">
+    <source src="assets/archimedlight_day_cycle_2.mp4" type="video/mp4">
+  </video>
+</div>
 ```
 
-The animation runs the coffee and agrivoltaic wheat scenes from the
+<details>
+<summary>Reproducing the figures</summary>
+
+The animation runs the wheat and agrivoltaic wheat scenes from the
 `archimedlight-benchmark-scenes` artifact every 30 minutes over a representative
 clear-sky day. Each plot has about 2,500 explicit ground tiles, making the
 moving projected shade visible while the same color scale tracks incident PAR
-irradiance through the day. The reproducible generator is
-[`scripts/generate_home_video.jl`](https://github.com/VEZY/ArchimedLight.jl/blob/main/scripts/generate_home_video.jl).
+irradiance through the day. The script to reproduce these figures is in
+[`docs/make_video.jl`](https://github.com/VEZY/ArchimedLight.jl/blob/main/docs/make_video.jl).
+</details>
 
 ## Scope
 

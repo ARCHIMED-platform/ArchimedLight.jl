@@ -9,9 +9,15 @@
 
 Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
 
-![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
+| A wheat plant | A wheat AgriPV system |
+|:---:|:---:|
+| [![A wheat plant](docs/src/assets/archimedlight_day_cycle_1.png)](docs/src/assets/archimedlight_day_cycle_1.mp4) | [![A wheat AgriPV system](docs/src/assets/archimedlight_day_cycle.png)](docs/src/assets/archimedlight_day_cycle.mp4) |
 
-The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script loads a scene, models, options, and meteo rows, adds explicit ground geometry, runs one light step, attaches `Ri_PAR_f` onto the MTG, and then renders the colored scene with `plantviz(..., color=:Ri_PAR_f)`.
+<details>
+<summary>Reproducing the figures</summary>
+
+The figures above are generated from two example scenes available from an Artifact. You can generate them using the script in `docs/make_video.jl`.
+</details>
 
 ## Installation
 
