@@ -127,7 +127,9 @@ fig_inf
 ```
 
 For a time series, we can generate the plot once and update `timestep` to inspect
-any simulated hour without rebuilding the geometry:
+any simulated hour. Each `LightStepResult` supplies its own stored render
+geometry, so this also works for a series assembled from scenes that changed
+between simulation steps:
 
 ```@example getting_started
 # Generating a series of meteo row to simulate a day:
