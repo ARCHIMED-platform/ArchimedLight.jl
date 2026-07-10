@@ -71,6 +71,138 @@ end
     @test !haskey(coeffs[("plant", "Leaf")], "NIR")
 end
 
+@testitem "Custom optical coefficients drive scattering and sensors stay passive" tags=[:model_io, :fast] begin
+    tmp = mktempdir()
+    model_path = joinpath(tmp, "plant.yml")
+    write(
+        model_path,
+        join(
+            [
+                "Group: plant",
+                "Type:",
+                "  Leaf:",
+                "    Interception:",
+                "      model: Translucent",
+                "      optical_properties:",
+                "        PAR: 0.20",
+                "        NIR: 0.30",
+                "        custom: 0.80",
+                "        TIR: 0.95",
+                "  Sensor:",
+                "    Interception:",
+                "      model: VirtualSensor",
+            ],
+            "\n",
+        ) * "\n",
+    )
+
+    models = ArchimedLight.read_models(model_path)
+    props = models["plant"].types["Leaf"].interception.optical_properties
+    @test props.extras["custom"] == 0.80
+
+    group_coeffs = ArchimedLight._group_optical_coeffs(models)
+    @test group_coeffs[("plant", "Leaf")]["CUSTOM"] == 0.80
+    @test !haskey(group_coeffs[("plant", "Leaf")], "TIR")
+
+    node_ids = [1, 2, 3]
+    node_group = Dict(nid => "plant" for nid in node_ids)
+    node_type = Dict(1 => "Leaf", 2 => "Leaf", 3 => "Sensor")
+    options = ArchimedLight.LightOptions(scattering_max_iter=4, scattering_stop_ratio=1e-12)
+    coeff_par, coeff_nir = ArchimedLight._coeff_maps_by_node(
+        node_ids,
+        node_group,
+        node_type,
+        group_coeffs,
+        options,
+    )
+    graph = ArchimedLight.ScatteringTransferGraph(
+        Dict((2, 1) => 1, (2, 3) => 1),
+        Dict(nid => 1 for nid in node_ids),
+        node_ids,
+        node_group,
+        node_type,
+        group_coeffs,
+        coeff_par,
+        coeff_nir,
+        options.scattering_coeff_par,
+        options.scattering_coeff_nir,
+    )
+    first = ArchimedLight.FirstOrderResult(
+        Dict(nid => 1.0 for nid in node_ids),
+        ArchimedLight.SpectralNodeValues(
+            Dict(nid => 0.0 for nid in node_ids),
+            Dict(nid => 0.0 for nid in node_ids),
+        ),
+        Dict(nid => 1 for nid in node_ids),
+    )
+    custom = ArchimedLight.compute_scattering_band(
+        graph,
+        first,
+        options;
+        band="custom",
+        initial_power_per_node=Dict(1 => 100.0, 2 => 0.0, 3 => 100.0),
+    )
+
+    # The leaf contributes 100 * 0.80 / 2 = 40. The sensor contributes zero
+    # for this custom band rather than falling back to the PAR default.
+    @test isapprox(custom.added_power_per_node[2], 40.0; atol=1e-12)
+end
+
+@testitem "Thermal irradiance is not an extra light band" tags=[:model_io, :fast] begin
+    meteo_row = (RI_PAR_f=100.0, RI_UV_f=25.0, RI_TIR_f=450.0)
+    extras = ArchimedLight._extra_band_irradiance(meteo_row)
+
+    @test extras == Dict("UV" => 25.0)
+    @test !haskey(extras, "TIR")
+end
+
+@testitem "Scattering convergence retains Java virtual-sensor observations" tags=[:model_io, :fast] begin
+    node_ids = [1, 2, 3]
+    node_group = Dict(1 => "plant", 2 => "sensor", 3 => "plant")
+    node_type = Dict(1 => "Leaf", 2 => "Sensor", 3 => "Leaf")
+    group_coeffs = Dict(
+        ("plant", "Leaf") => Dict("PAR" => 0.15),
+        ("sensor", "Sensor") => Dict("PAR" => 0.0, "__ALL_BANDS__" => 0.0),
+    )
+    coeff_par = Dict(1 => 0.15, 2 => 0.0, 3 => 0.15)
+    coeff_nir = Dict(1 => 0.30, 2 => 0.0, 3 => 0.30)
+    graph = ArchimedLight.ScatteringTransferGraph(
+        Dict((1, 3) => 1, (2, 3) => 1, (3, 1) => 1, (2, 1) => 1),
+        Dict(nid => 1 for nid in node_ids),
+        node_ids,
+        node_group,
+        node_type,
+        group_coeffs,
+        coeff_par,
+        coeff_nir,
+        0.15,
+        0.30,
+    )
+    first = ArchimedLight.FirstOrderResult(
+        Dict(nid => 1.0 for nid in node_ids),
+        ArchimedLight.SpectralNodeValues(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 100.0),
+            Dict(nid => 0.0 for nid in node_ids),
+        ),
+        Dict(nid => 1 for nid in node_ids),
+    )
+    options = ArchimedLight.LightOptions(
+        scattering_max_iter=10,
+        scattering_stop_ratio=0.01,
+    )
+
+    result = ArchimedLight.compute_scattering_band(graph, first, options; band="PAR")
+
+    # Java's scene-wide stopping total includes sensor observations. They do
+    # not re-emit (coefficient zero), but their observed share keeps the third
+    # iteration above the previous iteration's stopping decision.
+    @test result.iterations == 3
+    @test result.converged
+    @test isapprox(result.added_power_per_node[2], 8.1046875; atol=1e-12, rtol=1e-12)
+    @test isapprox(result.added_power_per_node[1], 7.5421875; atol=1e-12, rtol=1e-12)
+    @test isapprox(result.added_power_per_node[3], 0.5625; atol=1e-12, rtol=1e-12)
+end
+
 @testitem "Model IO scene write round-trip keeps attached attrs" tags=[:model_io, :fast] begin
     import MultiScaleTreeGraph
 

@@ -458,7 +458,15 @@ function _group_optical_coeffs(models::LightModels)
 
             coeff =
                 if _is_sensor_interception(interception)
-                    Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                    # Virtual sensors observe every waveband without scattering it.
+                    # The sentinel is consulted after an exact band lookup so it
+                    # also covers custom bands that were not known when the model
+                    # was parsed.
+                    Dict{String,Float64}(
+                        "PAR" => 0.0,
+                        "NIR" => 0.0,
+                        "__ALL_BANDS__" => 0.0,
+                    )
                 else
                     props = interception.optical_properties
                     props === nothing && continue
@@ -467,6 +475,13 @@ function _group_optical_coeffs(models::LightModels)
                     has_nir = get(props.extras, "__has_nir", true)
                     has_par && (band_coeffs["PAR"] = props.par)
                     has_nir && (band_coeffs["NIR"] = props.nir)
+                    for (name, value) in props.extras
+                        band = uppercase(strip(String(name)))
+                        (isempty(band) || startswith(band, "__") || band == "TIR") && continue
+                        coeff = _as_float(value, NaN)
+                        isfinite(coeff) || continue
+                        band_coeffs[band] = coeff
+                    end
                     band_coeffs
                 end
 
@@ -704,9 +719,17 @@ end
     coeffs = get(
         group_type_coeffs,
         (group, type_name),
-        get(group_type_coeffs, (group, "*"), Dict{String,Float64}()),
+        get(
+            group_type_coeffs,
+            (group, "*"),
+            get(
+                group_type_coeffs,
+                ("*", type_name),
+                get(group_type_coeffs, ("*", "*"), Dict{String,Float64}()),
+            ),
+        ),
     )
-    return get(coeffs, band, default_coeff)
+    return get(coeffs, band, get(coeffs, "__ALL_BANDS__", default_coeff))
 end
 
 function _coeff_by_node(
@@ -799,6 +822,9 @@ function _propagate_scattering_one_band(
     all_hits = graph.all_hits
     current = _copy_node_values(initial_power_per_node, node_ids)
     added = _dict_zero(node_ids)
+    # Match Java's scene-wide stopping rule: diagnostic observations from
+    # virtual sensors are included in the iteration totals even though their
+    # scattering coefficient is zero and they do not re-emit energy.
     ref = _sum_dict_values(current)
     thr = options.scattering_stop_ratio * max(ref, eps(Float64))
     iterations = 0

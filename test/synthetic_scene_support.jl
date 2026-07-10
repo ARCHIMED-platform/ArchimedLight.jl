@@ -33,6 +33,15 @@ function _budgets_close(a, b; atol::Float64=1e-9, rtol::Float64=1e-9)
         _dicts_close(a.extra_initial_energy_per_band[band], b.extra_initial_energy_per_band[band]; atol=atol, rtol=rtol) || return false
         _dicts_close(a.extra_energy_per_band[band], b.extra_energy_per_band[band]; atol=atol, rtol=rtol) || return false
     end
+    keys(a.emitter_escaped_energy_per_band) == keys(b.emitter_escaped_energy_per_band) || return false
+    for band in keys(a.emitter_escaped_energy_per_band)
+        _dicts_close(
+            a.emitter_escaped_energy_per_band[band],
+            b.emitter_escaped_energy_per_band[band];
+            atol=atol,
+            rtol=rtol,
+        ) || return false
+    end
     return true
 end
 

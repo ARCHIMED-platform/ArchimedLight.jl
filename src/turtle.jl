@@ -40,6 +40,18 @@ function _sun_direction(azimuth_deg::Float64, elevation_deg::Float64)
     _normalize3(StaticArrays.SVector{3,Float64}(sx, sy, sz))
 end
 
+function _scene_local_direction(direction, options::LightOptions)
+    angle = deg2rad(options.scene_rotation_deg)
+    iszero(angle) && return direction
+    c = cos(angle)
+    s = sin(angle)
+    x, y, z = direction
+    StaticArrays.SVector{3,Float64}(c * x + s * y, -s * x + c * y, z)
+end
+
+_scene_local_sun_direction(sky::SkyState, options::LightOptions) =
+    _scene_local_direction(_sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg), options)
+
 function _java_turtle_order(n::Int)
     if n == 1
         return 0
@@ -336,11 +348,11 @@ function _brightness_norm_clear(dir_up, sun_up)
     brightness
 end
 
-function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::Vector{Int})
+function _diffuse_weights_java_like(sky::SkyState, turtle::TurtleGrid, sky_ids::Vector{Int}, options::LightOptions)
     n = length(sky_ids)
     n == 0 && return Float64[]
 
-    sun_up = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
+    sun_up = _scene_local_sun_direction(sky, options)
     raw = zeros(Float64, n)
     total = 0.0
     for (k, i) in enumerate(sky_ids)
@@ -369,8 +381,10 @@ end
 """
     build_turtle(options, sky)::TurtleGrid
 
-Build the directional sky discretization (turtle sectors), optionally adding an explicit sun
-sector when `options.all_in_turtle == false`.
+Build the directional sky discretization (turtle sectors), optionally adding an
+explicit sun sector when `options.all_in_turtle == false`. Diffuse turtle
+sectors stay fixed in scene-local coordinates; the geographic sun direction is
+rotated into that basis using `options.scene_rotation_deg`.
 
 Set `java_logged_turtle_dirs: true` in the
 light config to use compatibility-mode sky directions (exact Java-logged vectors for 6 sectors,
@@ -392,7 +406,7 @@ function build_turtle(options::LightOptions, sky::SkyState)
     end
 
     if !options.all_in_turtle && sky.sun_elevation_deg > 0.0
-        push!(sectors, TurtleSector(length(sectors) + 1, _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg), 0.0, :sun))
+        push!(sectors, TurtleSector(length(sectors) + 1, _scene_local_sun_direction(sky, options), 0.0, :sun))
     end
     TurtleGrid(sectors)
 end
@@ -418,13 +432,19 @@ function _directional_flux_substeps(meteo_row, sky::SkyState, options::LightOpti
             _clearness_from_global_wm2(sky.ri_sw_f, latitude_rad, doy, start_h, end_h)
         end
 
+    timestep_h = _cfg_radiation_timestep_hours(options)
+    daylight_fraction = _daylight_fraction(date, start_h, end_h, timestep_h, latitude_rad)
+    ri_sw_during_daylight =
+        global_from_input && daylight_fraction > 0.0 ?
+        sky.ri_sw_f / daylight_fraction : sky.ri_sw_f
+
     substeps = _radiation_substeps(
         date,
         start_h,
         end_h,
         latitude_rad,
-        _cfg_radiation_timestep_hours(options),
-        sky.ri_sw_f,
+        timestep_h,
+        ri_sw_during_daylight,
         clearness,
         global_from_input,
         clearness_provided,
@@ -443,6 +463,9 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
     step_duration_h = end_h - start_h
     (isempty(substeps) || step_duration_h <= 0.0) && return compute_directional_fluxes(sky, turtle, options)
 
+    explicit_direct_fraction = _provided_direct_fraction(meteo_row)
+    provided_sun = _provided_sun_position_deg(meteo_row)
+
     n = length(turtle.sectors)
     par_acc = zeros(Float64, n)
     nir_acc = zeros(Float64, n)
@@ -452,10 +475,15 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
     for ss in substeps
         total_w = ss.diffuse_w + ss.direct_w
         total_w > 0.0 || continue
-        direct_fraction_sub = clamp(ss.direct_w / total_w, 0.0, 1.0)
+        direct_fraction_sub =
+            isnan(explicit_direct_fraction) ?
+            clamp(ss.direct_w / total_w, 0.0, 1.0) :
+            clamp(explicit_direct_fraction, 0.0, 1.0)
+        sun_azimuth = provided_sun === nothing ? ss.sun_azimuth_deg : sky.sun_azimuth_deg
+        sun_elevation = provided_sun === nothing ? ss.sun_elevation_deg : sky.sun_elevation_deg
         sky_sub = SkyState(
-            ss.sun_azimuth_deg,
-            ss.sun_elevation_deg,
+            sun_azimuth,
+            sun_elevation,
             max(ss.global_w * par_ratio, 0.0),
             max(ss.global_w * nir_ratio, 0.0),
             direct_fraction_sub,
@@ -470,20 +498,6 @@ function compute_directional_fluxes(meteo_row, sky::SkyState, turtle::TurtleGrid
 
     par = par_acc ./ step_duration_h
     nir = nir_acc ./ step_duration_h
-
-    # Preserve step-level band totals exactly after substep averaging.
-    sum_par = sum(par)
-    sum_nir = sum(nir)
-    if sky.ri_par_f <= 0.0 || sum_par <= 0.0
-        fill!(par, 0.0)
-    else
-        par .*= sky.ri_par_f / sum_par
-    end
-    if sky.ri_nir_f <= 0.0 || sum_nir <= 0.0
-        fill!(nir, 0.0)
-    else
-        nir .*= sky.ri_nir_f / sum_nir
-    end
 
     DirectionalFluxes([s.id for s in turtle.sectors], par, nir)
 end
@@ -509,7 +523,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, options::
 
     sky_wsum = sum(turtle.sectors[i].weight for i in sky_ids)
     if !isempty(sky_ids)
-        wdiff = _diffuse_weights_java_like(sky, turtle, sky_ids)
+        wdiff = _diffuse_weights_java_like(sky, turtle, sky_ids, options)
         for (k, i) in enumerate(sky_ids)
             par[i] += par_diff * wdiff[k]
             nir[i] += nir_diff * wdiff[k]
@@ -521,7 +535,7 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, options::
         # distribute direct irradiance by angular overlap between a sun halo and each sector.
         dir_count = length(sky_ids)
         if dir_count > 0
-            sun_up = _sun_direction(sky.sun_azimuth_deg, sky.sun_elevation_deg)
+            sun_up = _scene_local_sun_direction(sky, options)
             sector_radius = acos((dir_count - 1) / max(dir_count, 1))
             sun_halo_radius = sector_radius / 2.0
 
@@ -554,6 +568,21 @@ function compute_directional_fluxes(sky::SkyState, turtle::TurtleGrid, options::
                 wsum = sum(raw)
                 for (k, i) in enumerate(sky_ids)
                     w = raw[k] / wsum
+                    par[i] += par_dir * w
+                    nir[i] += nir_dir * w
+                end
+            else
+                # A full-timestep interval mean may legitimately carry direct
+                # energy even when the representative sun is below the local
+                # horizon. In that case no upper-hemisphere halo overlaps a
+                # turtle sector, so preserve the supplied energy by spreading
+                # it over the available sky sectors.
+                fallback_weights = [max(turtle.sectors[i].weight, 0.0) for i in sky_ids]
+                fallback_sum = sum(fallback_weights)
+                fallback_sum <= 0.0 && fill!(fallback_weights, 1.0)
+                fallback_sum = sum(fallback_weights)
+                for (k, i) in enumerate(sky_ids)
+                    w = fallback_weights[k] / fallback_sum
                     par[i] += par_dir * w
                     nir[i] += nir_dir * w
                 end

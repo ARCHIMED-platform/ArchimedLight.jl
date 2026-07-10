@@ -473,6 +473,47 @@ function _java_substeps_v2(date::Dates.Date, start_h::Float64, end_h::Float64, t
     return substeps
 end
 
+function _daylight_fraction(
+    date::Dates.Date,
+    start_h::Float64,
+    end_h::Float64,
+    timestep_h::Float64,
+    latitude_rad::Float64,
+)
+    step_duration = end_h - start_h
+    step_duration > 0.0 || return 0.0
+    substeps = _java_substeps_v2(date, start_h, end_h, timestep_h, latitude_rad)
+    clamp(sum((ss.duration for ss in substeps); init=0.0) / step_duration, 0.0, 1.0)
+end
+
+function _has_daylight_interval_metadata(meteo_row)
+    names = _row_propertynames(meteo_row)
+    has_date = (:date in names) || (:dayofyear in names)
+    has_latitude =
+        (:latitude in names) || (:lat in names) ||
+        _row_metadata_value(meteo_row, [:latitude, :lat]) !== nothing
+    date_has_time =
+        :date in names && getproperty(meteo_row, :date) isa Dates.DateTime
+    has_start = date_has_time || (:hour_start in names) || (:hour in names)
+    has_stop =
+        (:hour_end in names) || (:step_duration in names) || (:duration in names)
+    return has_date && has_latitude && has_start && has_stop
+end
+
+function _radiation_input_effective_scale(meteo_row, options::LightOptions)
+    options.radiation_input_semantics == :interval_mean && return 1.0
+    provided_sun = _provided_sun_position_deg(meteo_row)
+    if provided_sun !== nothing && !_has_daylight_interval_metadata(meteo_row)
+        # Explicit sun geometry is authoritative when no complete astronomical
+        # interval is available from which to integrate sunrise/sunset.
+        return provided_sun.elevation > 0.0 ? 1.0 : 0.0
+    end
+    latitude_rad = deg2rad(_row_value(meteo_row, [:latitude, :lat], 0.0))
+    date = _row_date(meteo_row)
+    start_h, end_h = _row_step_hours(meteo_row)
+    _daylight_fraction(date, start_h, end_h, _cfg_radiation_timestep_hours(options), latitude_rad)
+end
+
 function _midpoint_sun_position_deg(date::Dates.Date, start_h::Float64, end_h::Float64, latitude_rad::Float64)
     end_h < start_h && (end_h += 24.0)
     mid = (start_h + end_h) / 2.0
@@ -595,14 +636,41 @@ function _auto_sun_and_direct_fraction(
             tw > 0.0 ? clamp(direct_w / tw, 0.0, 1.0) : 0.0
         end
 
-    return sun_az, sun_el, direct_fraction
+    step_duration = end_h - start_h
+    effective_global_w = step_duration > 0.0 ? total_energy / step_duration : 0.0
+
+    return sun_az, sun_el, direct_fraction, effective_global_w
+end
+
+function _provided_sun_position_deg(meteo_row)
+    azimuth = _row_value(meteo_row, [:sun_azimut, :sun_azimuth], NaN)
+    elevation = _row_value(meteo_row, [:sun_elevation], NaN)
+    (isnan(azimuth) || isnan(elevation)) && return nothing
+    return (
+        azimuth=_as_degrees_if_radians(azimuth),
+        elevation=_as_degrees_if_radians(elevation),
+    )
+end
+
+function _provided_direct_fraction(meteo_row)
+    direct = _row_value(meteo_row, [:direct_fraction, :fDIR_SW, :Fd], NaN)
+    if isnan(direct)
+        direct_w = _row_value(meteo_row, [:Ri_SW_f_direct, :RI_SW_f_direct], NaN)
+        diffuse_w = _row_value(meteo_row, [:Ri_SW_f_diffuse, :RI_SW_f_diffuse], NaN)
+        if !isnan(direct_w) && !isnan(diffuse_w)
+            total = direct_w + diffuse_w
+            total > 0.0 && (direct = direct_w / total)
+        end
+    end
+    return direct
 end
 
 """
     compute_sky(meteo_row, options)::SkyState
 
-Compute sun position, PAR/NIR/SW irradiance, and direct/diffuse partition for one meteo row,
-following Java-compatible precedence rules for available meteorological inputs.
+Compute sun position, effective full-timestep PAR/NIR/SW irradiance, and the
+direct/diffuse partition for one meteo row. Supplied irradiance is interpreted
+according to `options.radiation_input_semantics`.
 """
 function compute_sky(meteo_row, options::LightOptions)
     ri_sw_raw = _row_value(meteo_row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global], NaN)
@@ -630,15 +698,10 @@ function compute_sky(meteo_row, options::LightOptions)
     doy = Dates.dayofyear(date)
     start_h, end_h = _row_step_hours(meteo_row)
 
-    sun_azimuth = _row_value(meteo_row, [:sun_azimut, :sun_azimuth], NaN)
-    sun_elevation = _row_value(meteo_row, [:sun_elevation], NaN)
-    sun_provided = !isnan(sun_azimuth) && !isnan(sun_elevation)
-    if !isnan(sun_azimuth)
-        sun_azimuth = _as_degrees_if_radians(sun_azimuth)
-    end
-    if !isnan(sun_elevation)
-        sun_elevation = _as_degrees_if_radians(sun_elevation)
-    end
+    provided_sun = _provided_sun_position_deg(meteo_row)
+    sun_provided = provided_sun !== nothing
+    sun_azimuth = sun_provided ? provided_sun.azimuth : NaN
+    sun_elevation = sun_provided ? provided_sun.elevation : NaN
 
     if isnan(ri_sw)
         if !isnan(ri_par) && !isnan(ri_nir)
@@ -658,13 +721,22 @@ function compute_sky(meteo_row, options::LightOptions)
         clearness = _clearness_from_global_wm2(ri_sw, latitude_rad, doy, start_h, end_h)
     end
 
-    auto_sun_az, auto_sun_el, auto_direct_fraction = _auto_sun_and_direct_fraction(
+    radiation_timestep_h = _cfg_radiation_timestep_hours(options)
+    daylight_fraction = _daylight_fraction(date, start_h, end_h, radiation_timestep_h, latitude_rad)
+    ri_sw_during_daylight =
+        if global_from_input && options.radiation_input_semantics == :interval_mean
+            daylight_fraction > 0.0 ? ri_sw / daylight_fraction : 0.0
+        else
+            ri_sw
+        end
+
+    auto_sun_az, auto_sun_el, auto_direct_fraction, integrated_ri_sw = _auto_sun_and_direct_fraction(
         date,
         start_h,
         end_h,
         latitude_rad,
-        _cfg_radiation_timestep_hours(options),
-        ri_sw,
+        radiation_timestep_h,
+        ri_sw_during_daylight,
         clearness,
         global_from_input,
         clearness_provided,
@@ -694,15 +766,19 @@ function compute_sky(meteo_row, options::LightOptions)
         end
     end
 
-    explicit_direct = _row_value(meteo_row, [:direct_fraction, :fDIR_SW, :Fd], NaN)
-    if isnan(explicit_direct)
-        ri_sw_direct = _row_value(meteo_row, [:Ri_SW_f_direct, :RI_SW_f_direct], NaN)
-        ri_sw_diffuse = _row_value(meteo_row, [:Ri_SW_f_diffuse, :RI_SW_f_diffuse], NaN)
-        if !isnan(ri_sw_direct) && !isnan(ri_sw_diffuse)
-            total = ri_sw_direct + ri_sw_diffuse
-            total > 0.0 && (explicit_direct = ri_sw_direct / total)
+    effective_scale =
+        if global_from_input
+            _radiation_input_effective_scale(meteo_row, options)
+        elseif ri_sw > 0.0
+            integrated_ri_sw / ri_sw
+        else
+            0.0
         end
-    end
+    effective_ri_sw = global_from_input ? ri_sw * effective_scale : integrated_ri_sw
+    ri_par *= effective_scale
+    ri_nir *= effective_scale
+
+    explicit_direct = _provided_direct_fraction(meteo_row)
     direct_fraction =
         if !isnan(explicit_direct)
             clamp(explicit_direct, 0.0, 1.0)
@@ -714,7 +790,7 @@ function compute_sky(meteo_row, options::LightOptions)
     SkyState(
         sun_azimuth,
         sun_elevation,
-        ri_sw,
+        max(effective_ri_sw, 0.0),
         max(ri_par, 0.0),
         max(ri_nir, 0.0),
         direct_fraction,

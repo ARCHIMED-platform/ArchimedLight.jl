@@ -110,6 +110,13 @@ function fixture_runtime_data(fx::JuliaFixture)
         normpath(joinpath(base, fx.meteo_override))
 
     options = ArchimedLight.read_options(fx.config_path)
+    # Frozen release fixtures originate from Java ARCHIMED, where supplied
+    # irradiance is clipped to daylight substeps and averaged over the complete
+    # meteo interval. Preserve an explicit fixture choice, but use the Java
+    # semantics for legacy configs which predate this Julia option.
+    if !haskey(raw, "radiation_input_semantics")
+        options = ArchimedLight.LightOptions(options; radiation_input_semantics=:sunlit_intensity)
+    end
     scene = ArchimedLight.read_scene(scene_path)
     meteo = ArchimedLight.read_meteo(meteo_path)
     models = ArchimedLight.read_models(fx.config_path)
@@ -584,7 +591,13 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "component_id"], ["step_number", "item_id", "component_id"], ["step_number", "source_topology_id"], ["step_number", "object_id", "source_topology_id"], ["step_number", "node_id"]]
+            [
+                ["step_number", "item_id", "component_id"],
+                ["step_number", "object_id", "source_topology_id"],
+                ["step_number", "source_topology_id"],
+                ["step_number", "component_id"],
+                ["step_number", "node_id"],
+            ]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"

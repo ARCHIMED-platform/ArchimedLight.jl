@@ -52,6 +52,26 @@ budget.absorbed_energy.total.nir;
 
 Each leaf of that structure is a dictionary keyed by node id.
 
+For artificial emitters, `step.first_order.emitter_escaped_power.par` and
+`.nir` report emitted power which left the represented scene without a
+geometric hit. These dictionaries are keyed by emitting source node. Together
+with emitter-contributed incident power, they provide the explicit
+received-plus-escaped power closure (in `W`) described in
+[Artificial Light Emitters](theory_scattering.md#artificial-light-emitters).
+Virtual sensors are non-consuming observations: their reported incident power
+is not subtracted from the ray and is excluded from this physical
+received-plus-escaped closure. A sensor may therefore report the same ray that
+is subsequently received by a physical component or escapes the scene.
+`first_order.incident_power` combines artificial emitters with sky and sun
+sources. To verify the closure from public fields, external sky/sun input must
+be zero and incident power must be summed over physical (non-sensor) receivers;
+sensor entries are observations, not consumed power. The emitter transfer is
+accounted separately before it is merged into total incident power.
+`emitter_escaped_power` exposes instantaneous PAR and NIR power. The integrated
+step budget exposes every emitted band, including custom bands, through
+`step.budget.emitter_escaped_energy_per_band[band]`. For PAR and NIR this is the
+corresponding escaped power multiplied by the step duration in seconds.
+
 If you need canopy-view metadata for coupled models, `step.sky_fraction` stores
 the per-node visible-sky fraction when `options.include_sky_fraction=true`.
 When using a YAML config, `read_options` enables that option when

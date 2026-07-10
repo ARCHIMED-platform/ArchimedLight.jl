@@ -219,7 +219,14 @@ The same naming works in dynamic named tuples:
 ```
 
 Extra bands only become physically meaningful if the scene models also define
-matching optical properties for them.
+matching optical properties for them. Band names are matched case-insensitively,
+so a meteo column such as `RI_custom_f` uses the `custom` coefficient from
+`optical_properties` during scattering.
+
+`RI_TIR_f` is reserved for thermal infrared forcing. ArchimedLight does not run
+the energy-balance calculations that consume it, so this column is explicitly
+ignored: it is not treated as an extra light band and it is not intercepted or
+scattered.
 
 ## 4. Direct And Diffuse Partition
 

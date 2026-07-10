@@ -26,6 +26,13 @@ function _as_string(x, default::String)
     return String(x)
 end
 
+function _as_radiation_input_semantics(x)
+    x === nothing && return :interval_mean
+    s = lowercase(strip(string(x)))
+    startswith(s, ':') && (s = s[2:end])
+    Symbol(s)
+end
+
 function _config_get(raw::AbstractDict, keys::Tuple{Vararg{String}})
     for key in keys
         haskey(raw, key) && return raw[key]
@@ -285,6 +292,8 @@ function read_options(path::AbstractString)
         pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
+        radiation_input_semantics=_as_radiation_input_semantics(get(raw, "radiation_input_semantics", nothing)),
+        scene_rotation_deg=_as_float(get(raw, "scene_rotation", 0.0), 0.0),
         allow_overlapping_meteo_steps=_as_bool(
             _config_get(raw, ("allow_overlapping_meteo_steps", "allowOverlappingMeteoSteps", "allowOverlappingMeteo")),
             false,

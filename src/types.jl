@@ -42,13 +42,13 @@ Typical values:
 
 - leaves in PAR: often around `0.05-0.25`
 - leaves in NIR: often around `0.4-0.9`
-- emitters: `gamma` often uses `PAR=0.48`, `NIR=0.52` to split total radiance
-  into the built-in bands
+- emitters: `gamma` often uses `PAR=0.48`, `NIR=0.52` as independent spectral
+  coefficients for the built-in bands; the values are not normalized
 
 Examples:
 
 - `OpticalProperties(0.15, 0.90)` for a strongly NIR-scattering leaf
-- `OpticalProperties(0.48, 0.52)` for a neutral PAR/NIR emitter split
+- `OpticalProperties(0.48, 0.52)` for PAR/NIR emitter coefficients
 """
 mutable struct OpticalProperties
     par::Float64
@@ -119,10 +119,15 @@ end
 
 Emission model for artificial or diagnostic light sources.
 
-`radiance` is the total emitted radiance-like magnitude attached to the source
-type, and `gamma` splits that magnitude across wavebands. In the common PAR/NIR
-case, `gamma=OpticalProperties(0.48, 0.52)` means "48% of the emitted energy is
-treated as PAR and 52% as NIR".
+`radiance` is the Lambertian radiance `L` emitted by each matching surface, in
+power per emitting area per steradian (for example `W m^-2 sr^-1`). `gamma`
+contains independent dimensionless spectral coefficients which are applied
+exactly as configured; they are not normalized to sum to one. PAR and NIR use
+the named fields, while additional coefficients in `gamma.extras` retain their
+uppercased band names. For a component
+with emitting surface area `A`, the hemispherical power in band `b` is
+`pi * A * L * gamma[b]`. The current model is one-sided and assumes a
+horizontal surface emitting into the downward hemisphere.
 
 Most canopy simulations do not need explicit emitters and rely only on sky and
 sun forcing, but emitters are useful for artificial lighting setups, synthetic
@@ -326,9 +331,9 @@ Build a [`TypeModel`](@ref) for an emitting component.
 
 Keywords:
 
-- `radiance`: emitted radiance assigned to the component emitter model.
-- `par`: PAR fraction of emitted radiation. The default is `0.48`.
-- `nir`: NIR fraction of emitted radiation. The default is `0.52`.
+- `radiance`: Lambertian radiance per emitting area per steradian.
+- `par`: unnormalized PAR spectral coefficient. The default is `0.48`.
+- `nir`: unnormalized NIR spectral coefficient. The default is `0.52`.
 """
 function emitter(; radiance::Real, par::Real=0.48, nir::Real=0.52)
     TypeModel(light_emitter=EmitterModel(radiance=radiance, gamma=OpticalProperties(par, nir)))
@@ -522,6 +527,13 @@ Fields:
 - `toricity`: enable horizontal periodic wrapping of the simulated plot.
 - `radiation_timestep_minutes`: internal radiative substep used when a meteo
   row covers a coarser interval.
+- `radiation_input_semantics`: interpretation of supplied irradiances.
+  `:interval_mean` preserves the supplied full-timestep mean, while
+  `:sunlit_intensity` treats it as an intensity that applies only while the
+  sun is above the horizon (the historical Java behavior).
+- `scene_rotation_deg`: clockwise rotation, in degrees, from geographic north
+  to the scene's local coordinates. The geographic sun is transformed into
+  the fixed local turtle basis before directional weights are computed.
 - `allow_overlapping_meteo_steps`: keep overlapping meteo intervals instead of
   rejecting the series during meteo preparation.
 - `nir_interception`: include NIR in directional fluxes and first-order
@@ -560,6 +572,8 @@ Base.@kwdef struct LightOptions
     pixel_hit_stack_mode::String = "auto"
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
+    radiation_input_semantics::Symbol = :interval_mean
+    scene_rotation_deg::Float64 = 0.0
     allow_overlapping_meteo_steps::Bool = false
     nir_interception::Bool = true
     nir_scattering::Bool = true
@@ -568,6 +582,125 @@ Base.@kwdef struct LightOptions
     debug::Bool = false
     log_debug::Bool = false
     debug_drop_leading_hit::Union{Nothing,NamedTuple{(:node_id, :x, :y),Tuple{Int,Int,Int}}} = nothing
+
+    function LightOptions(
+        all_in_turtle,
+        turtle_sectors,
+        pixel_size,
+        area_ratio,
+        scattering,
+        scattering_max_iter,
+        scattering_stop_ratio,
+        scattering_coeff_par,
+        scattering_coeff_nir,
+        cache_radiation,
+        include_sky_fraction,
+        cache_pixel_table,
+        pixel_hit_stack_mode,
+        toricity,
+        radiation_timestep_minutes,
+        radiation_input_semantics,
+        scene_rotation_deg,
+        allow_overlapping_meteo_steps,
+        nir_interception,
+        nir_scattering,
+        java_logged_turtle_dirs,
+        meteo_range,
+        debug,
+        log_debug,
+        debug_drop_leading_hit,
+    )
+        semantics_string = lowercase(strip(string(radiation_input_semantics)))
+        startswith(semantics_string, ':') && (semantics_string = semantics_string[2:end])
+        semantics = Symbol(semantics_string)
+        semantics in (:interval_mean, :sunlit_intensity) || throw(ArgumentError(
+            "radiation_input_semantics must be :interval_mean or :sunlit_intensity, got $(repr(radiation_input_semantics))",
+        ))
+        rotation = Float64(scene_rotation_deg)
+        isfinite(rotation) || throw(ArgumentError("scene_rotation_deg must be finite, got $(repr(scene_rotation_deg))"))
+
+        new(
+            Bool(all_in_turtle),
+            Int(turtle_sectors),
+            Float64(pixel_size),
+            Bool(area_ratio),
+            Bool(scattering),
+            Int(scattering_max_iter),
+            Float64(scattering_stop_ratio),
+            Float64(scattering_coeff_par),
+            Float64(scattering_coeff_nir),
+            Bool(cache_radiation),
+            Bool(include_sky_fraction),
+            Bool(cache_pixel_table),
+            String(pixel_hit_stack_mode),
+            Bool(toricity),
+            Float64(radiation_timestep_minutes),
+            semantics,
+            rotation,
+            Bool(allow_overlapping_meteo_steps),
+            Bool(nir_interception),
+            Bool(nir_scattering),
+            Bool(java_logged_turtle_dirs),
+            meteo_range === nothing ? nothing : String(meteo_range),
+            Bool(debug),
+            Bool(log_debug),
+            debug_drop_leading_hit,
+        )
+    end
+end
+
+function LightOptions(
+    all_in_turtle,
+    turtle_sectors,
+    pixel_size,
+    area_ratio,
+    scattering,
+    scattering_max_iter,
+    scattering_stop_ratio,
+    scattering_coeff_par,
+    scattering_coeff_nir,
+    cache_radiation,
+    include_sky_fraction,
+    cache_pixel_table,
+    pixel_hit_stack_mode,
+    toricity,
+    radiation_timestep_minutes,
+    allow_overlapping_meteo_steps,
+    nir_interception,
+    nir_scattering,
+    java_logged_turtle_dirs,
+    meteo_range,
+    debug,
+    log_debug,
+    debug_drop_leading_hit,
+)
+    return LightOptions(
+        all_in_turtle,
+        turtle_sectors,
+        pixel_size,
+        area_ratio,
+        scattering,
+        scattering_max_iter,
+        scattering_stop_ratio,
+        scattering_coeff_par,
+        scattering_coeff_nir,
+        cache_radiation,
+        include_sky_fraction,
+        cache_pixel_table,
+        pixel_hit_stack_mode,
+        toricity,
+        radiation_timestep_minutes,
+        :interval_mean,
+        0.0,
+        allow_overlapping_meteo_steps,
+        nir_interception,
+        nir_scattering,
+        java_logged_turtle_dirs,
+        meteo_range,
+        debug,
+        log_debug,
+        debug_drop_leading_hit,
+    )
 end
 
 function LightOptions(old::LightOptions; kwargs...)
@@ -587,6 +720,8 @@ function LightOptions(old::LightOptions; kwargs...)
         :pixel_hit_stack_mode => old.pixel_hit_stack_mode,
         :toricity => old.toricity,
         :radiation_timestep_minutes => old.radiation_timestep_minutes,
+        :radiation_input_semantics => old.radiation_input_semantics,
+        :scene_rotation_deg => old.scene_rotation_deg,
         :allow_overlapping_meteo_steps => old.allow_overlapping_meteo_steps,
         :nir_interception => old.nir_interception,
         :nir_scattering => old.nir_scattering,
@@ -698,8 +833,10 @@ end
 """
     SkyState(sun_azimuth_deg, sun_elevation_deg, ri_par_f, ri_nir_f, direct_fraction, diffuse_fraction)
 
-Instantaneous radiative forcing state used to build the turtle and directional
-fluxes for one light step.
+Radiative forcing state used to build the turtle and directional fluxes for one
+light step. When produced by [`compute_sky`](@ref), its irradiance fields are
+effective means over the complete meteo interval, after applying
+`radiation_input_semantics`.
 
 Arguments:
 
@@ -811,13 +948,26 @@ end
     FirstOrderResult
 
 Outputs of the first-order interception stage: projected area, incident power,
-and hit counts per node.
+hit counts, and artificial-emitter power that escaped without a geometric hit.
+Escaped power is indexed by emitting source node.
 """
 struct FirstOrderResult
     projected_area_per_node::Dict{Int,Float64}
     incident_power::SpectralNodeValues
     hits_per_node::Dict{Int,Int}
+    emitter_escaped_power::SpectralNodeValues
 end
+
+FirstOrderResult(
+    projected_area_per_node::Dict{Int,Float64},
+    incident_power::SpectralNodeValues,
+    hits_per_node::Dict{Int,Int},
+) = FirstOrderResult(
+    projected_area_per_node,
+    incident_power,
+    hits_per_node,
+    SpectralNodeValues(Dict{Int,Float64}(), Dict{Int,Float64}()),
+)
 
 """
     ScatteringResult
@@ -920,7 +1070,8 @@ end
     LightBudget
 
 Per-node light budget for one simulation step, storing incident and absorbed
-fluxes and energies for PAR, NIR, and optional extra wavebands.
+fluxes and energies for PAR, NIR, and optional extra wavebands. Escaped
+artificial-emitter energy is stored by waveband and emitting source node.
 """
 struct LightBudget
     incident_flux::InitialTotalSpectralNodeValues
@@ -929,7 +1080,25 @@ struct LightBudget
     absorbed_energy::InitialTotalSpectralNodeValues
     extra_initial_energy_per_band::Dict{String,Dict{Int,Float64}}
     extra_energy_per_band::Dict{String,Dict{Int,Float64}}
+    emitter_escaped_energy_per_band::Dict{String,Dict{Int,Float64}}
 end
+
+LightBudget(
+    incident_flux::InitialTotalSpectralNodeValues,
+    incident_energy::InitialTotalSpectralNodeValues,
+    absorbed_flux::InitialTotalSpectralNodeValues,
+    absorbed_energy::InitialTotalSpectralNodeValues,
+    extra_initial_energy_per_band::Dict{String,Dict{Int,Float64}},
+    extra_energy_per_band::Dict{String,Dict{Int,Float64}},
+) = LightBudget(
+    incident_flux,
+    incident_energy,
+    absorbed_flux,
+    absorbed_energy,
+    extra_initial_energy_per_band,
+    extra_energy_per_band,
+    Dict{String,Dict{Int,Float64}}(),
+)
 
 """
     LightStepResult

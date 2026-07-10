@@ -38,13 +38,20 @@ Each pixel stores:
 
 The pixel table is therefore both a visibility structure for first-order interception and a transfer structure reused later by scattering. This makes the model efficient, because it avoids recomputing visibility for each scattering iteration.
 
-When only first-order interception is needed, ARCHIMED only keeps the upper visible hit for each pixel, and discards lower surfaces that will not receive direct light.
-
-> Note that this is true even if the upper surface has a non-zero `transparency` value.
+When only first-order interception is needed, ARCHIMED only keeps the upper
+visible hit for each pixel, and discards lower surfaces that will not receive
+direct light. This remains the compact upper-hit path when the surface has
+non-zero `transparency`: the retained hit's intercepted area and power are
+multiplied by `1 - transparency`, while the transmitted share is not assigned
+to a lower hit. Transparency alone therefore does not switch the solver to a
+full-stack projection.
 
 When scattering, virtual sensors, or light emitters are active, the solver keeps
-the full hit stack instead. In that case `transparency` controls how much of the
-incoming flux continues down the stack and can therefore affect lower hits.
+the full hit stack instead. A non-zero `transparency` keeps lower hits eligible
+for interception. Each eligible surface contributes its own
+`1 - transparency` share of the incident pixel flux; the current ARCHIMED
+compatibility rule does not compound transmission from one transparent layer
+into the next.
 
 ## The Area-Ratio Correction
 
