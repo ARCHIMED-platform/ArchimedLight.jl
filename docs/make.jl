@@ -8,6 +8,9 @@ using Documenter
 
 DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
+# Update the videos:
+# include(joinpath(@__DIR__, "make_video.jl"))
+
 makedocs(;
     modules=[ArchimedLight],
     authors="Rémi Vezy <VEZY@users.noreply.github.com> and contributors",
