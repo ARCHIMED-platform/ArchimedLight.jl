@@ -7,7 +7,9 @@
 [![All Contributors](https://img.shields.io/github/all-contributors/VEZY/ArchimedLight.jl?labelColor=5e1ec7&color=c0ffee&style=flat-square)](#contributors)
 [![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
 
-Julia reimplementation of the ARCHIMED light interception pipeline with a composable, function-first API.
+ArchimedLight.jl is a Julia package for computing radiation interception and scattering using a rasterization approach in discrete directions. 
+
+It is a reimplementation of the Java-based ARCHIMED model from Jean Dauzat (AMAP, CIRAD), with a focus on performance (~15x faster than the Java implementation on CPU) and flexibility (simpler API). The package supports both file-based and in-memory workflows, and provides a simple API for running light simulations on complex 3D scenes.
 
 ![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
 
