@@ -84,6 +84,16 @@ Attach a dictionary of per-node values to the MTG stored in `scene`.
 
 Only geometry nodes present in the prepared scene are updated. Missing node ids
 receive `fill_value`.
+
+Arguments:
+
+- `scene`: MTG-backed `PlantGeom.SceneGeometry` to mutate.
+- `attr`: MTG attribute name to write on each geometry node.
+- `values`: dictionary keyed by node id, containing values to attach.
+
+Keywords:
+
+- `fill_value`: value written for geometry nodes absent from `values`.
 """
 function attach_node_values!(
     scene::PlantGeom.SceneGeometry,
@@ -100,6 +110,20 @@ end
 
 Attach one [`LightStepResult`](@ref) back onto the scene MTG using ARCHIMED-style
 attribute names such as `Ri_PAR_f` and `Ra_PAR_q`.
+
+Arguments:
+
+- `scene`: MTG-backed `PlantGeom.SceneGeometry` to mutate.
+- `step`: one [`LightStepResult`](@ref) whose node-level values will be
+  attached.
+
+Keywords:
+
+- `fields`: budget or metadata selectors to attach.
+- `names`: optional mapping from selectors in `fields` to custom MTG attribute
+  names.
+- `fill_value`: value written for geometry nodes absent from a selected step
+  dictionary.
 
 `fields` selects which budget components to export. Each selected field is
 attached as one scalar MTG attribute per geometry node. Supported selectors are:
@@ -189,6 +213,19 @@ end
     attach_light_series!(scene, steps; fields=[:incident_par_flux], names=Dict(), fill_value=NaN)
 
 Attach a time series of [`LightStepResult`](@ref) values to the scene MTG.
+
+Arguments:
+
+- `scene`: MTG-backed `PlantGeom.SceneGeometry` to mutate.
+- `steps`: ordered vector of [`LightStepResult`](@ref) values to attach.
+
+Keywords:
+
+- `fields`: budget or metadata selectors to attach.
+- `names`: optional mapping from selectors in `fields` to custom MTG attribute
+  names.
+- `fill_value`: value stored for geometry nodes absent from a selected step
+  dictionary.
 
 For each selected field, every geometry node receives a vector ordered like
 `steps`, which is convenient for downstream plotting or coupled simulations.

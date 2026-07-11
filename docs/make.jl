@@ -8,8 +8,8 @@ using Documenter
 
 DocMeta.setdocmeta!(ArchimedLight, :DocTestSetup, :(using ArchimedLight); recursive=true)
 
-include("generate_reference_figures.jl")
-generate_reference_figures()
+# Update the videos:
+# include(joinpath(@__DIR__, "make_video", "make_video.jl"))
 
 makedocs(;
     modules=[ArchimedLight],
@@ -39,17 +39,21 @@ makedocs(;
             "Meteo Inputs" => "reference_meteo.md",
         ],
         "Outputs" => "outputs.md",
+        "Performance Benchmarks" => "performance_benchmarks.md",
         "Under The Hood" => [
             "Pipeline Overview" => "theory_pipeline.md",
             "First-Order Interception" => "theory_interception.md",
             "Scattering And Assumptions" => "theory_scattering.md",
         ],
         "Advanced Usage" => [
-            "Full Example" => "full_example.md",
+            "File-Based Example" => "full_example.md",
             "Composable Stages" => "stages.md",
             "Historical ARCHIMED Reference" => "archimed_reference.md",
         ],
-        "API Reference" => "api.md",
+        "API Reference" => [
+            "Public API" => "api.md",
+            "Advanced API" => "advanced_api.md",
+        ],
     ],
 )
 

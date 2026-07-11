@@ -19,34 +19,32 @@ function _cached_pair_fixture(fx::JuliaFixture)
 end
 
 function run_cached_radiation_pair_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
-    @testset "$(fx.id)" begin
-        data1 = fixture_runtime_data(fx)
-        data2 = fixture_runtime_data(_cached_pair_fixture(fx))
-        out1 = mktempdir()
-        out2 = mktempdir()
-        observed1 = write_fixture_observed_outputs!(fx, out1; data=data1)
-        observed2 = write_fixture_observed_outputs!(fx, out2; data=data2)
+    data1 = fixture_runtime_data(fx)
+    data2 = fixture_runtime_data(_cached_pair_fixture(fx))
+    out1 = mktempdir()
+    out2 = mktempdir()
+    observed1 = write_fixture_observed_outputs!(fx, out1; data=data1)
+    observed2 = write_fixture_observed_outputs!(fx, out2; data=data2)
 
-        for name in ("component_values.csv",)
-            @test haskey(observed1, name)
-            @test haskey(observed2, name)
-            cmp = compare_csv_reference(observed1[name], observed2[name]; label="$(fx.id):$(name)")
-            if !cmp.ok
-                @info "Cached radiation pair mismatch" fixture = fx.id file = name missing = cmp.missing extra = cmp.extra mismatch = cmp.mismatch detail = cmp.detail
-            end
-            @test cmp.ok
+    for name in ("component_values.csv",)
+        @test haskey(observed1, name)
+        @test haskey(observed2, name)
+        cmp = compare_csv_reference(observed1[name], observed2[name]; label="$(fx.id):$(name)")
+        if !cmp.ok
+            @info "Cached radiation pair mismatch" fixture = fx.id file = name missing = cmp.missing extra = cmp.extra mismatch = cmp.mismatch detail = cmp.detail
         end
+        @test cmp.ok
     end
     return nothing
 end
 
 function run_release_fixture!(fx::JuliaFixture; index::Int=1, total::Int=1)
-    if fx.id in _CACHE_PAIR_FIXTURES
-        return run_cached_radiation_pair_fixture!(fx; index=index, total=total)
-    end
-
     started = now(UTC)
     @testset "$(fx.id)" begin
+        if fx.id in _CACHE_PAIR_FIXTURES
+            run_cached_radiation_pair_fixture!(fx; index=index, total=total)
+        end
+
         data = fixture_runtime_data(fx)
         outdir = mktempdir()
         observed = write_fixture_observed_outputs!(fx, outdir; data=data)

@@ -6,7 +6,8 @@ CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 PlantGeom = "5edaa67e-25db-4eb9-bf81-05d793b2238d"
+PlantMeteo = "4630fe09-e0fb-4da5-a846-781cb73437b6"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [sources]
-ArchimedLight = { path = ".." }
+ArchimedLight = {path = ".."}

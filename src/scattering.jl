@@ -458,7 +458,15 @@ function _group_optical_coeffs(models::LightModels)
 
             coeff =
                 if _is_sensor_interception(interception)
-                    Dict{String,Float64}("PAR" => 0.0, "NIR" => 0.0)
+                    # Virtual sensors observe every waveband without scattering it.
+                    # The sentinel is consulted after an exact band lookup so it
+                    # also covers custom bands that were not known when the model
+                    # was parsed.
+                    Dict{String,Float64}(
+                        "PAR" => 0.0,
+                        "NIR" => 0.0,
+                        "__ALL_BANDS__" => 0.0,
+                    )
                 else
                     props = interception.optical_properties
                     props === nothing && continue
@@ -467,6 +475,13 @@ function _group_optical_coeffs(models::LightModels)
                     has_nir = get(props.extras, "__has_nir", true)
                     has_par && (band_coeffs["PAR"] = props.par)
                     has_nir && (band_coeffs["NIR"] = props.nir)
+                    for (name, value) in props.extras
+                        band = uppercase(strip(String(name)))
+                        (isempty(band) || startswith(band, "__") || band == "TIR") && continue
+                        coeff = _as_float(value, NaN)
+                        isfinite(coeff) || continue
+                        band_coeffs[band] = coeff
+                    end
                     band_coeffs
                 end
 
@@ -617,8 +632,7 @@ end
 
 function _scattering_backend_from_mode(mode::Symbol)
     mode == :raycast && return RaycastScatteringBackend()
-    mode == :links && return LinksScatteringBackend()
-    error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+    error("Unsupported scattering mode: $mode (supported: :raycast)")
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend::Nothing)
@@ -626,14 +640,14 @@ function _resolve_scattering_backend(mode::Symbol, backend::Nothing)
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend::ScatteringBackend)
-    mode in (:raycast, :links) || error("Unsupported scattering mode: $mode (supported: :raycast, :links)")
+    mode == :raycast || error("Unsupported scattering mode: $mode (supported: :raycast)")
     return backend
 end
 
 function _resolve_scattering_backend(mode::Symbol, backend)
     error(
         "Unsupported scattering backend selector type: $(typeof(backend)). " *
-        "Use `nothing`, `RaycastScatteringBackend()`, or `LinksScatteringBackend()`.",
+        "Use `nothing` or `RaycastScatteringBackend()`.",
     )
 end
 
@@ -670,18 +684,6 @@ function build_scattering_transfer_graph(
 end
 
 function build_scattering_transfer_graph(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    # CPU reference currently uses the same transfer-graph construction for both modes.
-    return build_scattering_transfer_graph(scene, models, turtle, first, options, RaycastScatteringBackend())
-end
-
-function build_scattering_transfer_graph(
     topology::ScatteringTopologyCache,
     first::FirstOrderResult,
     options::LightOptions;
@@ -701,15 +703,6 @@ function build_scattering_transfer_graph(
     return _transfer_graph_from_topology(topology, first, options)
 end
 
-function build_scattering_transfer_graph(
-    topology::ScatteringTopologyCache,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    return build_scattering_transfer_graph(topology, first, options, RaycastScatteringBackend())
-end
-
 function _default_band_coeff(options::LightOptions, band_key::String)
     bk = uppercase(band_key)
     bk == "NIR" && return options.scattering_coeff_nir
@@ -726,9 +719,17 @@ end
     coeffs = get(
         group_type_coeffs,
         (group, type_name),
-        get(group_type_coeffs, (group, "*"), Dict{String,Float64}()),
+        get(
+            group_type_coeffs,
+            (group, "*"),
+            get(
+                group_type_coeffs,
+                ("*", type_name),
+                get(group_type_coeffs, ("*", "*"), Dict{String,Float64}()),
+            ),
+        ),
     )
-    return get(coeffs, band, default_coeff)
+    return get(coeffs, band, get(coeffs, "__ALL_BANDS__", default_coeff))
 end
 
 function _coeff_by_node(
@@ -821,6 +822,9 @@ function _propagate_scattering_one_band(
     all_hits = graph.all_hits
     current = _copy_node_values(initial_power_per_node, node_ids)
     added = _dict_zero(node_ids)
+    # Match Java's scene-wide stopping rule: diagnostic observations from
+    # virtual sensors are included in the iteration totals even though their
+    # scattering coefficient is zero and they do not re-emit energy.
     ref = _sum_dict_values(current)
     thr = options.scattering_stop_ratio * max(ref, eps(Float64))
     iterations = 0
@@ -918,27 +922,6 @@ function compute_scattering_band(
 end
 
 function compute_scattering_band(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend;
-    band::AbstractString="PAR",
-    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    # CPU reference currently shares the same iterative propagation path.
-    return compute_scattering_band(
-        graph,
-        first,
-        options,
-        RaycastScatteringBackend();
-        band=band,
-        initial_power_per_node=initial_power_per_node,
-        default_coeff=default_coeff,
-    )
-end
-
-function compute_scattering_band(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
     turtle::TurtleGrid,
@@ -1030,16 +1013,6 @@ function compute_scattering(
     )
 
     ScatteringResult(SpectralNodeValues(added_par, added_nir), max(it_par, it_nir), conv_par && conv_nir)
-end
-
-function compute_scattering(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::LinksScatteringBackend,
-)
-    # CPU reference currently shares the same iterative propagation path.
-    return compute_scattering(graph, first, options, RaycastScatteringBackend())
 end
 
 function compute_scattering(

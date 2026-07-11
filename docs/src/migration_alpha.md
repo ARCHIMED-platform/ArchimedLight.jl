@@ -10,7 +10,7 @@ Old:
 
 ```julia
 options, scene, meteo, models = read_config("config.yml")
-row = first(prepare_meteo(meteo, options).rows)
+row = first(prepare_meteo(meteo, options))
 step = run_light_step(scene, models, row, options)
 ```
 

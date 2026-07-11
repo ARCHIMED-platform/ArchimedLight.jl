@@ -91,29 +91,55 @@ source `s`, waveband `b`, and direction `d`. Natural illumination has sources
 such as the sun and sky sectors. An artificial emitter adds another source to
 that same light budget.
 
-For an emitter, `radiance` is the total emitted magnitude attached to the
-emitting component type, and `gamma` partitions that magnitude by waveband. For
-example, `gamma.PAR = 0.48` means that 48 percent of the emitted energy is
-treated as PAR. Conceptually, the emitted source term for a band is:
+For an emitter, `radiance` is the Lambertian spectral radiance `L` per emitting
+surface area and steradian. `gamma` contains independent waveband coefficients;
+the values are used exactly as supplied and are not normalized. For a source
+surface of area `A`, the hemispherical source power for band `b` is:
 
 ```text
-I[b, s] = gamma[b, s] * I[s]
+P[b, s] = pi * A[s] * L[s] * gamma[b, s]
 ```
 
-This package treats `LightEmitter` components as Lambertian-style scene
-sources. Their emitted light is routed through the same directional visibility
-and pixel-stack machinery used by first-order interception, so receivers still
-use their usual model semantics: group/type matching, transparency, virtual
-sensor behavior, and waveband-specific optical properties. If scattering is
-enabled, the emitter-contributed first-order light joins the same scattered
-energy pool as sky and sun light.
+The current emitter model is one-sided and assumes horizontal surfaces emitting
+into the downward hemisphere, which is discretized with the non-solar turtle
+sectors. Each sector is weighted by both its solid angle and `cos(theta)`; a single
+quadrature correction preserves the exact Lambertian hemispherical integral
+`pi`. Within a sector, emission is uniform per projected source area. A ray is
+assigned only to its first distinct geometric hit. Another emitting surface is
+therefore an occluding receiver, while a ray with no subsequent hit is recorded
+as escaped energy. Receiver shares plus the escaped share equal the emitted
+power; successful hits are never renormalized to hide escape.
+
+Virtual sensors are observations rather than physical first hits. They record
+the emitter power crossing their surface, but the ray continues to the first
+physical receiver or to escape. Sensor observations are consequently not part
+of the received-plus-escaped energy closure. Custom `gamma` entries use the
+same transfer fractions as PAR and NIR and remain separate wavebands throughout
+first-order interception and scattering.
+
+The historical Java implementation interpreted `radiance` as component-total
+power. To reproduce an old Java source with total magnitude `P_java` on one
+panel of area `A`, use `L = P_java / (pi * A)` in the Julia model. The Java
+light-source fixtures are retained as numerical regression references through
+this explicit conversion; they do not override the area-based radiance
+definition above.
+
+Emitter-contributed first-order light joins the same scattered energy pool as
+sky and sun light when scattering is enabled.
 
 This is deliberately simpler than a full photometric lamp or point-source ray
 tracer, but it is sufficient for the purpose of adding artificial light to a scene.
 
 ## Virtual Sensors
 
-Virtual sensors are special because they receive light and can report how much they receive, but they do not behave as absorbing geometry. In other words, they are treated as transparent during scattering. This is important because it allows the model to report light received by sensors without changing the scattering behavior of the scene.
+Virtual sensors are special because they receive light and can report how much
+they receive, but they do not behave as absorbing geometry. In other words,
+they are treated as transparent during scattering and their scattering
+coefficient is zero. For Java parity, their observations still enter the
+scene-wide convergence total. A sensor can therefore affect the finite
+iteration at which the solver stops when the result lies very close to the
+stopping threshold, even though the sensor never re-emits or consumes the
+transferred energy.
 They usually are used to measure light received at a specific location, such as a sensor on a leaf or a camera in the scene.
 
 ## Soil And Ground Matter More When Scattering Is Enabled

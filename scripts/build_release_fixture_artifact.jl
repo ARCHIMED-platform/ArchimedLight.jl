@@ -88,7 +88,7 @@ function _copy_tree_filtered!(
         src_path = joinpath(src, name)
         dst_path = joinpath(dst, name)
         if isdir(src_path)
-            if prune_output && name == "output"
+            if prune_output && startswith(name, "output")
                 continue
             end
             if name in skip_top_dirs
@@ -330,4 +330,6 @@ function main(args)
     end
 end
 
-main(ARGS)
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main(ARGS)
+end

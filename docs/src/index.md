@@ -10,9 +10,36 @@ It is designed around a simple workflow: build or read a scene, define optical
 models, create a `LightSimulation`, then call `run_light` for one meteo row or
 a complete meteo table.
 
-![Coffee scene light interception](assets/coffee_scene_light_interception.png)
+```@raw html
+<div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem;">
+  <video
+    style="width:100%; border-radius:0.75rem;"
+    autoplay muted loop playsinline controls preload="metadata"
+    poster="assets/archimedlight_day_cycle_1.png"
+    aria-label="ARCHIMED light simulation day cycle 1">
+    <source src="assets/archimedlight_day_cycle_1.mp4" type="video/mp4">
+  </video>
 
-The image above is generated from the bundled coffee example in `example_2/`. It loads the ARCHIMED coffee scene, runs one light step, attaches `Ri_PAR_f` onto the MTG, and renders the result with `PlantGeom.plantviz`.
+  <video
+    style="width:100%; border-radius:0.75rem;"
+    autoplay muted loop playsinline controls preload="metadata"
+    poster="assets/archimedlight_day_cycle_2.png"
+    aria-label="ARCHIMED light simulation day cycle 2">
+    <source src="assets/archimedlight_day_cycle_2.mp4" type="video/mp4">
+  </video>
+</div>
+```
+
+<details>
+<summary>Reproducing the figures</summary>
+
+The animation runs the wheat and agrivoltaic wheat scenes from the
+`archimedlight-benchmark-scenes` artifact every 30 minutes over a representative
+clear-sky day. Each plot has about 2,500 explicit ground tiles, making the
+moving projected shade visible while the same color scale tracks incident PAR
+irradiance through the day. The script to reproduce these figures is in
+[`docs/make_video.jl`](https://github.com/VEZY/ArchimedLight.jl/blob/main/docs/make_video.jl).
+</details>
 
 ## Scope
 
@@ -28,15 +55,17 @@ Energy balance, transpiration, and photosynthesis are intentionally out of scope
 
 ## Quick Start
 
-```julia
+```@example home_quick_start
 using ArchimedLight
 
-sim, meteo = read_simulation("config.yml")
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
+sim, meteo = read_simulation(config)
 
 step = run_light(sim, first(meteo))
 
-step.budget.incident_flux.total.par
-step.budget.absorbed_energy.total.par
+step.budget.incident_flux.total.par;
+step.budget.absorbed_energy.total.par;
 ```
 
 The simulation results are grouped by quantity and waveband in `LightBudget`. When you attach those values back onto the scene, the default attribute names keep the standard ARCHIMED naming convention such as `Ri_PAR_f`, `Ri_PAR_q`, and `Ra_PAR_q`.
@@ -58,6 +87,7 @@ The simulation results are grouped by quantity and waveband in `LightBudget`. Wh
 - [Model Files Reference](reference_models.md)
 - [Meteo Inputs Reference](reference_meteo.md)
 - [Outputs](outputs.md)
+- [CPU Performance Benchmarks](performance_benchmarks.md)
 - [Pipeline Overview](theory_pipeline.md)
 - [First-Order Interception](theory_interception.md)
 - [Scattering And Optical Assumptions](theory_scattering.md)

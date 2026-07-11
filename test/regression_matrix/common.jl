@@ -83,7 +83,7 @@ function _row_get(row, col::String)
         return get(row, col, get(row, Symbol(col), missing))
     end
     s = Symbol(col)
-    return s in propertynames(row) ? getproperty(row, s) : missing
+    return s in ArchimedLight._row_propertynames(row) ? getproperty(row, s) : missing
 end
 
 function _try_float(v)
@@ -99,10 +99,10 @@ function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
             [
-                ["step_number", "component_id"],
                 ["step_number", "item_id", "component_id"],
-                ["step_number", "source_topology_id"],
                 ["step_number", "object_id", "source_topology_id"],
+                ["step_number", "source_topology_id"],
+                ["step_number", "component_id"],
                 ["step_number", "node_id"],
             ]
         elseif name == "scene_values.csv"

@@ -115,7 +115,7 @@ function _synthetic_meteo_for_source(source_id::String)
             _synthetic_meteo_row(; date=Date(2020, 6, 21), start_time=Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
             _synthetic_meteo_row(; date=Date(2020, 6, 22), start_time=Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
         ]
-        return ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_series"))
+        return ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_cached_series"))
     elseif source_id == "toricity_wraparound"
         return _synthetic_meteo_row(; duration_seconds=1.0, ri_par_f=100.0, ri_nir_f=0.0, direct_fraction=1.0, sun_azimut=270.0, sun_elevation=45.0)
     end

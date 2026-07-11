@@ -2,7 +2,7 @@
     include(joinpath(@__DIR__, "support.jl"))
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "sky_06_direct", "input"))
-    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options))
     sky = ArchimedLight.compute_sky(row, fixture.options)
     turtle = ArchimedLight.build_turtle(fixture.options, sky)
     flux = ArchimedLight.compute_directional_fluxes(sky, turtle, fixture.options)
@@ -19,7 +19,7 @@ end
     include(joinpath(@__DIR__, "support.jl"))
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "sky_16_turtle", "input"))
-    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options))
     sky = ArchimedLight.compute_sky(row, fixture.options)
     turtle = ArchimedLight.build_turtle(fixture.options, sky)
     flux = ArchimedLight.compute_directional_fluxes(sky, turtle, fixture.options)
@@ -36,7 +36,7 @@ end
     include(joinpath(@__DIR__, "support.jl"))
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "sky_46_direct", "input"))
-    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options))
     sky = ArchimedLight.compute_sky(row, fixture.options)
     turtle = ArchimedLight.build_turtle(fixture.options, sky)
     flux = ArchimedLight.compute_directional_fluxes(sky, turtle, fixture.options)
