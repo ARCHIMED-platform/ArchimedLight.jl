@@ -138,6 +138,18 @@ struct PreparedInterceptionData
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}
 end
 
+function _emitter_source_node_map(
+    prepared::PreparedInterceptionData,
+    values::AbstractVector{<:Real},
+)
+    out = Dict{Int,Float64}()
+    sizehint!(out, length(prepared.emitter_nodes))
+    for nid in prepared.emitter_nodes
+        @inbounds out[nid] = Float64(values[prepared.geometry.node_index[nid]])
+    end
+    return out
+end
+
 """
 Discrete Lambertian transfer accounting for scene emitters.
 
@@ -3183,8 +3195,8 @@ function _compute_first_order(
         ),
         _all_dense_int_node_map(geometry.node_ids, hits_per_node),
         SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, emitter_escaped_power_par),
-            _all_dense_float_node_map(geometry.node_ids, emitter_escaped_power_nir),
+            _emitter_source_node_map(prepared, emitter_escaped_power_par),
+            _emitter_source_node_map(prepared, emitter_escaped_power_nir),
         ),
     )
 end

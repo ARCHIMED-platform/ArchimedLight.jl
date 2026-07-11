@@ -130,8 +130,8 @@ function integrate_light(
     end
 
     emitter_escaped_power_per_band = Dict{String,Dict{Int,Float64}}(
-        "PAR" => Dict{Int,Float64}(first.emitter_escaped_power.par),
-        "NIR" => Dict{Int,Float64}(first.emitter_escaped_power.nir),
+        "PAR" => first.emitter_escaped_power.par,
+        "NIR" => first.emitter_escaped_power.nir,
     )
     for (band, values) in extra_emitter_escaped_power_per_band
         emitter_escaped_power_per_band[uppercase(band)] = values
@@ -530,8 +530,8 @@ function _combine_sector_responses(
         ),
         _all_dense_int_node_map(node_ids, hits_per_node),
         SpectralNodeValues(
-            _all_dense_float_node_map(node_ids, emitter_escaped_power_par.values),
-            _all_dense_float_node_map(node_ids, emitter_escaped_power_nir.values),
+            _emitter_source_node_map(responses.prepared, emitter_escaped_power_par.values),
+            _emitter_source_node_map(responses.prepared, emitter_escaped_power_nir.values),
         ),
     )
 end
@@ -688,8 +688,8 @@ function _stream_first_order_with_scattering_topology(
         ),
         _all_dense_int_node_map(geometry.node_ids, hits_per_node),
         SpectralNodeValues(
-            _all_dense_float_node_map(geometry.node_ids, emitter_escaped_power_par),
-            _all_dense_float_node_map(geometry.node_ids, emitter_escaped_power_nir),
+            _emitter_source_node_map(prepared, emitter_escaped_power_par),
+            _emitter_source_node_map(prepared, emitter_escaped_power_nir),
         ),
     )
     topology = _build_scattering_topology_cache(
@@ -1172,10 +1172,12 @@ function _extra_band_irradiance(meteo_row)
 end
 
 function _extra_band_irradiance(meteo_row, options::LightOptions)
+    extras = _extra_band_irradiance(meteo_row)
+    isempty(extras) && return extras
     scale = _radiation_input_effective_scale(meteo_row, options)
     return Dict{String,Float64}(
         band => irradiance * scale
-        for (band, irradiance) in _extra_band_irradiance(meteo_row)
+        for (band, irradiance) in extras
     )
 end
 
@@ -1184,6 +1186,7 @@ function _extra_band_irradiance(
     meteo_row,
     options::LightOptions,
 )
+    isempty(resolved.extra_irradiance) && return Dict{String,Float64}()
     scale = _radiation_input_effective_scale(meteo_row, options, resolved)
     return Dict{String,Float64}(
         band => max(irradiance, 0.0) * scale
@@ -1254,6 +1257,7 @@ function _compute_extra_band_light(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
     responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
+    prepared::Union{Nothing,PreparedInterceptionData}=nothing,
     resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
 )
     extras_irr =
@@ -1261,9 +1265,11 @@ function _compute_extra_band_light(
         resolved_step === nothing ? _extra_band_irradiance(meteo_row, options) :
         _extra_band_irradiance(resolved_step, meteo_row, options)
     emitter_power_per_band =
-        responses_cache === nothing ?
-        _emitter_power_per_band_per_node(scene, models) :
-        responses_cache.prepared.emitter_power_per_band_per_node
+        responses_cache !== nothing ?
+        responses_cache.prepared.emitter_power_per_band_per_node :
+        prepared !== nothing ?
+        prepared.emitter_power_per_band_per_node :
+        _emitter_power_per_band_per_node(scene, models)
     _include_emitter_extra_bands!(extras_irr, emitter_power_per_band)
     extra_0_q = Dict{String,Dict{Int,Float64}}()
     extra_q = Dict{String,Dict{Int,Float64}}()
@@ -1410,14 +1416,61 @@ function _validate_lightweight_node_metadata_value(value, attribute::Symbol, nid
     ))
 end
 
+function _node_metadata_object_value!(cache::Dict{Int,Any}, node)
+    node_id = Int(MultiScaleTreeGraph.node_id(node))
+    haskey(cache, node_id) && return cache[node_id]
+    raw = nothing
+    for key in (:object_id, :plantID, :plant_id, :item_id, :itemID, :id)
+        raw = _mtg_node_attr(node, key)
+        raw === nothing || break
+    end
+    value =
+        if raw !== nothing
+            raw
+        elseif MultiScaleTreeGraph.isroot(node)
+            nothing
+        else
+            _node_metadata_object_value!(cache, MultiScaleTreeGraph.parent(node))
+        end
+    cache[node_id] = value
+    return value
+end
+
+function _node_metadata_inherited_attr(node, attribute::Symbol)
+    current = node
+    while current !== nothing
+        value = _mtg_node_attr(current, attribute)
+        value === nothing || return value
+        MultiScaleTreeGraph.isroot(current) && break
+        current = MultiScaleTreeGraph.parent(current)
+    end
+    return nothing
+end
+
+function _node_metadata_display_type(
+    models::LightModels,
+    group::String,
+    type_name0::String,
+)
+    type_name = strip(type_name0)
+    if isempty(type_name) || lowercase(type_name) == "mesh"
+        if haskey(models, group)
+            group_model = models[group]
+            length(group_model.types) == 1 && return first(keys(group_model.types))
+        elseif group == "pavement"
+            return "Cobblestone"
+        end
+    end
+    return type_name
+end
+
 function _build_light_node_metadata(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
     options::LightOptions,
-    geometry_node_ids,
+    geometry::InterceptionSceneData,
 )
-    node_ids = sort!(collect(Int, geometry_node_ids))
-    output_keys = _interception_output_keys_for_node_ids(scene, node_ids)
+    node_ids = sort!(copy(geometry.node_ids))
     source_topology_ids = Int[]
     object_ids = Int[]
     item_ids = Int[]
@@ -1429,6 +1482,8 @@ function _build_light_node_metadata(
     attribute_names = options.node_metadata_attributes
     local_columns = [Any[] for _ in attribute_names]
     inherited_columns = [Any[] for _ in attribute_names]
+    object_id_cache = Dict{Int,Any}()
+    pavement_index = 0
 
     scene.mtg === nothing && throw(
         ArgumentError("store_node_metadata=true requires an MTG-backed scene."),
@@ -1442,21 +1497,36 @@ function _build_light_node_metadata(
     for nid in node_ids
         node = _scene_mtg_node(scene, nid)
         node === nothing && throw(ArgumentError("Geometric node id $nid is absent from the scene MTG."))
+        geometry_index = geometry.node_index[nid]
+        group = geometry.node_group_by_index[geometry_index]
+        type_name = _node_metadata_display_type(
+            models,
+            group,
+            geometry.node_type_by_index[geometry_index],
+        )
         source_topology_id = _scene_source_topology_id(scene, nid, nid)
-        object_id = _scene_object_id(scene, nid, -1)
-        item_id, component_id = get(output_keys, nid, (object_id, source_topology_id))
+        output_component_id = _scene_source_topology_id(scene, nid, nid + 1)
+        object_value = _node_metadata_object_value!(object_id_cache, node)
+        object_id = _as_int_or_default(object_value, -1)
+        item_id, component_id =
+            if group == "pavement"
+                pavement_index += 1
+                (-1, pavement_index + 1)
+            else
+                (_as_int_or_default(object_value, 1), output_component_id)
+            end
         push!(source_topology_ids, source_topology_id)
         push!(object_ids, object_id)
         push!(item_ids, item_id)
         push!(component_ids, component_id)
-        push!(groups, _scene_group(scene, nid, ""))
-        push!(types, _scene_display_type(scene, models, nid))
+        push!(groups, group)
+        push!(types, type_name)
         push!(symbols, Symbol(MultiScaleTreeGraph.symbol(node)))
         push!(scales, Int(MultiScaleTreeGraph.scale(node)))
 
         for (i, attribute) in enumerate(attribute_names)
             local_value = MultiScaleTreeGraph.attribute(node, attribute; default=nothing)
-            inherited_value = _inherited_attr(scene, nid, (attribute,), nothing)
+            inherited_value = _node_metadata_inherited_attr(node, attribute)
             push!(
                 local_columns[i],
                 _validate_lightweight_node_metadata_value(local_value, attribute, nid),
@@ -1512,7 +1582,56 @@ function _estimate_light_cache_entry_bytes(prepared::PreparedInterceptionData, o
     return Int(min(base, Int128(typemax(Int))))
 end
 
-function _turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+const _CACHE_CONTAINER_OVERHEAD_BYTES = 64
+const _CACHE_EMPTY_DICT_BYTES = 256
+const _CACHE_TURTLE_SECTOR_BYTES = 256
+
+@inline _cache_vector_retained_bytes(values::Vector) =
+    _CACHE_CONTAINER_OVERHEAD_BYTES + sizeof(values)
+
+@inline function _cache_dense_map_retained_bytes(values::DenseNodeMap)
+    return _CACHE_CONTAINER_OVERHEAD_BYTES +
+           _cache_vector_retained_bytes(values.values) +
+           _cache_vector_retained_bytes(values.active_indices)
+end
+
+function _plain_turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+    responses = entry.responses_cache
+    bytes = 3 * _CACHE_CONTAINER_OVERHEAD_BYTES # entry, response cache, turtle
+    bytes += _cache_vector_retained_bytes(entry.turtle.sectors)
+    bytes += _CACHE_TURTLE_SECTOR_BYTES * length(entry.turtle.sectors)
+    bytes += _cache_vector_retained_bytes(responses.node_ids)
+
+    for maps in (responses.projected_area_per_sector, responses.hits_per_sector)
+        bytes += _cache_vector_retained_bytes(maps)
+        for values in maps
+            bytes += _cache_dense_map_retained_bytes(values)
+        end
+    end
+    for values in (
+        responses.emitter_incident_power_par,
+        responses.emitter_incident_power_nir,
+        responses.emitter_escaped_power_par,
+        responses.emitter_escaped_power_nir,
+    )
+        bytes += _cache_dense_map_retained_bytes(values)
+    end
+
+    for values in (
+        entry.par_added_per_sector,
+        entry.nir_added_per_sector,
+        entry.par_iterations_per_sector,
+        entry.nir_iterations_per_sector,
+        entry.par_converged_per_sector,
+        entry.nir_converged_per_sector,
+    )
+        bytes += _cache_vector_retained_bytes(values)
+    end
+    bytes += 3 * _CACHE_EMPTY_DICT_BYTES
+    return bytes
+end
+
+function _summarysize_turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
     responses = entry.responses_cache
     # Measure every allocation retained only because this entry is resident.
     # `responses.prepared` is deliberately represented by one pointer-sized
@@ -1546,6 +1665,23 @@ function _turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
         entry.last_used_tick,
     )
     return Base.summarysize(retained)
+end
+
+function _turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+    responses = entry.responses_cache
+    if responses.emitter_transfer === nothing &&
+       responses.scattering_topology === nothing &&
+       isempty(entry.extra_added_per_sector) &&
+       isempty(entry.extra_iterations_per_sector) &&
+       isempty(entry.extra_converged_per_sector)
+        # The common no-emitter/no-scattering entry contains only vectors and
+        # empty dictionaries. Count their storage directly instead of walking
+        # the entire object graph with `summarysize`. The constants deliberately
+        # overestimate Julia container/header storage so the cache cap remains
+        # conservative.
+        return _plain_turtle_cache_entry_retained_bytes(entry)
+    end
+    return _summarysize_turtle_cache_entry_retained_bytes(entry)
 end
 
 @inline function _dense_vector_from_node_values(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
@@ -1621,7 +1757,7 @@ function prepare_light_cache(
     render_geometry = _light_render_geometry(interception_geometry)
     node_metadata =
         options.store_node_metadata && scene.mtg !== nothing ?
-        _build_light_node_metadata(scene, models, options, interception_geometry.node_ids) : nothing
+        _build_light_node_metadata(scene, models, options, interception_geometry) : nothing
     limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
     limit = max(limit, 1)
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
@@ -2684,6 +2820,7 @@ function _run_light_step_cached(
                 scattering_mode=cache.scattering_mode,
                 scattering_backend=cache.scattering_backend,
                 responses_cache=responses_cache,
+                prepared=prepared,
                 resolved_step=resolved,
             )
     end
@@ -2788,6 +2925,7 @@ function _run_light_sky_cached(
             scattering_mode=cache.scattering_mode,
             scattering_backend=cache.scattering_backend,
             responses_cache=responses_cache,
+            prepared=prepared,
         )
     nir_interception || (first = _disable_nir_first_order_local(first))
     budget = integrate_light(

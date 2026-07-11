@@ -79,6 +79,32 @@ end
     @test cache_summary(sim).node_metadata_bytes > 0
     @test light_node_ids(step1; object_id=2, source_topology_id=103) == [3]
 
+    fallback_scene = QueryHelper._synthetic_horizontal_scene([
+        (x0=0.0, x1=0.5, y0=0.0, y1=0.5, z=1.0, group="coffee", type="Leaf", object_id=7),
+    ]; root_id=100)
+    fallback_data = fallback_scene.nodes[1]
+    fallback_scene.nodes[1] = QueryHelper.PlantGeom.SceneNodeData(
+        fallback_data.area,
+        fallback_data.barycenter,
+        nothing,
+    )
+    fallback_cache = ArchimedLight.prepare_light_cache(
+        fallback_scene,
+        models,
+        QueryHelper._synthetic_options(
+            sectors=1,
+            all_in_turtle=false,
+            scattering=false,
+            toricity=false,
+        ),
+    )
+    fallback_metadata = something(fallback_cache.node_metadata)
+    @test fallback_metadata.node_id == [1]
+    @test fallback_metadata.source_topology_id == [1]
+    @test fallback_metadata.object_id == [7]
+    @test fallback_metadata.item_id == [7]
+    @test fallback_metadata.component_id == [2]
+
     leaves = light_metric_values(
         sim,
         step1,

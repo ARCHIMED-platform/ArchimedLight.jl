@@ -111,30 +111,16 @@ function _meteo_parse_number(value)
     return isfinite(parsed) ? (parsed, "") : (nothing, string(parsed))
 end
 
-function _meteo_collect_level_values(row, aliases; metadata::Bool)
+function _meteo_collect_level_values(container, names, aliases)
     finite = Pair{Symbol,Float64}[]
     unavailable = Pair{Symbol,String}[]
-    if metadata
-        meta = _meteo_metadata(row)
-        for name in aliases
-            hasproperty(meta, name) || continue
-            value, reason = _meteo_parse_number(getproperty(meta, name))
-            if value === nothing
-                push!(unavailable, name => reason)
-            else
-                push!(finite, name => value)
-            end
-        end
-    else
-        names = _meteo_row_names(row)
-        for name in aliases
-            name in names || continue
-            value, reason = _meteo_parse_number(getproperty(row, name))
-            if value === nothing
-                push!(unavailable, name => reason)
-            else
-                push!(finite, name => value)
-            end
+    for name in aliases
+        name in names || continue
+        value, reason = _meteo_parse_number(getproperty(container, name))
+        if value === nothing
+            push!(unavailable, name => reason)
+        else
+            push!(finite, name => value)
         end
     end
     return finite, unavailable
@@ -187,11 +173,13 @@ function _meteo_resolve_logical_value!(
     row,
     row_index::Int,
     logical_name::Symbol,
+    row_names,
+    metadata,
+    metadata_names,
 )
     aliases = getproperty(_METEO_ALIASES, logical_name)
     canonical_name = getproperty(_METEO_CANONICAL_NAMES, logical_name)
-    row_finite, row_unavailable =
-        _meteo_collect_level_values(row, aliases; metadata=false)
+    row_finite, row_unavailable = _meteo_collect_level_values(row, row_names, aliases)
     if !isempty(row_finite)
         value, source = _meteo_choose_finite_value!(
             errors,
@@ -204,7 +192,7 @@ function _meteo_resolve_logical_value!(
     end
 
     metadata_finite, metadata_unavailable =
-        _meteo_collect_level_values(row, aliases; metadata=true)
+        _meteo_collect_level_values(metadata, metadata_names, aliases)
     value, source = _meteo_choose_finite_value!(
         errors,
         row_index,
@@ -287,8 +275,7 @@ function _meteo_parse_integer_value(value, name::Symbol)
     return rounded, ""
 end
 
-function _meteo_resolve_date(row)
-    names = _meteo_row_names(row)
+function _meteo_resolve_date(row, names)
     reasons = String[]
     if :date in names
         date, datetime_hour, reason = _meteo_parse_date_value(getproperty(row, :date))
@@ -325,8 +312,7 @@ function _meteo_resolve_date(row)
     return nothing, nothing, nothing, reasons
 end
 
-function _meteo_resolve_start_time(row, datetime_hour)
-    names = _meteo_row_names(row)
+function _meteo_resolve_start_time(row, datetime_hour, names)
     reasons = String[]
     for name in (:hour_start, :hour)
         name in names || continue
@@ -340,16 +326,15 @@ function _meteo_resolve_start_time(row, datetime_hour)
     return nothing, nothing, reasons
 end
 
-function _meteo_resolve_end_time(row)
-    :hour_end in _meteo_row_names(row) ||
+function _meteo_resolve_end_time(row, names)
+    :hour_end in names ||
         return nothing, nothing, ["no `hour_end` is provided"]
     value, reason = _meteo_parse_time_value(getproperty(row, :hour_end))
     value === nothing && return nothing, nothing, ["`hour_end` is $(reason)"]
     return _meteo_decimal_hour(value), :hour_end, String[]
 end
 
-function _meteo_resolve_explicit_duration(row)
-    names = _meteo_row_names(row)
+function _meteo_resolve_explicit_duration(row, names)
     reasons = String[]
     for name in (:step_duration, :duration)
         name in names || continue
@@ -365,13 +350,20 @@ function _meteo_resolve_explicit_duration(row)
     return nothing, nothing, reasons
 end
 
-function _meteo_resolve_temporal!(errors::Vector{String}, row, row_index::Int, sources)
-    date, datetime_hour, date_source, date_reasons = _meteo_resolve_date(row)
+function _meteo_resolve_temporal!(
+    errors::Vector{String},
+    row,
+    row_index::Int,
+    sources,
+    row_names,
+)
+    date, datetime_hour, date_source, date_reasons = _meteo_resolve_date(row, row_names)
     start_hour, start_source, start_reasons =
-        _meteo_resolve_start_time(row, datetime_hour)
-    explicit_end_hour, explicit_end_source, end_reasons = _meteo_resolve_end_time(row)
+        _meteo_resolve_start_time(row, datetime_hour, row_names)
+    explicit_end_hour, explicit_end_source, end_reasons =
+        _meteo_resolve_end_time(row, row_names)
     duration_seconds, duration_source, duration_reasons =
-        _meteo_resolve_explicit_duration(row)
+        _meteo_resolve_explicit_duration(row, row_names)
 
     end_before_start =
         start_hour !== nothing && explicit_end_hour !== nothing &&
@@ -434,6 +426,9 @@ function _meteo_resolve_temporal!(errors::Vector{String}, row, row_index::Int, s
         interval_reasons=unique(interval_reasons),
     )
 end
+
+_meteo_resolve_temporal!(errors::Vector{String}, row, row_index::Int, sources) =
+    _meteo_resolve_temporal!(errors, row, row_index, sources, _meteo_row_names(row))
 
 function _meteo_require_solar_interval!(errors, temporal, row_index::Int)
     for reason in temporal.interval_reasons
@@ -513,7 +508,10 @@ function _meteo_resolve_extra_bands!(
     errors::Vector{String},
     warnings::Vector{String},
     row,
-    row_index::Int;
+    row_index::Int,
+    row_names,
+    metadata,
+    metadata_names;
     check_boundaries::Bool,
 )
     function collect_finite(container, names)
@@ -534,9 +532,8 @@ function _meteo_resolve_extra_bands!(
         return by_band
     end
 
-    row_values = collect_finite(row, _meteo_row_names(row))
-    metadata = _meteo_metadata(row)
-    metadata_values = collect_finite(metadata, propertynames(metadata))
+    row_values = collect_finite(row, row_names)
+    metadata_values = collect_finite(metadata, metadata_names)
     extras = Dict{String,Float64}()
     for band in sort!(collect(union(keys(row_values), keys(metadata_values))))
         finite = get(row_values, band, Pair{Symbol,Float64}[])
@@ -619,10 +616,21 @@ function _resolve_meteo_step(
     warnings = String[]
     infos = String[]
     sources = Dict{Symbol,Symbol}()
+    row_names = _meteo_row_names(row)
+    metadata = _meteo_metadata(row)
+    metadata_names = propertynames(metadata)
 
     resolved = Dict{Symbol,_MeteoLogicalValue}()
     for logical_name in propertynames(_METEO_ALIASES)
-        value = _meteo_resolve_logical_value!(errors, row, row_index, logical_name)
+        value = _meteo_resolve_logical_value!(
+            errors,
+            row,
+            row_index,
+            logical_name,
+            row_names,
+            metadata,
+            metadata_names,
+        )
         resolved[logical_name] = value
         value.source === nothing || (sources[logical_name] = value.source)
     end
@@ -640,7 +648,7 @@ function _resolve_meteo_step(
     nir_is_required_source =
         options.nir_interception || (sw === nothing && par === nothing && nir !== nothing)
 
-    temporal = _meteo_resolve_temporal!(errors, row, row_index, sources)
+    temporal = _meteo_resolve_temporal!(errors, row, row_index, sources, row_names)
     duration_seconds = temporal.duration_seconds
 
     if check_boundaries
@@ -922,7 +930,10 @@ function _resolve_meteo_step(
         errors,
         warnings,
         row,
-        row_index;
+        row_index,
+        row_names,
+        metadata,
+        metadata_names;
         check_boundaries=check_boundaries,
     )
 

@@ -761,6 +761,12 @@ end
 
     @test budget.incident_energy.total.par == step.budget.incident_energy.total.par
     @test first.projected_area_per_node == step.first_order.projected_area_per_node
+    @test isempty(first.emitter_escaped_power.par)
+    @test isempty(first.emitter_escaped_power.nir)
+    @test isempty(step.first_order.emitter_escaped_power.par)
+    @test isempty(step.first_order.emitter_escaped_power.nir)
+    @test isempty(step.budget.emitter_escaped_energy_per_band["PAR"])
+    @test isempty(step.budget.emitter_escaped_energy_per_band["NIR"])
 
     fallback_row = merge(
         row,
@@ -1199,6 +1205,51 @@ end
     cache2 = ArchimedLight.prepare_light_cache(scene2, models, options)
     step_rebuilt = ArchimedLight.run_light_step(cache2, rows[1])
     @test !HelperModule._budgets_close(step_cached.budget, step_rebuilt.budget; atol=1e-9, rtol=1e-9)
+end
+
+@testitem "Synthetic case plain light cache accounting" tags = [:synthetic, :fast, :plain_light_cache_accounting] setup = [HelperModule] begin
+    using ArchimedLight
+
+    scene = HelperModule._synthetic_horizontal_scene([
+        (x0=0.0, x1=1.0, y0=0.0, y1=1.0, z=1.0, group="plate", type="plate", object_id=1),
+    ])
+    models = HelperModule._default_synthetic_models()
+    options = HelperModule._synthetic_options(
+        sectors=6,
+        all_in_turtle=true,
+        scattering=false,
+        pixel_size=0.01,
+        cache_radiation=true,
+    )
+    row = HelperModule._synthetic_meteo_row()
+
+    cache = ArchimedLight.prepare_light_cache(scene, models, options; memory_limit_bytes=10^9)
+    ArchimedLight.run_light_step(cache, row)
+    entry = only(values(cache.entries))
+    responses = entry.responses_cache
+    @test responses.emitter_transfer === nothing
+    @test responses.scattering_topology === nothing
+
+    fast_retained = ArchimedLight._plain_turtle_cache_entry_retained_bytes(entry)
+    walked_retained = ArchimedLight._summarysize_turtle_cache_entry_retained_bytes(entry)
+    @test entry.resident_bytes == fast_retained
+    @test fast_retained >= walked_retained
+    @test ArchimedLight.cache_summary(cache).resident_bytes == fast_retained
+
+    limited_bytes = max(cache.estimated_entry_bytes, fast_retained - 1)
+    @test limited_bytes < fast_retained
+    limited = ArchimedLight.prepare_light_cache(
+        scene,
+        models,
+        options;
+        memory_limit_bytes=limited_bytes,
+    )
+    @test ArchimedLight.cache_summary(limited).mode == :full
+    ArchimedLight.run_light_step(limited, row)
+    summary = ArchimedLight.cache_summary(limited)
+    @test summary.mode == :topology_fallback
+    @test summary.cached_turtle_count == 0
+    @test summary.resident_bytes == 0
 end
 
 @testitem "Synthetic case light_cache_extra_band_parity" tags = [:synthetic, :fast, :light_cache_extra_band_parity] setup = [HelperModule] begin
