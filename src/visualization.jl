@@ -27,6 +27,17 @@ end
 
 Return the render-ready geometry associated with a light simulation.
 
+Arguments:
+
+- `scene`: prepared `PlantGeom.SceneGeometry` used when deriving geometry from
+  simulation inputs.
+- `models`: [`LightModels`](@ref) used to apply solver-visible filtering.
+- `options`: [`LightOptions`](@ref) used to match the solver geometry.
+- `step`: one [`LightStepResult`](@ref) whose stored render geometry is
+  returned.
+- `steps`: non-empty vector of [`LightStepResult`](@ref) values. The first
+  step supplies the geometry.
+
 For a scene, this applies the same model-dependent filtering as the solver. For
 results returned by `run_light_step` or `run_light_series`, it returns the
 stored render geometry directly.
@@ -84,6 +95,27 @@ end
 
 Repeat a render geometry `nx` times along x and `ny` times along y for
 visualizing toric or repeated scenes.
+
+Arguments:
+
+- `scene`: prepared `PlantGeom.SceneGeometry` used to infer tile spacing when
+  periods are not provided.
+- `geometry`: [`LightRenderGeometry`](@ref) to repeat.
+- `step`: one [`LightStepResult`](@ref) whose stored geometry is repeated.
+- `steps`: non-empty vector of [`LightStepResult`](@ref) values whose first step
+  supplies the geometry.
+- `models`: [`LightModels`](@ref) used when deriving geometry from simulation
+  inputs.
+- `options`: [`LightOptions`](@ref) used when deriving geometry from simulation
+  inputs.
+
+Keywords:
+
+- `nx`: number of repetitions along x.
+- `ny`: number of repetitions along y.
+- `centered`: center tile offsets around the original geometry when `true`.
+- `xperiod`: optional explicit x tile period.
+- `yperiod`: optional explicit y tile period.
 
 By default, the tile period comes from the scene xy bounds, so the visual
 repetition matches the simulation plot box. Pass `xperiod` and `yperiod`
@@ -170,6 +202,16 @@ end
     light_metric_values(steps, selector; timestep=1)
 
 Return the per-node metric map selected by `selector`.
+
+Arguments:
+
+- `step`: one [`LightStepResult`](@ref) to read.
+- `steps`: vector of [`LightStepResult`](@ref) values to index with `timestep`.
+- `selector`: metric selector symbol, either package-native or ARCHIMED-style.
+
+Keywords:
+
+- `timestep`: one-based index used when `steps` is a series.
 
 `selector` may be either a runtime budget field such as `:incident_par_flux` or
 the corresponding ARCHIMED attribute name such as `:Ri_PAR_f`.
@@ -388,6 +430,25 @@ end
 
 Return one scalar color value per rendered face for direct Makie mesh coloring.
 
+Arguments:
+
+- `geometry`: [`LightRenderGeometry`](@ref) whose faces receive values.
+- `scene`: prepared `PlantGeom.SceneGeometry` used when deriving geometry from
+  simulation inputs.
+- `models`: [`LightModels`](@ref) used when deriving geometry from simulation
+  inputs.
+- `options`: [`LightOptions`](@ref) used when deriving geometry from simulation
+  inputs.
+- `data`: one [`LightStepResult`](@ref), a vector of results, a node-value
+  dictionary, a vector of dictionaries, or explicit numeric color values.
+
+Keywords:
+
+- `color`: metric selector, node-value dictionary, or explicit numeric color
+  vector.
+- `timestep`: one-based index used for series data.
+- `fill_value`: value used for nodes/faces without finite data.
+
 When `data` is a `LightStepResult` or a series of steps returned by
 `run_light_step` / `run_light_series`, the stored render geometry is used and no
 scene or model inputs are needed.
@@ -431,6 +492,25 @@ end
 Return one scalar color value per rendered vertex, obtained by averaging the
 values of adjacent faces.
 
+Arguments:
+
+- `geometry`: [`LightRenderGeometry`](@ref) whose vertices receive values.
+- `scene`: prepared `PlantGeom.SceneGeometry` used when deriving geometry from
+  simulation inputs.
+- `models`: [`LightModels`](@ref) used when deriving geometry from simulation
+  inputs.
+- `options`: [`LightOptions`](@ref) used when deriving geometry from simulation
+  inputs.
+- `data`: one [`LightStepResult`](@ref), a vector of results, a node-value
+  dictionary, a vector of dictionaries, or explicit numeric color values.
+
+Keywords:
+
+- `color`: metric selector, node-value dictionary, or explicit numeric color
+  vector.
+- `timestep`: one-based index used for series data.
+- `fill_value`: value used for nodes/vertices without finite data.
+
 When `data` is a `LightStepResult` or a series of steps returned by
 `run_light_step` / `run_light_series`, the stored render geometry is used and no
 scene or model inputs are needed.
@@ -473,6 +553,24 @@ end
 Makie plotting entry point provided by the `Makie` package extension.
 Load `Makie` or `CairoMakie` before calling it. The preferred API is
 `lightplot(step; ...)` or `lightplot(steps; ...)`.
+
+Arguments:
+
+- `data`: one [`LightStepResult`](@ref) or a vector of results with stored
+  render geometry.
+- `geometry`: optional [`LightRenderGeometry`](@ref) when plotting explicit
+  geometry/data pairs.
+- `scene`: prepared `PlantGeom.SceneGeometry` used when deriving geometry from
+  simulation inputs.
+- `models`: [`LightModels`](@ref) used when deriving geometry from simulation
+  inputs.
+- `options`: [`LightOptions`](@ref) used when deriving geometry from simulation
+  inputs.
+
+Keywords:
+
+- `kwargs...`: Makie plot attributes, including ArchimedLight-specific
+  `color`, `timestep`, `interpolate`, and `fill_value`.
 """
 function lightplot end
 
@@ -482,5 +580,24 @@ function lightplot end
 In-place Makie plotting entry point provided by the `Makie` package extension.
 Load `Makie` or `CairoMakie` before calling it. The preferred API is
 `lightplot!(axis, step; ...)` or `lightplot!(axis, steps; ...)`.
+
+Arguments:
+
+- `axis`: Makie axis or scene-like parent to plot into.
+- `data`: one [`LightStepResult`](@ref) or a vector of results with stored
+  render geometry.
+- `geometry`: optional [`LightRenderGeometry`](@ref) when plotting explicit
+  geometry/data pairs.
+- `scene`: prepared `PlantGeom.SceneGeometry` used when deriving geometry from
+  simulation inputs.
+- `models`: [`LightModels`](@ref) used when deriving geometry from simulation
+  inputs.
+- `options`: [`LightOptions`](@ref) used when deriving geometry from simulation
+  inputs.
+
+Keywords:
+
+- `kwargs...`: Makie plot attributes, including ArchimedLight-specific
+  `color`, `timestep`, `interpolate`, and `fill_value`.
 """
 function lightplot! end

@@ -67,7 +67,7 @@ function _scale_extra_band_energy(extra_q_per_band, step_duration_seconds::Float
 end
 
 """
-    integrate_light(scene, models, first, scat, options; meteo_row=nothing, extra_initial_energy_per_band=..., extra_energy_per_band=..., step_duration_seconds=nothing, component_area_per_node=nothing, absorption_par_per_node=nothing, absorption_nir_per_node=nothing)::LightBudget
+    integrate_light(scene, models, first, scat, options; meteo_row=nothing, step_duration_seconds=nothing, check_boundaries=options.check_meteo_boundaries, ...)::LightBudget
 
 Combine first-order interception and scattering into per-node incident and
 absorbed light budgets.
@@ -85,12 +85,28 @@ function integrate_light(
     meteo_row=nothing,
     extra_initial_energy_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
     extra_energy_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
+    extra_emitter_escaped_power_per_band::Dict{String,Dict{Int,Float64}}=Dict{String,Dict{Int,Float64}}(),
     step_duration_seconds::Union{Nothing,Float64}=nothing,
     component_area_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_par_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
     absorption_nir_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
-    dt_seconds = step_duration_seconds === nothing ? _step_duration_seconds_local(meteo_row) : Float64(step_duration_seconds)
+    dt_seconds =
+        if step_duration_seconds !== nothing
+            _duration_seconds_strict(
+                step_duration_seconds;
+                field_name="step_duration_seconds",
+            )
+        elseif meteo_row !== nothing
+            _resolved_meteo_step_or_error(
+                meteo_row,
+                options;
+                check_boundaries=check_boundaries,
+            ).duration_seconds
+        else
+            error("integrate_light requires `step_duration_seconds` or a resolvable `meteo_row`.")
+        end
     node_ids = collect(keys(first.projected_area_per_node))
     budget = _zero_budget_components(node_ids)
     area_map = component_area_per_node === nothing ? _interception_area_per_node_local(scene, models, options) : component_area_per_node
@@ -113,6 +129,14 @@ function integrate_light(
         _store_node_budget!(budget, nid, pa, p0, n0, ps, ns, abs_par, abs_nir, dt_seconds)
     end
 
+    emitter_escaped_power_per_band = Dict{String,Dict{Int,Float64}}(
+        "PAR" => first.emitter_escaped_power.par,
+        "NIR" => first.emitter_escaped_power.nir,
+    )
+    for (band, values) in extra_emitter_escaped_power_per_band
+        emitter_escaped_power_per_band[uppercase(band)] = values
+    end
+
     return LightBudget(
         budget.incident_flux,
         budget.incident_energy,
@@ -120,6 +144,7 @@ function integrate_light(
         budget.absorbed_energy,
         _scale_extra_band_energy(extra_initial_energy_per_band, dt_seconds),
         _scale_extra_band_energy(extra_energy_per_band, dt_seconds),
+        _scale_extra_band_energy(emitter_escaped_power_per_band, dt_seconds),
     )
 end
 
@@ -166,6 +191,9 @@ struct SectorResponsesCache
     node_ids::Vector{Int}
     emitter_incident_power_par::DenseNodeMap{Float64}
     emitter_incident_power_nir::DenseNodeMap{Float64}
+    emitter_escaped_power_par::DenseNodeMap{Float64}
+    emitter_escaped_power_nir::DenseNodeMap{Float64}
+    emitter_transfer::Union{Nothing,EmitterTransferResult}
     scattering_topology::Union{Nothing,ScatteringTopologyCache}
 end
 
@@ -185,35 +213,56 @@ function _dense_sector_int(values::Dict{Int,Int}, geometry::InterceptionSceneDat
     return _dense_node_map(out, geometry)
 end
 
-function _dense_emitter_incident_power(
-    edge_counts::Union{Nothing,Dict{UInt64,Int}},
-    total_from::Union{Nothing,Dict{Int,Int}},
+function _dense_emitter_power(
+    transfer::Union{Nothing,EmitterTransferResult},
     prepared::PreparedInterceptionData,
+    ;
+    emitter_band_par::Union{Nothing,AbstractString}="PAR",
+    emitter_band_nir::Union{Nothing,AbstractString}="NIR",
 )
     geometry = prepared.geometry
-    par = zeros(Float64, length(geometry.node_ids))
-    nir = zeros(Float64, length(geometry.node_ids))
-    if edge_counts !== nothing && total_from !== nothing
-        for (edge, count) in edge_counts
-            src = _unpack_emitter_from(edge)
-            n = get(total_from, src, 0)
-            n > 0 || continue
-            w = count / n
-            to = _unpack_emitter_to(edge)
-            idx = geometry.node_index[to]
-            src_idx = geometry.node_index[src]
-            par[idx] += w * prepared.emitter_par_power_by_index[src_idx]
-            nir[idx] += w * prepared.emitter_nir_power_by_index[src_idx]
-        end
+    incident_par = zeros(Float64, length(geometry.node_ids))
+    incident_nir = zeros(Float64, length(geometry.node_ids))
+    escaped_par = zeros(Float64, length(geometry.node_ids))
+    escaped_nir = zeros(Float64, length(geometry.node_ids))
+    if transfer !== nothing
+        _accumulate_emitter_band_power!(
+            incident_par,
+            escaped_par,
+            transfer,
+            _emitter_band_power_by_index(prepared, emitter_band_par),
+            geometry,
+        )
+        _accumulate_emitter_band_power!(
+            incident_nir,
+            escaped_nir,
+            transfer,
+            _emitter_band_power_by_index(prepared, emitter_band_nir),
+            geometry,
+        )
     end
-    return _dense_node_map(par, geometry), _dense_node_map(nir, geometry)
+    return (
+        _dense_node_map(incident_par, geometry),
+        _dense_node_map(incident_nir, geometry),
+        _dense_node_map(escaped_par, geometry),
+        _dense_node_map(escaped_nir, geometry),
+    )
 end
 
 function _turtle_cache_key(turtle::TurtleGrid, options::LightOptions)
     h = hash((length(turtle.sectors), options.pixel_size, options.area_ratio))
     for s in turtle.sectors
         d = s.direction
-        h = hash((round(d[1], digits=8), round(d[2], digits=8), round(d[3], digits=8), s.source), h)
+        h = hash(
+            (
+                round(d[1], digits=8),
+                round(d[2], digits=8),
+                round(d[3], digits=8),
+                round(s.weight, digits=12),
+                s.source,
+            ),
+            h,
+        )
     end
     h
 end
@@ -229,8 +278,13 @@ function _build_sector_responses(
     geometry = prepared.geometry
     pa_by_sector = Vector{DenseNodeMap{Float64}}(undef, n)
     hits_by_sector = Vector{DenseNodeMap{Int}}(undef, n)
-    emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
-    emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
+    emitter_sector_fraction = _lambertian_sector_fractions(turtle)
+    emitter_received_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Tuple{Int,Int},Float64}()
+    emitter_observed_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Tuple{Int,Int},Float64}()
+    emitter_escaped_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Float64}()
     scattering_edge_counts = options.scattering ? Dict{UInt64,Int}() : nothing
     scattering_sun_hits = options.scattering ? Dict{Int,Int}() : nothing
     scattering_scratch = options.scattering ? ScatteringStackScratch() : nothing
@@ -251,25 +305,42 @@ function _build_sector_responses(
                 geometry,
             )
         hits_by_sector[i] = _dense_node_map(copy(_dense_projection_hits(projection, geometry)), geometry)
-        if emitter_edge_counts !== nothing
+        if emitter_received_fraction !== nothing && emitter_sector_fraction[i] > 0.0
+            emitter_edge_counts = Dict{UInt64,Int}()
+            emitter_observed_edge_counts = Dict{UInt64,Int}()
+            emitter_total_from = Dict{Int,Int}()
             if projection isa DenseDirectionProjectionResult
                 _accumulate_emitter_transfer_counts!(
                     emitter_edge_counts,
+                    emitter_observed_edge_counts,
                     emitter_total_from,
                     projection,
                     prepared.emitter_node_mask,
+                    prepared.virtual_node_mask,
                     geometry.node_ids;
                     stacks_sorted=true,
                 )
             else
                 _accumulate_emitter_transfer_counts!(
                     emitter_edge_counts,
+                    emitter_observed_edge_counts,
                     emitter_total_from,
                     projection,
                     prepared.emitter_nodes;
+                    virtual_nodes=prepared.virtual_nodes,
                     stacks_sorted=true,
                 )
             end
+            _merge_emitter_direction_transfer!(
+                emitter_received_fraction,
+                emitter_observed_fraction,
+                emitter_escaped_fraction,
+                prepared.emitter_nodes,
+                emitter_sector_fraction[i],
+                emitter_edge_counts,
+                emitter_observed_edge_counts,
+                emitter_total_from,
+            )
         end
         if scattering_edge_counts !== nothing
             if projection isa DenseDirectionProjectionResult
@@ -299,8 +370,21 @@ function _build_sector_responses(
             end
         end
     end
-    emitter_incident_power_par, emitter_incident_power_nir =
-        _dense_emitter_incident_power(emitter_edge_counts, emitter_total_from, prepared)
+    emitter_transfer =
+        emitter_received_fraction === nothing ? nothing :
+        _finish_emitter_transfer(
+            emitter_received_fraction,
+            emitter_observed_fraction,
+            emitter_escaped_fraction,
+            prepared.emitter_nodes,
+            emitter_sector_fraction,
+        )
+    (
+        emitter_incident_power_par,
+        emitter_incident_power_nir,
+        emitter_escaped_power_par,
+        emitter_escaped_power_nir,
+    ) = _dense_emitter_power(emitter_transfer, prepared)
     scattering_topology =
         if scattering_edge_counts !== nothing
             _build_scattering_topology_cache(
@@ -320,6 +404,9 @@ function _build_sector_responses(
         geometry.node_ids,
         emitter_incident_power_par,
         emitter_incident_power_nir,
+        emitter_escaped_power_par,
+        emitter_escaped_power_nir,
+        emitter_transfer,
         scattering_topology,
     )
 end
@@ -376,6 +463,9 @@ end
 function _combine_sector_responses(
     responses::SectorResponsesCache,
     fluxes::DirectionalFluxes,
+    ;
+    emitter_band_par::Union{Nothing,AbstractString}="PAR",
+    emitter_band_nir::Union{Nothing,AbstractString}="NIR",
 )
     node_ids = responses.node_ids
     projected_area_per_node = zeros(Float64, length(node_ids))
@@ -403,12 +493,32 @@ function _combine_sector_responses(
         end
     end
 
-    emitter_par = responses.emitter_incident_power_par.values
-    @inbounds for idx in _active_indices(responses.emitter_incident_power_par)
+    (
+        emitter_incident_power_par,
+        emitter_incident_power_nir,
+        emitter_escaped_power_par,
+        emitter_escaped_power_nir,
+    ) =
+        emitter_band_par == "PAR" && emitter_band_nir == "NIR" ?
+        (
+            responses.emitter_incident_power_par,
+            responses.emitter_incident_power_nir,
+            responses.emitter_escaped_power_par,
+            responses.emitter_escaped_power_nir,
+        ) :
+        _dense_emitter_power(
+            responses.emitter_transfer,
+            responses.prepared;
+            emitter_band_par=emitter_band_par,
+            emitter_band_nir=emitter_band_nir,
+        )
+
+    emitter_par = emitter_incident_power_par.values
+    @inbounds for idx in _active_indices(emitter_incident_power_par)
         incident_power_par[idx] += emitter_par[idx]
     end
-    emitter_nir = responses.emitter_incident_power_nir.values
-    @inbounds for idx in _active_indices(responses.emitter_incident_power_nir)
+    emitter_nir = emitter_incident_power_nir.values
+    @inbounds for idx in _active_indices(emitter_incident_power_nir)
         incident_power_nir[idx] += emitter_nir[idx]
     end
 
@@ -419,6 +529,10 @@ function _combine_sector_responses(
             _all_dense_float_node_map(node_ids, incident_power_nir),
         ),
         _all_dense_int_node_map(node_ids, hits_per_node),
+        SpectralNodeValues(
+            _emitter_source_node_map(responses.prepared, emitter_escaped_power_par.values),
+            _emitter_source_node_map(responses.prepared, emitter_escaped_power_nir.values),
+        ),
     )
 end
 
@@ -434,12 +548,19 @@ function _stream_first_order_with_scattering_topology(
     projected_area_per_node = zeros(Float64, length(geometry.node_ids))
     incident_power_par = zeros(Float64, length(geometry.node_ids))
     incident_power_nir = zeros(Float64, length(geometry.node_ids))
+    emitter_escaped_power_par = zeros(Float64, length(geometry.node_ids))
+    emitter_escaped_power_nir = zeros(Float64, length(geometry.node_ids))
     hits_per_node = zeros(Int, length(geometry.node_ids))
     scattering_edge_counts = Dict{UInt64,Int}()
     scattering_sun_hits = Dict{Int,Int}()
     scattering_scratch = ScatteringStackScratch()
-    emitter_edge_counts = isempty(prepared.emitter_nodes) ? nothing : Dict{UInt64,Int}()
-    emitter_total_from = isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Int}()
+    emitter_sector_fraction = _lambertian_sector_fractions(turtle)
+    emitter_received_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Tuple{Int,Int},Float64}()
+    emitter_observed_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Tuple{Int,Int},Float64}()
+    emitter_escaped_fraction =
+        isempty(prepared.emitter_nodes) ? nothing : Dict{Int,Float64}()
 
     for (k, sector) in enumerate(turtle.sectors)
         projection = _prepared_direction_projection(prepared, sector.direction, options)
@@ -456,7 +577,7 @@ function _stream_first_order_with_scattering_topology(
         _accumulate_projection_hits!(hits_per_node, projection, geometry)
 
         par_flux = fluxes.par[k]
-        nir_flux = fluxes.nir[k]
+        nir_flux = options.nir_interception ? fluxes.nir[k] : 0.0
         if par_flux != 0.0 || nir_flux != 0.0
             @inbounds for idx in eachindex(visible_area)
                 pa = visible_area[idx]
@@ -467,25 +588,42 @@ function _stream_first_order_with_scattering_topology(
             end
         end
 
-        if emitter_edge_counts !== nothing
+        if emitter_received_fraction !== nothing && emitter_sector_fraction[k] > 0.0
+            emitter_edge_counts = Dict{UInt64,Int}()
+            emitter_observed_edge_counts = Dict{UInt64,Int}()
+            emitter_total_from = Dict{Int,Int}()
             if projection isa DenseDirectionProjectionResult
                 _accumulate_emitter_transfer_counts!(
                     emitter_edge_counts,
+                    emitter_observed_edge_counts,
                     emitter_total_from,
                     projection,
                     prepared.emitter_node_mask,
+                    prepared.virtual_node_mask,
                     geometry.node_ids;
                     stacks_sorted=true,
                 )
             else
                 _accumulate_emitter_transfer_counts!(
                     emitter_edge_counts,
+                    emitter_observed_edge_counts,
                     emitter_total_from,
                     projection,
                     prepared.emitter_nodes;
+                    virtual_nodes=prepared.virtual_nodes,
                     stacks_sorted=true,
                 )
             end
+            _merge_emitter_direction_transfer!(
+                emitter_received_fraction,
+                emitter_observed_fraction,
+                emitter_escaped_fraction,
+                prepared.emitter_nodes,
+                emitter_sector_fraction[k],
+                emitter_edge_counts,
+                emitter_observed_edge_counts,
+                emitter_total_from,
+            )
         end
         if projection isa DenseDirectionProjectionResult
             _accumulate_scattering_counts!(
@@ -514,15 +652,32 @@ function _stream_first_order_with_scattering_topology(
         end
     end
 
-    if emitter_edge_counts !== nothing
-        emitter_incident_power_par, emitter_incident_power_nir =
-            _dense_emitter_incident_power(emitter_edge_counts, emitter_total_from, prepared)
+    if emitter_received_fraction !== nothing
+        emitter_transfer = _finish_emitter_transfer(
+            emitter_received_fraction,
+            emitter_observed_fraction,
+            emitter_escaped_fraction,
+            prepared.emitter_nodes,
+            emitter_sector_fraction,
+        )
+        (
+            emitter_incident_power_par,
+            emitter_incident_power_nir,
+            escaped_power_par,
+            escaped_power_nir,
+        ) = _dense_emitter_power(
+            emitter_transfer,
+            prepared;
+            emitter_band_nir=options.nir_interception ? "NIR" : nothing,
+        )
         @inbounds for idx in _active_indices(emitter_incident_power_par)
             incident_power_par[idx] += emitter_incident_power_par.values[idx]
         end
         @inbounds for idx in _active_indices(emitter_incident_power_nir)
             incident_power_nir[idx] += emitter_incident_power_nir.values[idx]
         end
+        emitter_escaped_power_par .= escaped_power_par.values
+        emitter_escaped_power_nir .= escaped_power_nir.values
     end
 
     first = FirstOrderResult(
@@ -532,6 +687,10 @@ function _stream_first_order_with_scattering_topology(
             _all_dense_float_node_map(geometry.node_ids, incident_power_nir),
         ),
         _all_dense_int_node_map(geometry.node_ids, hits_per_node),
+        SpectralNodeValues(
+            _emitter_source_node_map(prepared, emitter_escaped_power_par),
+            _emitter_source_node_map(prepared, emitter_escaped_power_nir),
+        ),
     )
     topology = _build_scattering_topology_cache(
         scene,
@@ -544,7 +703,7 @@ function _stream_first_order_with_scattering_topology(
 end
 
 function _row_number_local(row, name::Symbol, default::Float64=0.0)
-    if name in propertynames(row)
+    if name in _row_propertynames(row)
         v = getproperty(row, name)
         if v isa Number
             return Float64(v)
@@ -577,7 +736,7 @@ function _parse_time_or_default_local(v)
 end
 
 function _step_duration_seconds_local(row)
-    names = propertynames(row)
+    names = _row_propertynames(row)
     if (:step_duration in names)
         return _duration_seconds_strict(getproperty(row, :step_duration); field_name="step_duration")
     end
@@ -598,23 +757,23 @@ function _step_duration_seconds_local(row)
 end
 
 function _row_datetime_interval_local(row; index::Int=0)
-    try
-        return PlantMeteo.row_datetime_interval(
-            row;
-            index=index,
-            date_cols=(:date,),
-            start_cols=(:hour_start, :hour, :date),
-            end_cols=(:hour_end,),
-            duration_cols=(:step_duration, :duration),
-            default_date=Dates.Date(2000, 1, 1),
-            default_duration_seconds=1.0,
-            allow_end_rollover=false,
-        )
-    catch err
-        msg = sprint(showerror, err)
-        occursin("end is before start", msg) && error("end is before start at meteo row $(index)")
-        rethrow(err)
-    end
+    errors = String[]
+    sources = Dict{Symbol,Symbol}()
+    temporal = _meteo_resolve_temporal!(errors, row, index, sources)
+    isempty(errors) || error(
+        "invalid datetime interval at meteo row $(index): $(join(errors, "; "))",
+    )
+    temporal.date !== nothing || error(
+        "invalid datetime interval at meteo row $(index): a finite date is required for datetime meteo_range selection",
+    )
+    temporal.start_hour !== nothing && temporal.end_hour !== nothing || error(
+        "invalid datetime interval at meteo row $(index): a start time and positive duration are required",
+    )
+
+    base = Dates.DateTime(temporal.date)
+    start = base + Dates.Millisecond(round(Int, temporal.start_hour * 3_600_000))
+    stop = base + Dates.Millisecond(round(Int, temporal.end_hour * 3_600_000))
+    return start, stop
 end
 
 function _cfg_meteo_range_spec_local(options::LightOptions)
@@ -673,10 +832,22 @@ function _disable_nir_sky_local(sky::SkyState)
         sky.sun_azimuth_deg,
         sky.sun_elevation_deg,
         sky.ri_sw_f,
-        sky.ri_sw_f,
+        sky.ri_par_f,
         0.0,
         sky.direct_fraction,
         sky.diffuse_fraction,
+    )
+end
+
+function _disable_nir_first_order_local(first::FirstOrderResult)
+    zero_incident = Dict{Int,Float64}(nid => 0.0 for nid in keys(first.incident_power.nir))
+    zero_escaped =
+        Dict{Int,Float64}(nid => 0.0 for nid in keys(first.emitter_escaped_power.nir))
+    return FirstOrderResult(
+        first.projected_area_per_node,
+        SpectralNodeValues(first.incident_power.par, zero_incident),
+        first.hits_per_node,
+        SpectralNodeValues(first.emitter_escaped_power.par, zero_escaped),
     )
 end
 
@@ -696,9 +867,12 @@ function _parse_range_datetime_token_local(s::AbstractString)
     error("invalid meteo_range datetime token: $(repr(s))")
 end
 
-function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, options::LightOptions)
+function _meteo_range_indices_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
     spec = _cfg_meteo_range_spec_local(options)
-    spec === nothing && return rows
+    spec === nothing && return collect(1:length(meteo))
 
     parts = split(spec, ","; limit=2)
     length(parts) == 2 || error("invalid meteo_range format: $(repr(spec))")
@@ -710,118 +884,193 @@ function _apply_meteo_range_local(rows::Vector{<:NamedTuple}, options::LightOpti
     ia = tryparse(Int, a)
     ib = tryparse(Int, b)
     if ia !== nothing && ib !== nothing
-        n = length(rows)
+        n = length(meteo)
         ia >= 1 || error("invalid meteo_range: start step must be >= 1")
         ib >= ia || error("invalid meteo_range: end step is before start step")
         ib <= n || error("invalid meteo_range: end step exceeds meteo size")
-        return rows[ia:ib]
+        return collect(ia:ib)
     end
 
     t0 = _parse_range_datetime_token_local(a)
     t1 = _parse_range_datetime_token_local(b)
     t1 >= t0 || error("invalid meteo_range: end datetime is before start datetime")
 
-    out = PlantMeteo.select_overlapping_timesteps(
-        rows,
-        t0,
-        t1;
-        closed=true, # Java uses closed-interval overlap semantics.
-        date_cols=(:date,),
-        start_cols=(:hour_start, :hour, :date),
-        end_cols=(:hour_end,),
-        duration_cols=(:step_duration, :duration),
-        default_date=Dates.Date(2000, 1, 1),
-        default_duration_seconds=1.0,
-        allow_end_rollover=false,
-    )
-    isempty(out) && error("invalid meteo_range: selection is empty")
-    return out
-end
-
-function _apply_meteo_active_filter_local(rows::Vector{<:NamedTuple})
-    isempty(rows) && return rows
-    names = propertynames(first(rows))
-    :active in names || return rows
-
-    out = NamedTuple[]
-    for row in rows
-        flag = _parse_bool_strict_local(getproperty(row, :active), "active")
-        flag && push!(out, row)
+    selected = Int[]
+    for (i, row) in enumerate(meteo)
+        s, e = _row_datetime_interval_local(row; index=i)
+        # Java uses closed-interval overlap semantics.
+        s <= t1 && e >= t0 && push!(selected, i)
     end
-    isempty(out) && error("invalid meteo: no active meteo step")
-    return out
+    isempty(selected) && error("invalid meteo_range: selection is empty")
+    return selected
 end
 
-function _validate_meteo_sequence_local(rows::Vector{<:NamedTuple})
-    try
-        PlantMeteo.check_non_overlapping_timesteps(
-            rows;
-            date_cols=(:date,),
-            start_cols=(:hour_start, :hour, :date),
-            end_cols=(:hour_end,),
-            duration_cols=(:step_duration, :duration),
-            default_date=Dates.Date(2000, 1, 1),
-            default_duration_seconds=1.0,
-            allow_end_rollover=false,
-        )
-    catch err
-        msg = sprint(showerror, err)
-        if occursin("overlapping timesteps at row", msg)
-            m = match(r"row\s+(\d+)", msg)
-            i = m === nothing ? 0 : parse(Int, m.captures[1])
-            error("invalid overlapping meteo steps at row $(i)")
+function _apply_meteo_range_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
+    selected = _meteo_range_indices_local(meteo, options)
+    length(selected) == length(meteo) && selected == collect(1:length(meteo)) &&
+        return meteo
+    return meteo[selected]
+end
+
+function _meteo_active_indices_local(
+    meteo::PlantMeteo.TimeStepTable;
+    source_indices::AbstractVector{<:Integer}=collect(1:length(meteo)),
+)
+    isempty(meteo) && return Int[]
+    length(source_indices) == length(meteo) ||
+        error("Internal meteo row-index mismatch during active selection.")
+    names = _row_propertynames(first(meteo))
+    :active in names || return collect(1:length(meteo))
+
+    selected = Int[]
+    for (i, row) in enumerate(meteo)
+        flag = try
+            _parse_bool_strict_local(getproperty(row, :active), "active")
+        catch err
+            error(
+                "invalid active value at meteo row $(source_indices[i]): $(sprint(showerror, err))",
+            )
         end
-        rethrow(err)
+        flag && push!(selected, i)
     end
+    isempty(selected) && error("invalid meteo: no active meteo step")
+    return selected
 end
 
-_meteo_rows(meteo::MeteoTable) = collect(meteo.rows)
-function _meteo_rows(meteo::PlantMeteo.TimeStepTable)
-    meta = _meta_to_namedtuple(getfield(meteo, :metadata))
-    raw_rows = _rows_to_namedtuples(meteo)
-    [_namedtuple_with_meta(r, meta) for r in raw_rows]
+function _apply_meteo_active_filter_local(meteo::PlantMeteo.TimeStepTable)
+    selected = _meteo_active_indices_local(meteo)
+    length(selected) == length(meteo) && selected == collect(1:length(meteo)) &&
+        return meteo
+    return meteo[selected]
 end
 
-_meteo_metadata(meteo::MeteoTable) = meteo.metadata
-_meteo_metadata(meteo::PlantMeteo.TimeStepTable) = _meta_to_namedtuple(getfield(meteo, :metadata))
-
-function _prepare_meteo_rows_for_series(meteo::MeteoTable, options::LightOptions)
-    rows = _meteo_rows(meteo)
-    isempty(rows) && return rows
-    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
-    rows = _apply_meteo_range_local(rows, options)
-    rows = _apply_meteo_active_filter_local(rows)
-    rows
+function _select_meteo_with_source_indices_local(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions,
+)
+    meteo_for_selection = _with_inferred_datetime_durations(meteo)
+    range_indices = _meteo_range_indices_local(meteo_for_selection, options)
+    ranged =
+        length(range_indices) == length(meteo_for_selection) &&
+        range_indices == collect(1:length(meteo_for_selection)) ?
+        meteo_for_selection : meteo_for_selection[range_indices]
+    active_indices = _meteo_active_indices_local(
+        ranged;
+        source_indices=range_indices,
+    )
+    selected =
+        length(active_indices) == length(ranged) &&
+        active_indices == collect(1:length(ranged)) ? ranged : ranged[active_indices]
+    selected = _with_inferred_datetime_durations(selected)
+    return selected, range_indices[active_indices]
 end
 
-function _prepare_meteo_rows_for_series(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    rows = _meteo_rows(meteo)
-    isempty(rows) && return rows
-    options.allow_overlapping_meteo_steps || _validate_meteo_sequence_local(rows)
-    rows = _apply_meteo_range_local(rows, options)
-    rows = _apply_meteo_active_filter_local(rows)
-    rows
+function _resolved_datetime_interval_local(step::ResolvedMeteoStep)
+    step.start_hour !== nothing && step.end_hour !== nothing || return nothing
+    base = Dates.DateTime(something(step.date, Dates.Date(2000, 1, 1)))
+    start = base + Dates.Millisecond(round(Int, step.start_hour * 3_600_000))
+    stop = base + Dates.Millisecond(round(Int, step.end_hour * 3_600_000))
+    return start, stop
+end
+
+function _validate_meteo_sequence_local(steps::Vector{ResolvedMeteoStep})
+    previous_stop = nothing
+    for step in steps
+        interval = _resolved_datetime_interval_local(step)
+        interval === nothing && continue
+        start, stop = interval
+        if previous_stop !== nothing && start < previous_stop
+            error("invalid overlapping meteo steps at row $(step.row_index)")
+        end
+        previous_stop = stop
+    end
+    return nothing
+end
+
+_meteo_rows(meteo::PlantMeteo.TimeStepTable) = collect(meteo)
+
+function _prepare_meteo_for_series(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    return_resolved::Bool=false,
+)
+    isempty(meteo) && error("invalid meteo: no meteo steps")
+    source_indices = Int[]
+    meteo, source_indices = _select_meteo_with_source_indices_local(meteo, options)
+    errors = String[]
+    warnings = String[]
+    infos = String[]
+    resolved_steps = ResolvedMeteoStep[]
+    for (i, row) in enumerate(meteo)
+        source_index = source_indices[i]
+        result = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(errors, result.errors)
+        append!(warnings, result.warnings)
+        append!(infos, result.infos)
+        result.step === nothing || push!(resolved_steps, result.step)
+    end
+    report = ValidationReport(unique(errors), unique(warnings), unique(infos))
+    if !isempty(report.errors)
+        error(_validation_error_message(
+            "Invalid meteo input",
+            report;
+            next="Run `check_meteo(meteo; options=options, check_boundaries=$(check_boundaries))` to inspect the failing rows and variables.",
+        ))
+    end
+    length(resolved_steps) == length(meteo) || error("Meteo resolution did not produce every selected step.")
+    options.allow_overlapping_meteo_steps ||
+        _validate_meteo_sequence_local(resolved_steps)
+    return return_resolved ? (meteo, resolved_steps) : meteo
 end
 
 """
-    prepare_meteo(meteo, options)::MeteoTable
+    prepare_meteo(meteo, options; check_boundaries=options.check_meteo_boundaries)::PlantMeteo.TimeStepTable
 
 Return the effective meteo table after Java-like meteo controls are applied:
 sequence validation, optional `meteo_range`, and optional `active` filtering.
+
+Arguments:
+
+- `meteo`: a `PlantMeteo.TimeStepTable` or Tables.jl-compatible table of meteo
+  rows.
+- `options`: [`LightOptions`](@ref) controlling overlap validation,
+  `meteo_range`, and active-row filtering.
+
+Keywords:
+
+- `check_boundaries`: check physical ranges for used meteo values. Missing,
+  nonfinite, derivability, and conflicting-input checks always remain enabled.
 """
-function prepare_meteo(meteo::MeteoTable, options::LightOptions)
-    MeteoTable(_prepare_meteo_rows_for_series(meteo, options), meteo.metadata)
+function prepare_meteo(
+    meteo::PlantMeteo.TimeStepTable,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
+    _prepare_meteo_for_series(meteo, options; check_boundaries=check_boundaries)
 end
 
-function prepare_meteo(meteo::PlantMeteo.TimeStepTable, options::LightOptions)
-    PlantMeteo.TimeStepTable(_prepare_meteo_rows_for_series(meteo, options), _meteo_metadata(meteo))
-end
-
-function prepare_meteo(meteo, options::LightOptions)
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return prepare_meteo(meteo, options)
-    meteo isa PlantMeteo.TimeStepTable && return prepare_meteo(meteo, options)
-    prepare_meteo(_as_plantmeteo_table(meteo), options)
+function prepare_meteo(
+    meteo,
+    options::LightOptions;
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
+    meteo isa PlantMeteo.TimeStepTable &&
+        return prepare_meteo(meteo, options; check_boundaries=check_boundaries)
+    prepare_meteo(
+        _as_plantmeteo_table(meteo),
+        options;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function _default_scattering_factor_local(options::LightOptions, band::String)
@@ -904,12 +1153,15 @@ end
 
 function _extra_band_irradiance(meteo_row)
     extras = Dict{String,Float64}()
-    for p in propertynames(meteo_row)
+    for p in _row_propertynames(meteo_row)
         s = String(p)
         su = uppercase(s)
         startswith(su, "RI_") || continue
         endswith(su, "_F") || continue
-        su in ("RI_PAR_F", "RI_NIR_F", "RI_SW_F") && continue
+        # TIR is thermal forcing for the energy-balance model in Java ARCHIMED,
+        # not a shortwave interception/scattering band. ArchimedLight is
+        # deliberately light-only, so keep it out of the extra-band pipeline.
+        su in ("RI_PAR_F", "RI_NIR_F", "RI_SW_F", "RI_TIR_F") && continue
         band = su[4:(end - 2)]
         isempty(band) && continue
         v = _row_number_local(meteo_row, p, NaN)
@@ -919,7 +1171,70 @@ function _extra_band_irradiance(meteo_row)
     extras
 end
 
-function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, turtle::TurtleGrid, options::LightOptions)
+function _extra_band_irradiance(meteo_row, options::LightOptions)
+    extras = _extra_band_irradiance(meteo_row)
+    isempty(extras) && return extras
+    scale = _radiation_input_effective_scale(meteo_row, options)
+    return Dict{String,Float64}(
+        band => irradiance * scale
+        for (band, irradiance) in extras
+    )
+end
+
+function _extra_band_irradiance(
+    resolved::ResolvedMeteoStep,
+    meteo_row,
+    options::LightOptions,
+)
+    isempty(resolved.extra_irradiance) && return Dict{String,Float64}()
+    scale = _radiation_input_effective_scale(meteo_row, options, resolved)
+    return Dict{String,Float64}(
+        band => max(irradiance, 0.0) * scale
+        for (band, irradiance) in resolved.extra_irradiance
+    )
+end
+
+function _include_emitter_extra_bands!(
+    extras_irradiance::Dict{String,Float64},
+    emitter_power_per_band::Dict{String,Dict{Int,Float64}},
+)
+    for band in keys(emitter_power_per_band)
+        band in ("PAR", "NIR", "TIR") && continue
+        get!(extras_irradiance, band, 0.0)
+    end
+    return extras_irradiance
+end
+
+function _single_band_flux(
+    total_irradiance::Float64,
+    meteo_row,
+    sky::SkyState,
+    turtle::TurtleGrid,
+    options::LightOptions;
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
+)
+    total_irradiance <= 0.0 && return zeros(Float64, length(turtle.sectors))
+
+    # Extra shortwave bands follow the same directional sky distribution as
+    # the effective PAR/NIR forcing. Reusing that distribution is important
+    # for clearness-only rows: re-running `_radiation_substeps` with a temporary
+    # custom-band SkyState would otherwise replace the supplied custom-band
+    # magnitude with a newly derived total shortwave irradiance.
+    reference = compute_directional_fluxes(
+        meteo_row,
+        sky,
+        turtle,
+        options;
+        resolved_step=resolved_step,
+    )
+    reference_sw = reference.par .+ reference.nir
+    reference_total = sum(reference_sw)
+    if reference_total > 0.0
+        return reference_sw .* (total_irradiance / reference_total)
+    end
+
+    # Defensive fallback for an interval with custom forcing but no usable
+    # PAR/NIR reference (for example, an interval-mean nighttime input).
     tmp = SkyState(
         sky.sun_azimuth_deg,
         sky.sun_elevation_deg,
@@ -928,7 +1243,7 @@ function _single_band_flux(total_irradiance::Float64, meteo_row, sky::SkyState, 
         sky.direct_fraction,
         sky.diffuse_fraction,
     )
-    compute_directional_fluxes(meteo_row, tmp, turtle, options).par
+    compute_directional_fluxes(tmp, turtle, options).par
 end
 
 function _compute_extra_band_light(
@@ -942,17 +1257,38 @@ function _compute_extra_band_light(
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
     responses_cache::Union{Nothing,SectorResponsesCache}=nothing,
+    prepared::Union{Nothing,PreparedInterceptionData}=nothing,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
 )
-    extras_irr = _extra_band_irradiance(meteo_row)
+    extras_irr =
+        meteo_row === nothing ? Dict{String,Float64}() :
+        resolved_step === nothing ? _extra_band_irradiance(meteo_row, options) :
+        _extra_band_irradiance(resolved_step, meteo_row, options)
+    emitter_power_per_band =
+        responses_cache !== nothing ?
+        responses_cache.prepared.emitter_power_per_band_per_node :
+        prepared !== nothing ?
+        prepared.emitter_power_per_band_per_node :
+        _emitter_power_per_band_per_node(scene, models)
+    _include_emitter_extra_bands!(extras_irr, emitter_power_per_band)
     extra_0_q = Dict{String,Dict{Int,Float64}}()
     extra_q = Dict{String,Dict{Int,Float64}}()
+    extra_emitter_escaped_power = Dict{String,Dict{Int,Float64}}()
 
-    isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
+    isempty(extras_irr) &&
+        return extra_0_q, extra_q, extras_irr, extra_emitter_escaped_power
 
     ids = [s.id for s in turtle.sectors]
     n = length(ids)
     for (band, total_irr) in extras_irr
-        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, options)
+        flux_band = _single_band_flux(
+            total_irr,
+            meteo_row,
+            sky,
+            turtle,
+            options;
+            resolved_step=resolved_step,
+        )
         first_band =
             if responses_cache === nothing
                 compute_first_order(
@@ -962,9 +1298,16 @@ function _compute_extra_band_light(
                     DirectionalFluxes(ids, flux_band, zeros(Float64, n)),
                     options;
                     backend=interception_backend,
+                    emitter_band_par=band,
+                    emitter_band_nir=nothing,
                 )
             else
-                _combine_sector_responses(responses_cache, DirectionalFluxes(ids, flux_band, zeros(Float64, n)))
+                _combine_sector_responses(
+                    responses_cache,
+                    DirectionalFluxes(ids, flux_band, zeros(Float64, n));
+                    emitter_band_par=band,
+                    emitter_band_nir=nothing,
+                )
             end
         order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_power.par)
 
@@ -1001,8 +1344,10 @@ function _compute_extra_band_light(
         end
         extra_0_q[band] = order0
         extra_q[band] = total
+        extra_emitter_escaped_power[band] =
+            Dict{Int,Float64}(first_band.emitter_escaped_power.par)
     end
-    return extra_0_q, extra_q, extras_irr
+    return extra_0_q, extra_q, extras_irr, extra_emitter_escaped_power
 end
 
 function _can_use_series_radiation_cache(::RasterCPUBackend)
@@ -1040,12 +1385,172 @@ mutable struct LightSimulationCache
     scattering_backend::Union{Nothing,ScatteringBackend}
     prepared::Union{Nothing,PreparedInterceptionData}
     render_geometry::LightRenderGeometry
+    node_metadata::Union{Nothing,LightNodeMetadata}
     mode::Symbol
     estimated_entry_bytes::Int
     memory_limit_bytes::Int
     resident_bytes::Int
     tick::Int
     entries::Dict{UInt64,TurtleLightCacheEntry}
+end
+
+function _node_metadata_narrow(values::Vector{Any})
+    isempty(values) && return Any[]
+    value_type = foldl((acc, value) -> typejoin(acc, typeof(value)), values; init=Union{})
+    value_type === Union{} && return Any[]
+    value_type[values...]
+end
+
+function _node_metadata_attribute_table(names::Tuple, columns::AbstractVector)
+    narrowed = Tuple(_node_metadata_narrow(column) for column in columns)
+    NamedTuple{names}(narrowed)
+end
+
+function _validate_lightweight_node_metadata_value(value, attribute::Symbol, nid::Int)
+    lightweight = value === nothing || value === missing || value isa Number ||
+                  value isa AbstractString || value isa Symbol || value isa Char || isbits(value)
+    lightweight && return value
+    throw(ArgumentError(
+        "node_metadata_attributes requested `$attribute`, but node $nid stores " *
+        "a non-scalar $(typeof(value)). Only lightweight scalar identifiers can be retained.",
+    ))
+end
+
+function _node_metadata_object_value!(cache::Dict{Int,Any}, node)
+    node_id = Int(MultiScaleTreeGraph.node_id(node))
+    haskey(cache, node_id) && return cache[node_id]
+    raw = nothing
+    for key in (:object_id, :plantID, :plant_id, :item_id, :itemID, :id)
+        raw = _mtg_node_attr(node, key)
+        raw === nothing || break
+    end
+    value =
+        if raw !== nothing
+            raw
+        elseif MultiScaleTreeGraph.isroot(node)
+            nothing
+        else
+            _node_metadata_object_value!(cache, MultiScaleTreeGraph.parent(node))
+        end
+    cache[node_id] = value
+    return value
+end
+
+function _node_metadata_inherited_attr(node, attribute::Symbol)
+    current = node
+    while current !== nothing
+        value = _mtg_node_attr(current, attribute)
+        value === nothing || return value
+        MultiScaleTreeGraph.isroot(current) && break
+        current = MultiScaleTreeGraph.parent(current)
+    end
+    return nothing
+end
+
+function _node_metadata_display_type(
+    models::LightModels,
+    group::String,
+    type_name0::String,
+)
+    type_name = strip(type_name0)
+    if isempty(type_name) || lowercase(type_name) == "mesh"
+        if haskey(models, group)
+            group_model = models[group]
+            length(group_model.types) == 1 && return first(keys(group_model.types))
+        elseif group == "pavement"
+            return "Cobblestone"
+        end
+    end
+    return type_name
+end
+
+function _build_light_node_metadata(
+    scene::PlantGeom.SceneGeometry,
+    models::LightModels,
+    options::LightOptions,
+    geometry::InterceptionSceneData,
+)
+    node_ids = sort!(copy(geometry.node_ids))
+    source_topology_ids = Int[]
+    object_ids = Int[]
+    item_ids = Int[]
+    component_ids = Int[]
+    groups = String[]
+    types = String[]
+    symbols = Symbol[]
+    scales = Int[]
+    attribute_names = options.node_metadata_attributes
+    local_columns = [Any[] for _ in attribute_names]
+    inherited_columns = [Any[] for _ in attribute_names]
+    object_id_cache = Dict{Int,Any}()
+    pavement_index = 0
+
+    scene.mtg === nothing && throw(
+        ArgumentError("store_node_metadata=true requires an MTG-backed scene."),
+    )
+    available_attributes = Set(Symbol.(MultiScaleTreeGraph.get_attributes(scene.mtg)))
+    missing_attributes = Symbol[name for name in attribute_names if !(name in available_attributes)]
+    isempty(missing_attributes) || throw(ArgumentError(
+        "Unknown node_metadata_attributes: $(join(string.(missing_attributes), ", ")).",
+    ))
+
+    for nid in node_ids
+        node = _scene_mtg_node(scene, nid)
+        node === nothing && throw(ArgumentError("Geometric node id $nid is absent from the scene MTG."))
+        geometry_index = geometry.node_index[nid]
+        group = geometry.node_group_by_index[geometry_index]
+        type_name = _node_metadata_display_type(
+            models,
+            group,
+            geometry.node_type_by_index[geometry_index],
+        )
+        source_topology_id = _scene_source_topology_id(scene, nid, nid)
+        output_component_id = _scene_source_topology_id(scene, nid, nid + 1)
+        object_value = _node_metadata_object_value!(object_id_cache, node)
+        object_id = _as_int_or_default(object_value, -1)
+        item_id, component_id =
+            if group == "pavement"
+                pavement_index += 1
+                (-1, pavement_index + 1)
+            else
+                (_as_int_or_default(object_value, 1), output_component_id)
+            end
+        push!(source_topology_ids, source_topology_id)
+        push!(object_ids, object_id)
+        push!(item_ids, item_id)
+        push!(component_ids, component_id)
+        push!(groups, group)
+        push!(types, type_name)
+        push!(symbols, Symbol(MultiScaleTreeGraph.symbol(node)))
+        push!(scales, Int(MultiScaleTreeGraph.scale(node)))
+
+        for (i, attribute) in enumerate(attribute_names)
+            local_value = MultiScaleTreeGraph.attribute(node, attribute; default=nothing)
+            inherited_value = _node_metadata_inherited_attr(node, attribute)
+            push!(
+                local_columns[i],
+                _validate_lightweight_node_metadata_value(local_value, attribute, nid),
+            )
+            push!(
+                inherited_columns[i],
+                _validate_lightweight_node_metadata_value(inherited_value, attribute, nid),
+            )
+        end
+    end
+
+    LightNodeMetadata(
+        node_ids,
+        source_topology_ids,
+        object_ids,
+        item_ids,
+        component_ids,
+        groups,
+        types,
+        symbols,
+        scales,
+        _node_metadata_attribute_table(attribute_names, local_columns),
+        _node_metadata_attribute_table(attribute_names, inherited_columns),
+    )
 end
 
 function _default_light_cache_memory_limit()
@@ -1064,7 +1569,119 @@ function _estimate_light_cache_entry_bytes(prepared::PreparedInterceptionData, o
     n_sectors = max(options.turtle_sectors + (options.all_in_turtle ? 0 : 1), 1)
     base_sector_bytes = n_nodes * (sizeof(Float64) + sizeof(Int))
     scatter_sector_bytes = options.scattering ? n_nodes * 2 * sizeof(Float64) : 0
-    return n_sectors * (base_sector_bytes + scatter_sector_bytes)
+    base = Int128(n_sectors) * (base_sector_bytes + scatter_sector_bytes)
+    if !isempty(prepared.emitter_nodes)
+        # A transfer can contain receiver/source and observer/source pairs.
+        # Use a conservative pair-dictionary upper bound for mode selection,
+        # then replace it with measured storage in each built entry.
+        pair_count = Int128(length(prepared.emitter_nodes)) * n_nodes
+        edge_bytes = 2 * pair_count * 64
+        dense_emitter_bytes = Int128(4) * n_nodes * sizeof(Float64)
+        base += edge_bytes + dense_emitter_bytes
+    end
+    return Int(min(base, Int128(typemax(Int))))
+end
+
+const _CACHE_CONTAINER_OVERHEAD_BYTES = 64
+const _CACHE_EMPTY_DICT_BYTES = 256
+const _CACHE_TURTLE_SECTOR_BYTES = 256
+
+@inline _cache_vector_retained_bytes(values::Vector) =
+    _CACHE_CONTAINER_OVERHEAD_BYTES + sizeof(values)
+
+@inline function _cache_dense_map_retained_bytes(values::DenseNodeMap)
+    return _CACHE_CONTAINER_OVERHEAD_BYTES +
+           _cache_vector_retained_bytes(values.values) +
+           _cache_vector_retained_bytes(values.active_indices)
+end
+
+function _plain_turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+    responses = entry.responses_cache
+    bytes = 3 * _CACHE_CONTAINER_OVERHEAD_BYTES # entry, response cache, turtle
+    bytes += _cache_vector_retained_bytes(entry.turtle.sectors)
+    bytes += _CACHE_TURTLE_SECTOR_BYTES * length(entry.turtle.sectors)
+    bytes += _cache_vector_retained_bytes(responses.node_ids)
+
+    for maps in (responses.projected_area_per_sector, responses.hits_per_sector)
+        bytes += _cache_vector_retained_bytes(maps)
+        for values in maps
+            bytes += _cache_dense_map_retained_bytes(values)
+        end
+    end
+    for values in (
+        responses.emitter_incident_power_par,
+        responses.emitter_incident_power_nir,
+        responses.emitter_escaped_power_par,
+        responses.emitter_escaped_power_nir,
+    )
+        bytes += _cache_dense_map_retained_bytes(values)
+    end
+
+    for values in (
+        entry.par_added_per_sector,
+        entry.nir_added_per_sector,
+        entry.par_iterations_per_sector,
+        entry.nir_iterations_per_sector,
+        entry.par_converged_per_sector,
+        entry.nir_converged_per_sector,
+    )
+        bytes += _cache_vector_retained_bytes(values)
+    end
+    bytes += 3 * _CACHE_EMPTY_DICT_BYTES
+    return bytes
+end
+
+function _summarysize_turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+    responses = entry.responses_cache
+    # Measure every allocation retained only because this entry is resident.
+    # `responses.prepared` is deliberately represented by one pointer-sized
+    # scalar instead of traversed: the prepared geometry is owned by the parent
+    # LightSimulationCache even when no turtle response is cached. Shared node
+    # vectors reached through the response maps are counted, making this a
+    # conservative retained-size measurement.
+    retained = (
+        entry.key,
+        entry.turtle,
+        UInt(0),
+        responses.projected_area_per_sector,
+        responses.hits_per_sector,
+        responses.node_ids,
+        responses.emitter_incident_power_par,
+        responses.emitter_incident_power_nir,
+        responses.emitter_escaped_power_par,
+        responses.emitter_escaped_power_nir,
+        responses.emitter_transfer,
+        responses.scattering_topology,
+        entry.par_added_per_sector,
+        entry.nir_added_per_sector,
+        entry.extra_added_per_sector,
+        entry.par_iterations_per_sector,
+        entry.nir_iterations_per_sector,
+        entry.par_converged_per_sector,
+        entry.nir_converged_per_sector,
+        entry.extra_iterations_per_sector,
+        entry.extra_converged_per_sector,
+        entry.resident_bytes,
+        entry.last_used_tick,
+    )
+    return Base.summarysize(retained)
+end
+
+function _turtle_cache_entry_retained_bytes(entry::TurtleLightCacheEntry)
+    responses = entry.responses_cache
+    if responses.emitter_transfer === nothing &&
+       responses.scattering_topology === nothing &&
+       isempty(entry.extra_added_per_sector) &&
+       isempty(entry.extra_iterations_per_sector) &&
+       isempty(entry.extra_converged_per_sector)
+        # The common no-emitter/no-scattering entry contains only vectors and
+        # empty dictionaries. Count their storage directly instead of walking
+        # the entire object graph with `summarysize`. The constants deliberately
+        # overestimate Julia container/header storage so the cache cap remains
+        # conservative.
+        return _plain_turtle_cache_entry_retained_bytes(entry)
+    end
+    return _summarysize_turtle_cache_entry_retained_bytes(entry)
 end
 
 @inline function _dense_vector_from_node_values(values::Dict{Int,Float64}, geometry::InterceptionSceneData)
@@ -1109,7 +1726,7 @@ function _cache_supports_full_response(
 )
     prepared !== nothing || return false
     ib isa RasterCPUBackend || return false
-    return isempty(prepared.emitter_nodes)
+    return true
 end
 
 function _cache_mode_for(
@@ -1135,12 +1752,12 @@ function prepare_light_cache(
 )
     ib = _resolve_interception_backend(interception_backend)
     prepared = ib isa RasterCPUBackend ? _prepare_interception_data(scene, models, options; include_budget_maps=true) : nothing
-    render_geometry =
-        if prepared === nothing
-            _light_render_geometry(_scene_geometry_for_interception(scene, models, options))
-        else
-            _light_render_geometry(prepared.geometry)
-        end
+    interception_geometry =
+        prepared === nothing ? _scene_geometry_for_interception(scene, models, options) : prepared.geometry
+    render_geometry = _light_render_geometry(interception_geometry)
+    node_metadata =
+        options.store_node_metadata && scene.mtg !== nothing ?
+        _build_light_node_metadata(scene, models, options, interception_geometry) : nothing
     limit = memory_limit_bytes === nothing ? _default_light_cache_memory_limit() : Int(memory_limit_bytes)
     limit = max(limit, 1)
     estimated = prepared === nothing ? 0 : _estimate_light_cache_entry_bytes(prepared, options)
@@ -1155,6 +1772,7 @@ function prepare_light_cache(
         scattering_backend,
         prepared,
         render_geometry,
+        node_metadata,
         mode,
         estimated,
         limit,
@@ -1178,6 +1796,8 @@ function cache_summary(cache::LightSimulationCache)
         mode=cache.mode,
         estimated_entry_bytes=cache.estimated_entry_bytes,
         resident_bytes=cache.resident_bytes,
+        node_metadata_bytes=cache.node_metadata === nothing ? 0 : Base.summarysize(cache.node_metadata),
+        node_metadata_count=cache.node_metadata === nothing ? 0 : length(cache.node_metadata.node_id),
         cached_turtle_count=length(cache.entries),
         cached_sector_count=cached_sector_count,
         cached_full_response_sector_count=cached_full_response_sector_count,
@@ -1203,6 +1823,22 @@ end
 
 Create a reusable light simulation. Expensive geometry preparation and radiation
 caches are built lazily by [`run_light`](@ref).
+
+Arguments:
+
+- `scene`: prepared `PlantGeom.SceneGeometry` used by the solver.
+- `models`: model specification accepted by [`prepare_models`](@ref).
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) controlling interception, scattering, and
+  caching.
+- `interception_backend`: interception backend selector or backend instance.
+  The default is `:raster_cpu`.
+- `scattering_mode`: scattering algorithm selector. The default is `:raycast`.
+- `scattering_backend`: optional scattering backend instance.
+- `memory_limit_bytes`: optional limit for resident directional-response cache
+  data. `nothing` uses the package default.
 """
 function LightSimulation(
     scene::PlantGeom.SceneGeometry,
@@ -1271,6 +1907,11 @@ end
 
 Replace the scene and immediately release all prepared data tied to the old
 scene. The next `run_light` call prepares the new scene lazily.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_scene`: replacement `PlantGeom.SceneGeometry`.
 """
 function update_scene!(sim::LightSimulation, new_scene::PlantGeom.SceneGeometry)
     _drop_light_cache!(sim)
@@ -1278,23 +1919,59 @@ function update_scene!(sim::LightSimulation, new_scene::PlantGeom.SceneGeometry)
     return sim
 end
 
+"""
+    update_models!(sim, new_models)
+
+Replace the model specification in `sim` and release all prepared cache data.
+The next [`run_light`](@ref) call prepares the new models lazily.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_models`: replacement model specification accepted by
+  [`prepare_models`](@ref).
+"""
 function update_models!(sim::LightSimulation, new_models)
     _drop_light_cache!(sim)
     sim.models = prepare_models(new_models)
     return sim
 end
 
+"""
+    update_options!(sim, new_options)
+
+Replace the runtime options in `sim` and release all prepared cache data. The
+next [`run_light`](@ref) call prepares data using the new options.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to update in place.
+- `new_options`: replacement [`LightOptions`](@ref).
+"""
 function update_options!(sim::LightSimulation, new_options::LightOptions)
     _drop_light_cache!(sim)
     sim.options = new_options
     return sim
 end
 
+"""
+    cache_summary(sim)
+
+Return a named tuple summarizing the current radiation cache state for a
+[`LightSimulation`](@ref).
+
+Arguments:
+
+- `sim`: simulation whose prepared cache should be summarized. If no cache has
+  been prepared yet, the summary reports `mode=:unprepared`.
+"""
 function cache_summary(sim::LightSimulation)
     sim.cache === nothing && return (
         mode=:unprepared,
         estimated_entry_bytes=0,
         resident_bytes=0,
+        node_metadata_bytes=0,
+        node_metadata_count=0,
         cached_turtle_count=0,
         cached_sector_count=0,
         cached_full_response_sector_count=0,
@@ -1304,6 +1981,16 @@ function cache_summary(sim::LightSimulation)
     return cache_summary(sim.cache)
 end
 
+"""
+    check_scene(scene)::ValidationReport
+
+Validate basic scene readiness for light interception.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` to check for geometry nodes, faces, and a
+  valid xy domain.
+"""
 function check_scene(scene::PlantGeom.SceneGeometry)
     errors = String[]
     warnings = String[]
@@ -1349,6 +2036,17 @@ function _missing_models_snippet(missing::Vector{Tuple{String,String}})
     return join(lines, "\n")
 end
 
+"""
+    check_models(scene, models)::ValidationReport
+
+Validate that `models` cover the geometric group/type pairs present in `scene`.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` whose geometric nodes define the required
+  group/type pairs.
+- `models`: model specification accepted by [`prepare_models`](@ref).
+"""
 function check_models(scene::PlantGeom.SceneGeometry, models)
     lm = prepare_models(models)
     missing = _missing_model_pairs(scene, lm)
@@ -1368,6 +2066,15 @@ Return a `SceneSummary` describing the prepared scene domain, geometric nodes,
 faces, group/type pairs, object ids, and missing model pairs.
 
 Pass `models` to include a model coverage check in the summary.
+
+Arguments:
+
+- `scene`: `PlantGeom.SceneGeometry` to summarize.
+
+Keywords:
+
+- `models`: optional model specification used to report missing group/type
+  coverage.
 """
 function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
     buckets = Dict{Tuple{String,String},NamedTuple}()
@@ -1417,20 +2124,72 @@ function summarize_scene(scene::PlantGeom.SceneGeometry; models=nothing)
     return SceneSummary(domain, length(scene.nodes), length(scene.face2node), length(object_ids), group_types, missing, warnings)
 end
 
-function _meteo_rows_for_check(meteo)
-    meteo isa MeteoTable && return meteo.rows
-    meteo isa PlantMeteo.TimeStepTable && return _meteo_rows(meteo)
-    Tables.istable(typeof(meteo)) && return _meteo_rows(_as_plantmeteo_table(meteo))
-    return [meteo]
+function _meteo_rows_and_indices_for_check(
+    meteo,
+    options::LightOptions;
+    apply_selection::Bool=true,
+)
+    table =
+        meteo isa PlantMeteo.TimeStepTable ? meteo :
+        Tables.istable(typeof(meteo)) ? _as_plantmeteo_table(meteo) : nothing
+    table === nothing && return Any[meteo], [1]
+    if apply_selection && !isempty(table)
+        table, source_indices = _select_meteo_with_source_indices_local(table, options)
+        return _meteo_rows(table), source_indices
+    end
+    return _meteo_rows(table), collect(1:length(table))
 end
 
-function check_meteo(meteo; options::LightOptions=LightOptions())
-    rows = NamedTuple[]
+function _meteo_rows_for_check(
+    meteo,
+    options::LightOptions;
+    apply_selection::Bool=true,
+)
+    rows, _ = _meteo_rows_and_indices_for_check(
+        meteo,
+        options;
+        apply_selection=apply_selection,
+    )
+    return rows
+end
+
+"""
+    check_meteo(meteo; options=LightOptions(), check_boundaries=options.check_meteo_boundaries)::ValidationReport
+
+Validate meteo rows for required solar geometry, radiation inputs, and timestep
+duration data.
+
+Arguments:
+
+- `meteo`: a meteo row, `PlantMeteo.TimeStepTable`, or Tables.jl-compatible
+  table.
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) used for checks that depend on runtime
+  meteo handling.
+- `check_boundaries`: check physical ranges for used meteo values. Missing,
+  nonfinite, derivability, and conflicting-input checks are always performed.
+"""
+function check_meteo(
+    meteo;
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+    _apply_selection::Bool=true,
+    _row_indices::Union{Nothing,Vector{Int}}=nothing,
+)
+    rows = Any[]
+    selected_indices = Int[]
     errors = String[]
     warnings = String[]
     infos = String[]
     try
-        rows = _meteo_rows_for_check(meteo)
+        rows, selected_indices = _meteo_rows_and_indices_for_check(
+            meteo,
+            options;
+            apply_selection=_apply_selection,
+        )
+        _row_indices === nothing || (selected_indices = _row_indices)
     catch err
         push!(errors, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
         return ValidationReport(errors, warnings, infos)
@@ -1438,44 +2197,51 @@ function check_meteo(meteo; options::LightOptions=LightOptions())
     isempty(rows) && push!(errors, "Meteo input has no rows.")
     isempty(rows) && return ValidationReport(errors, warnings, infos)
 
+    length(selected_indices) == length(rows) || error("Internal meteo row-index mismatch.")
     for (i, row) in enumerate(rows)
-        names = propertynames(row)
-        has_sun = (:sun_azimuth in names || :sun_azimut in names) && (:sun_elevation in names)
-        latitude = _row_value(row, [:latitude, :lat], NaN)
-        if !has_sun && !isfinite(latitude)
-            columns = join(string.(names), ", ")
-            push!(errors, "Meteo row $i needs `latitude` metadata/column unless `sun_azimuth` and `sun_elevation` are provided. Available columns: $columns.")
-        end
-        try
-            uses = _effective_radiation_use_tokens(row)
-            has_cl = _has_any_column(row, [:clearness, :Kt])
-            has_sw = _has_any_column(row, [:RI_SW_f, :Ri_SW_f, :Rg, :rg, :sw_global, :global])
-            has_par = _has_any_column(row, [:RI_PAR_f, :Ri_PAR_f, :PAR, :par])
-            has_nir = _has_any_column(row, [:RI_NIR_f, :Ri_NIR_f, :NIR, :nir])
-            _validate_meteo_radiation_inputs(uses, has_cl, has_sw, has_par, has_nir)
-        catch err
-            push!(errors, "Meteo row $i has invalid radiation inputs: $(sprint(showerror, err)). Expected one clear radiation source such as `RI_PAR_f` + `RI_NIR_f`, or `RI_SW_f`, or `clearness`.")
-        end
-        try
-            _row_step_hours(row)
-        catch err
-            push!(errors, "Meteo row $i has invalid time interval: $(sprint(showerror, err))")
+        source_index = selected_indices[i]
+        result = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(errors, result.errors)
+        append!(warnings, result.warnings)
+        append!(infos, result.infos)
+        if result.step === nothing && isempty(result.errors)
+            push!(errors, "Meteo row $source_index could not be resolved for an unknown reason.")
         end
     end
     push!(infos, "$(length(rows)) meteo row(s) checked.")
-    return ValidationReport(errors, warnings, infos)
+    return ValidationReport(unique(errors), unique(warnings), unique(infos))
 end
 
 """
-    summarize_meteo(meteo; options=LightOptions())
+    summarize_meteo(meteo; options=LightOptions(), check_boundaries=options.check_meteo_boundaries)
 
 Return a `MeteoSummary` describing row count, columns, timestep duration,
 radiation inputs, and the detected solar-geometry path for a meteo table or row.
+
+Arguments:
+
+- `meteo`: a meteo row, `PlantMeteo.TimeStepTable`, or Tables.jl-compatible
+  table.
+
+Keywords:
+
+- `options`: [`LightOptions`](@ref) used for checks that depend on runtime
+  meteo handling.
+- `check_boundaries`: check physical ranges while resolving the summary.
 """
-function summarize_meteo(meteo; options::LightOptions=LightOptions())
+function summarize_meteo(
+    meteo;
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
     warnings = String[]
-    rows = try
-        _meteo_rows_for_check(meteo)
+    rows, source_indices = try
+        _meteo_rows_and_indices_for_check(meteo, options)
     catch err
         push!(warnings, "Could not read meteo input as a table or row: $(sprint(showerror, err))")
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
@@ -1485,32 +2251,69 @@ function summarize_meteo(meteo; options::LightOptions=LightOptions())
         return MeteoSummary(0, Symbol[], nothing, false, String[], "unknown", warnings)
     end
     first_row = first(rows)
-    columns = collect(Symbol.(propertynames(first_row)))
-    radiation_inputs = try
-        inputs = _effective_radiation_use_tokens(first_row)
-        isempty(inputs) ? _inferred_radiation_input_columns(first_row) : inputs
-    catch err
-        push!(warnings, "Could not resolve radiation inputs: $(sprint(showerror, err))")
-        String[]
+    columns = Symbol[Symbol(name) for name in _row_propertynames(first_row)]
+    first_resolution = _resolve_meteo_step(
+        first_row,
+        options;
+        row_index=first(source_indices),
+        check_boundaries=check_boundaries,
+    )
+    append!(warnings, first_resolution.errors)
+    append!(warnings, first_resolution.warnings)
+    radiation_inputs = String[]
+    solar_geometry = "unknown"
+    if first_resolution.step !== nothing && isempty(first_resolution.errors)
+        step = first_resolution.step
+        for (logical_name, label) in (
+            (:ri_sw_f, "RI_SW_f"),
+            (:ri_par_f, "RI_PAR_f"),
+            (:ri_nir_f, "RI_NIR_f"),
+            (:ri_sw_direct, "RI_SW_f_direct"),
+            (:ri_sw_diffuse, "RI_SW_f_diffuse"),
+            (:direct_fraction, "direct_fraction"),
+            (:clearness, "clearness"),
+        )
+            source = get(step.sources, logical_name, nothing)
+            source === nothing && continue
+            source in getproperty(_METEO_ALIASES, logical_name) || continue
+            push!(radiation_inputs, label)
+        end
+        solar_geometry =
+            step.solar_geometry_source == :explicit ? "explicit sun_azimuth/sun_elevation" :
+            step.solar_geometry_source == :zero_forcing_default ? "irrelevant for zero radiation" :
+            "reconstructed from date/time and latitude"
+    else
+        has_sun =
+            (:sun_azimuth in columns || :sun_azimut in columns) &&
+            (:sun_elevation in columns)
+        latitude = _row_value(first_row, [:latitude, :lat], NaN)
+        solar_geometry =
+            has_sun ? "explicit sun_azimuth/sun_elevation" :
+            isfinite(latitude) ? "reconstructed from date/time and latitude" :
+            "missing latitude or explicit sun position"
     end
-    has_sun = (:sun_azimuth in columns || :sun_azimut in columns) && (:sun_elevation in columns)
-    latitude = _row_value(first_row, [:latitude, :lat], NaN)
-    solar_geometry =
-        has_sun ? "explicit sun_azimuth/sun_elevation" :
-        isfinite(latitude) ? "reconstructed from date/time and latitude" :
-        "missing latitude or explicit sun position"
     duration_values = Float64[]
     for (i, row) in enumerate(rows)
-        try
-            push!(duration_values, _step_duration_seconds_local(row))
-        catch err
-            push!(warnings, "Row $i has invalid duration: $(sprint(showerror, err))")
-        end
+        source_index = source_indices[i]
+        resolution = _resolve_meteo_step(
+            row,
+            options;
+            row_index=source_index,
+            check_boundaries=check_boundaries,
+        )
+        append!(warnings, resolution.errors)
+        append!(warnings, resolution.warnings)
+        resolution.step === nothing ||
+            push!(duration_values, resolution.step.duration_seconds)
     end
     duration_seconds = isempty(duration_values) ? nothing : first(duration_values)
     variable_duration =
         !isempty(duration_values) && any(v -> !isapprox(v, first(duration_values); rtol=0.0, atol=1e-9), duration_values)
-    report = check_meteo(meteo; options=options)
+    report = check_meteo(
+        meteo;
+        options=options,
+        check_boundaries=check_boundaries,
+    )
     append!(warnings, report.errors)
     append!(warnings, report.warnings)
     return MeteoSummary(length(rows), columns, duration_seconds, variable_duration, radiation_inputs, solar_geometry, unique(warnings))
@@ -1525,12 +2328,45 @@ function _inferred_radiation_input_columns(row)
     return inputs
 end
 
+"""
+    check_simulation(sim)::ValidationReport
+    check_simulation(scene, meteo; models, options=LightOptions(), check_boundaries=options.check_meteo_boundaries)::ValidationReport
+
+Validate a reusable simulation or the separate inputs needed to build and run
+one.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) to validate.
+- `scene`: `PlantGeom.SceneGeometry` to validate when checking separate inputs.
+- `meteo`: meteo row or table to validate when checking separate inputs.
+
+Keywords:
+
+- `models`: required model specification when checking separate inputs.
+- `options`: [`LightOptions`](@ref) used for meteo validation.
+- `check_boundaries`: check physical ranges for used meteo values.
+"""
 function check_simulation(sim::LightSimulation)
     _merge_reports(check_scene(sim.scene), check_models(sim.scene, sim.models))
 end
 
-function check_simulation(scene::PlantGeom.SceneGeometry, meteo; models, options::LightOptions=LightOptions())
-    _merge_reports(check_scene(scene), check_models(scene, models), check_meteo(meteo; options=options))
+function check_simulation(
+    scene::PlantGeom.SceneGeometry,
+    meteo;
+    models,
+    options::LightOptions=LightOptions(),
+    check_boundaries::Bool=options.check_meteo_boundaries,
+)
+    _merge_reports(
+        check_scene(scene),
+        check_models(scene, models),
+        check_meteo(
+            meteo;
+            options=options,
+            check_boundaries=check_boundaries,
+        ),
+    )
 end
 
 @inline _series_progress_enabled(io::IO=stderr) = io isa Base.TTY
@@ -1599,6 +2435,11 @@ function _touch_cache_entry!(cache::LightSimulationCache, entry::TurtleLightCach
     return entry
 end
 
+@inline function _cache_can_store_bytes(cache::LightSimulationCache, required_bytes::Int)
+    required_bytes >= 0 || return false
+    return Int128(cache.resident_bytes) + required_bytes <= cache.memory_limit_bytes
+end
+
 function _evict_cache_entries!(cache::LightSimulationCache, required_bytes::Int; protect_key::Union{Nothing,UInt64}=nothing)
     cache.mode == :partial || return nothing
     while cache.resident_bytes + required_bytes > cache.memory_limit_bytes && !isempty(cache.entries)
@@ -1628,9 +2469,6 @@ function _build_turtle_cache_entry!(
     prepared === nothing && error("Cannot build full-response cache entry without prepared interception data.")
     responses = _build_sector_responses(prepared, cache.scene, cache.models, turtle, cache.options)
     n = length(turtle.sectors)
-    base_bytes =
-        length(prepared.geometry.node_ids) * n * (sizeof(Float64) + sizeof(Int))
-    cache.mode == :partial && _evict_cache_entries!(cache, base_bytes)
     entry = TurtleLightCacheEntry(
         key,
         turtle,
@@ -1644,9 +2482,20 @@ function _build_turtle_cache_entry!(
         fill(true, n),
         Dict{String,Vector{Int}}(),
         Dict{String,Vector{Bool}}(),
-        base_bytes,
+        0,
         0,
     )
+    base_bytes = _turtle_cache_entry_retained_bytes(entry)
+    entry.resident_bytes = base_bytes
+    cache.mode == :partial && _evict_cache_entries!(cache, base_bytes)
+    if !_cache_can_store_bytes(cache, base_bytes)
+        # A built entry can exceed its pre-build estimate because it also owns
+        # sparse active-index vectors, scattering topology, and container
+        # storage. Finish this step with the transient response, then use the
+        # uncached topology path later.
+        cache.mode = :topology_fallback
+        return _touch_cache_entry!(cache, entry)
+    end
     cache.entries[key] = entry
     cache.resident_bytes += base_bytes
     return _touch_cache_entry!(cache, entry)
@@ -1671,8 +2520,8 @@ function _ensure_sector_band_cache!(
 )
     options = cache.options
     geometry = entry.responses_cache.prepared.geometry
-    n_nodes = length(geometry.node_ids)
     band_u = uppercase(band)
+    is_extra_band = false
     if band_u == "PAR"
         target = entry.par_added_per_sector
         iterations = entry.par_iterations_per_sector
@@ -1682,27 +2531,28 @@ function _ensure_sector_band_cache!(
         iterations = entry.nir_iterations_per_sector
         converged = entry.nir_converged_per_sector
     else
-        target = get!(entry.extra_added_per_sector, band_u) do
-            fill(nothing, length(entry.turtle.sectors))
-        end
-        iterations = get!(entry.extra_iterations_per_sector, band_u) do
-            zeros(Int, length(entry.turtle.sectors))
-        end
-        converged = get!(entry.extra_converged_per_sector, band_u) do
-            fill(true, length(entry.turtle.sectors))
-        end
+        is_extra_band = true
+        target = get(entry.extra_added_per_sector, band_u, nothing)
+        iterations = get(entry.extra_iterations_per_sector, band_u, nothing)
+        converged = get(entry.extra_converged_per_sector, band_u, nothing)
     end
-    existing = target[sector_idx]
+    existing = target === nothing ? nothing : target[sector_idx]
     existing !== nothing && return existing, iterations[sector_idx], converged[sector_idx]
 
-    cache.mode == :partial && _evict_cache_entries!(cache, n_nodes * sizeof(Float64); protect_key=entry.key)
     unit_fluxes =
         if band_u == "NIR"
             _unit_directional_fluxes(entry.turtle, sector_idx; nir=1.0)
         else
             _unit_directional_fluxes(entry.turtle, sector_idx; par=1.0)
         end
-    first = _combine_sector_responses(entry.responses_cache, unit_fluxes)
+    # Cached unit responses must stay linear in the external sector flux.
+    # Artificial-emitter scenes use a combined step-level scattering solve.
+    first = _combine_sector_responses(
+        entry.responses_cache,
+        unit_fluxes;
+        emitter_band_par=nothing,
+        emitter_band_nir=nothing,
+    )
     result =
         compute_scattering_band(
             entry.responses_cache.scattering_topology,
@@ -1713,11 +2563,24 @@ function _ensure_sector_band_cache!(
             band=band_u,
         )
     dense = _dense_vector_from_node_values(result.added_power_per_node, geometry)
-    target[sector_idx] = dense
-    iterations[sector_idx] = result.iterations
-    converged[sector_idx] = result.converged
-    entry.resident_bytes += n_nodes * sizeof(Float64)
-    cache.resident_bytes += n_nodes * sizeof(Float64)
+    required_bytes = Base.summarysize(dense)
+    cache.mode == :partial &&
+        _evict_cache_entries!(cache, required_bytes; protect_key=entry.key)
+    entry_is_resident = get(cache.entries, entry.key, nothing) === entry
+    # The set of custom wavebands is unbounded and Julia Dict growth is not a
+    # stable byte contract. Reuse cached geometry/topology for those bands, but
+    # retain only the fixed PAR/NIR response families under the hard cache cap.
+    retain_response =
+        !is_extra_band &&
+        entry_is_resident &&
+        _cache_can_store_bytes(cache, required_bytes)
+    if retain_response
+        target[sector_idx] = dense
+        iterations[sector_idx] = result.iterations
+        converged[sector_idx] = result.converged
+        entry.resident_bytes += required_bytes
+        cache.resident_bytes += required_bytes
+    end
     return dense, result.iterations, result.converged
 end
 
@@ -1729,6 +2592,27 @@ function _assemble_cached_scattering(
 )
     options = cache.options
     options.scattering || return nothing
+
+    # The iterative stopping rule is relative to the combined initial field.
+    # With emitters, summing independently truncated sky-sector and emitter
+    # solves can therefore differ from an uncached combined solve. Reuse the
+    # cached geometry/topology, but solve scattering once on the complete
+    # first-order field to preserve cache-on/cache-off parity.
+    if entry.responses_cache.emitter_transfer !== nothing
+        first = _combine_sector_responses(entry.responses_cache, fluxes)
+        return _compute_scattering_with_flags(
+            cache.scene,
+            cache.models,
+            entry.turtle,
+            first,
+            options;
+            mode=cache.scattering_mode,
+            backend=cache.scattering_backend,
+            nir_scattering=nir_scattering,
+            responses_cache=entry.responses_cache,
+        )
+    end
+
     node_ids = entry.responses_cache.node_ids
     added_par = zeros(Float64, length(node_ids))
     added_nir = zeros(Float64, length(node_ids))
@@ -1752,6 +2636,7 @@ function _assemble_cached_scattering(
             end
         end
     end
+
     return ScatteringResult(
         SpectralNodeValues(_float_dict_from_dense(node_ids, added_par), _float_dict_from_dense(node_ids, added_nir)),
         iterations,
@@ -1765,33 +2650,68 @@ function _compute_extra_band_light_cached(
     meteo_row,
     sky::SkyState,
     turtle::TurtleGrid,
+    resolved_step::ResolvedMeteoStep,
 )
-    extras_irr = _extra_band_irradiance(meteo_row)
+    extras_irr = _extra_band_irradiance(resolved_step, meteo_row, cache.options)
+    _include_emitter_extra_bands!(
+        extras_irr,
+        entry.responses_cache.prepared.emitter_power_per_band_per_node,
+    )
     extra_0_q = Dict{String,Dict{Int,Float64}}()
     extra_q = Dict{String,Dict{Int,Float64}}()
-    isempty(extras_irr) && return extra_0_q, extra_q, extras_irr
+    extra_emitter_escaped_power = Dict{String,Dict{Int,Float64}}()
+    isempty(extras_irr) &&
+        return extra_0_q, extra_q, extras_irr, extra_emitter_escaped_power
 
     node_ids = entry.responses_cache.node_ids
     ids = [s.id for s in turtle.sectors]
     n = length(ids)
     for (band, total_irr) in extras_irr
-        flux_band = _single_band_flux(total_irr, meteo_row, sky, turtle, cache.options)
-        first_band = _combine_sector_responses(entry.responses_cache, DirectionalFluxes(ids, flux_band, zeros(Float64, n)))
+        flux_band = _single_band_flux(
+            total_irr,
+            meteo_row,
+            sky,
+            turtle,
+            cache.options;
+            resolved_step=resolved_step,
+        )
+        first_band = _combine_sector_responses(
+            entry.responses_cache,
+            DirectionalFluxes(ids, flux_band, zeros(Float64, n));
+            emitter_band_par=band,
+            emitter_band_nir=nothing,
+        )
         order0 = Dict{Int,Float64}(nid => v for (nid, v) in first_band.incident_power.par)
         added =
             if cache.options.scattering
-                dense = zeros(Float64, length(node_ids))
-                iterations = 0
-                converged = true
-                for i in eachindex(flux_band)
-                    f = flux_band[i]
-                    f == 0.0 && continue
-                    unit_dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, band)
-                    _accumulate_scaled!(dense, unit_dense, f)
-                    iterations = max(iterations, it)
-                    converged &= conv
+                emitter_power = get(
+                    entry.responses_cache.prepared.emitter_power_per_band_per_node,
+                    uppercase(band),
+                    Dict{Int,Float64}(),
+                )
+                if any(!iszero, values(emitter_power))
+                    compute_scattering_band(
+                        entry.responses_cache.scattering_topology,
+                        first_band,
+                        cache.options;
+                        mode=cache.scattering_mode,
+                        backend=cache.scattering_backend,
+                        band=band,
+                    ).added_power_per_node
+                else
+                    dense = zeros(Float64, length(node_ids))
+                    iterations = 0
+                    converged = true
+                    for i in eachindex(flux_band)
+                        f = flux_band[i]
+                        f == 0.0 && continue
+                        unit_dense, it, conv = _ensure_sector_band_cache!(cache, entry, i, band)
+                        _accumulate_scaled!(dense, unit_dense, f)
+                        iterations = max(iterations, it)
+                        converged &= conv
+                    end
+                    _float_dict_from_dense(node_ids, dense)
                 end
-                _float_dict_from_dense(node_ids, dense)
             else
                 Dict{Int,Float64}()
             end
@@ -1801,14 +2721,18 @@ function _compute_extra_band_light_cached(
         end
         extra_0_q[band] = order0
         extra_q[band] = total
+        extra_emitter_escaped_power[band] =
+            Dict{Int,Float64}(first_band.emitter_escaped_power.par)
     end
-    return extra_0_q, extra_q, extras_irr
+    return extra_0_q, extra_q, extras_irr, extra_emitter_escaped_power
 end
 
 function _run_light_step_cached(
     cache::LightSimulationCache,
     meteo_row;
     use_full_response::Bool=(cache.mode != :topology_fallback),
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
+    resolved_step::Union{Nothing,ResolvedMeteoStep}=nothing,
 )
     scene = cache.scene
     models = cache.models
@@ -1816,15 +2740,34 @@ function _run_light_step_cached(
     ib = cache.resolved_interception_backend
     nir_interception = _nir_interception_enabled_local(options)
     nir_scattering = _nir_scattering_enabled_local(options) && nir_interception
-    sky = compute_sky(meteo_row, options)
+    resolved =
+        resolved_step === nothing ?
+        _resolved_meteo_step_or_error(
+            meteo_row,
+            options;
+            check_boundaries=check_boundaries,
+        ) : resolved_step
+    sky = compute_sky(
+        meteo_row,
+        options;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
     nir_interception || (sky = _disable_nir_sky_local(sky))
     turtle = build_turtle(options, sky)
-    fluxes = compute_directional_fluxes(meteo_row, sky, turtle, options)
+    fluxes = compute_directional_fluxes(
+        meteo_row,
+        sky,
+        turtle,
+        options;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 
     prepared = cache.prepared
     responses_cache = nothing
     scattering_topology = nothing
-    extra_irr = _extra_band_irradiance(meteo_row)
+    extra_irr = _extra_band_irradiance(resolved, meteo_row, options)
     first = nothing
     scat = nothing
     if use_full_response && cache.mode != :topology_fallback
@@ -1832,7 +2775,15 @@ function _run_light_step_cached(
         responses_cache = entry.responses_cache
         first = _combine_sector_responses(responses_cache, fluxes)
         scat = _assemble_cached_scattering(cache, entry, fluxes, nir_scattering)
-        extra_0_q, extra_q, extra_irr = _compute_extra_band_light_cached(cache, entry, meteo_row, sky, turtle)
+        extra_0_q, extra_q, extra_irr, extra_emitter_escaped_power =
+            _compute_extra_band_light_cached(
+                cache,
+                entry,
+                meteo_row,
+                sky,
+                turtle,
+                resolved,
+            )
     else
         if ib isa RasterCPUBackend && options.scattering && isempty(extra_irr)
             prepared === nothing && (prepared = _prepare_interception_data(scene, models, options; include_budget_maps=true))
@@ -1857,28 +2808,33 @@ function _run_light_step_cached(
             responses_cache=responses_cache,
             scattering_topology=scattering_topology,
         )
-        extra_0_q, extra_q, extra_irr = _compute_extra_band_light(
-            scene,
-            models,
-            meteo_row,
-            sky,
-            turtle,
-            options;
-            interception_backend=ib,
-            scattering_mode=cache.scattering_mode,
-            scattering_backend=cache.scattering_backend,
-            responses_cache=responses_cache,
-        )
+        extra_0_q, extra_q, extra_irr, extra_emitter_escaped_power =
+            _compute_extra_band_light(
+                scene,
+                models,
+                meteo_row,
+                sky,
+                turtle,
+                options;
+                interception_backend=ib,
+                scattering_mode=cache.scattering_mode,
+                scattering_backend=cache.scattering_backend,
+                responses_cache=responses_cache,
+                prepared=prepared,
+                resolved_step=resolved,
+            )
     end
+    nir_interception || (first = _disable_nir_first_order_local(first))
     budget = integrate_light(
         scene,
         models,
         first,
         scat,
         options;
-        meteo_row=meteo_row,
+        step_duration_seconds=resolved.duration_seconds,
         extra_initial_energy_per_band=extra_0_q,
         extra_energy_per_band=extra_q,
+        extra_emitter_escaped_power_per_band=extra_emitter_escaped_power,
         component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
@@ -1893,7 +2849,18 @@ function _run_light_step_cached(
             prepared=prepared,
             responses_cache=responses_cache,
         ) : nothing
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, sky_fraction, cache.render_geometry)
+    return LightStepResult(
+        sky,
+        turtle,
+        fluxes,
+        first,
+        scat,
+        budget,
+        extra_irr,
+        sky_fraction,
+        cache.render_geometry,
+        cache.node_metadata,
+    )
 end
 
 function _run_light_sky_cached(
@@ -1922,7 +2889,8 @@ function _run_light_sky_cached(
     extra_q = Dict{String,Dict{Int,Float64}}()
     if use_full_response && cache.mode != :topology_fallback
         entry = _get_turtle_cache_entry!(cache, turtle)
-        first = _combine_sector_responses(entry.responses_cache, fluxes)
+        responses_cache = entry.responses_cache
+        first = _combine_sector_responses(responses_cache, fluxes)
         scat = _assemble_cached_scattering(cache, entry, fluxes, nir_scattering)
     else
         if ib isa RasterCPUBackend && options.scattering
@@ -1945,6 +2913,21 @@ function _run_light_sky_cached(
             scattering_topology=scattering_topology,
         )
     end
+    extra_0_q, extra_q, extra_irr, extra_emitter_escaped_power =
+        _compute_extra_band_light(
+            scene,
+            models,
+            nothing,
+            sky,
+            turtle,
+            options;
+            interception_backend=ib,
+            scattering_mode=cache.scattering_mode,
+            scattering_backend=cache.scattering_backend,
+            responses_cache=responses_cache,
+            prepared=prepared,
+        )
+    nir_interception || (first = _disable_nir_first_order_local(first))
     budget = integrate_light(
         scene,
         models,
@@ -1954,11 +2937,23 @@ function _run_light_sky_cached(
         step_duration_seconds=Float64(step_duration_seconds),
         extra_initial_energy_per_band=extra_0_q,
         extra_energy_per_band=extra_q,
+        extra_emitter_escaped_power_per_band=extra_emitter_escaped_power,
         component_area_per_node=prepared === nothing ? nothing : prepared.component_area_per_node,
         absorption_par_per_node=prepared === nothing ? nothing : prepared.absorption_par_per_node,
         absorption_nir_per_node=prepared === nothing ? nothing : prepared.absorption_nir_per_node,
     )
-    return LightStepResult(sky, turtle, fluxes, first, scat, budget, extra_irr, nothing, cache.render_geometry)
+    return LightStepResult(
+        sky,
+        turtle,
+        fluxes,
+        first,
+        scat,
+        budget,
+        extra_irr,
+        nothing,
+        cache.render_geometry,
+        cache.node_metadata,
+    )
 end
 
 function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulationCache)
@@ -1966,58 +2961,129 @@ function _use_full_response_for_sim(sim::LightSimulation, cache::LightSimulation
 end
 
 function _is_meteo_series_input(x)
-    x isa MeteoTable && return true
     x isa PlantMeteo.TimeStepTable && return true
-    x isa AbstractVector && return !isempty(x) && all(row -> row isa NamedTuple, x)
-    Tables.istable(typeof(x)) && return !(x isa NamedTuple)
+    if x isa AbstractVector
+        (isempty(x) && eltype(x) <: NamedTuple) && return true
+        (!isempty(x) && all(row -> row isa NamedTuple, x)) && return true
+        Tables.istable(typeof(x)) && return true
+        return false
+    end
+    if x isa NamedTuple
+        return !isempty(x) && all(column -> column isa AbstractVector, values(x))
+    end
+    Tables.istable(typeof(x)) && return true
     return false
 end
 
-function _run_light_series_sim(sim::LightSimulation, meteo)
-    cache = _ensure_light_cache!(sim)
-    meteo_local =
-        if meteo isa MeteoTable
-            meteo
-        elseif meteo isa PlantMeteo.TimeStepTable
-            MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-        else
-            MeteoTable(_meteo_rows(_as_plantmeteo_table(meteo)), _meteo_metadata(_as_plantmeteo_table(meteo)))
-        end
-    rows_eff = _prepare_meteo_rows_for_series(meteo_local, sim.options)
+function _run_light_series_resolved(
+    cache::LightSimulationCache,
+    rows_eff::PlantMeteo.TimeStepTable,
+    resolved_steps::Vector{ResolvedMeteoStep};
+    use_full_response::Bool=(cache.mode != :topology_fallback),
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
+)
+    length(rows_eff) == length(resolved_steps) ||
+        error("Internal meteo/resolved-step length mismatch.")
     out = Vector{LightStepResult}(undef, length(rows_eff))
     io = stderr
     started_ns = time_ns()
     last_report_ns = Ref(started_ns)
-    use_full_response = _use_full_response_for_sim(sim, cache)
     if !isempty(rows_eff)
-        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
+        _report_series_progress!(
+            io,
+            cache,
+            0,
+            length(rows_eff),
+            started_ns,
+            last_report_ns;
+            force=true,
+        )
     end
-    for i in eachindex(rows_eff)
-        out[i] = _run_light_step_cached(cache, rows_eff[i]; use_full_response=use_full_response)
-        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
+    for (i, row) in enumerate(rows_eff)
+        out[i] = _run_light_step_cached(
+            cache,
+            row;
+            use_full_response=use_full_response,
+            check_boundaries=check_boundaries,
+            resolved_step=resolved_steps[i],
+        )
+        _report_series_progress!(
+            io,
+            cache,
+            i,
+            length(rows_eff),
+            started_ns,
+            last_report_ns;
+            force=(i == length(rows_eff)),
+        )
     end
     return out
 end
 
+function _run_light_series_sim(
+    sim::LightSimulation,
+    meteo;
+    check_boundaries::Bool=sim.options.check_meteo_boundaries,
+)
+    meteo_local = meteo isa PlantMeteo.TimeStepTable ? meteo : _as_plantmeteo_table(meteo)
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo_local,
+        sim.options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
+    cache = _ensure_light_cache!(sim)
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        use_full_response=_use_full_response_for_sim(sim, cache),
+        check_boundaries=check_boundaries,
+    )
+end
+
 """
-    run_light(sim, meteo_or_row)
+    run_light(sim, meteo_or_row; check_boundaries=sim.options.check_meteo_boundaries)
 
 Run one light step for a meteo row, or a full series for a meteo table.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) containing the scene, models, options, and
+  lazy cache.
+- `meteo_or_row`: either a single meteo row for one step, or a
+  `PlantMeteo.TimeStepTable`/Tables.jl-compatible table for a series.
+
+Keywords:
+
+- `check_boundaries`: check physical ranges for used meteo values. Derivability
+  and conflicting-input checks are always performed.
 """
-function run_light(sim::LightSimulation, meteo_or_row)
-    meteo_report = check_meteo(meteo_or_row; options=sim.options)
-    if !isempty(meteo_report.errors)
-        error(_validation_error_message(
-            "Invalid meteo input",
-            meteo_report;
-            next="Run `check_meteo(meteo; options=sim.options)` and `summarize_meteo(meteo; options=sim.options)` to inspect expected columns and units.",
-        ))
-    end
+function run_light(
+    sim::LightSimulation,
+    meteo_or_row;
+    check_boundaries::Bool=sim.options.check_meteo_boundaries,
+)
     if _is_meteo_series_input(meteo_or_row)
-        return _run_light_series_sim(sim, meteo_or_row)
+        return _run_light_series_sim(
+            sim,
+            meteo_or_row;
+            check_boundaries=check_boundaries,
+        )
     end
+    resolved = _resolved_meteo_step_or_error(
+        meteo_or_row,
+        sim.options;
+        check_boundaries=check_boundaries,
+    )
     cache = _ensure_light_cache!(sim)
-    return _run_light_step_cached(cache, meteo_or_row; use_full_response=_use_full_response_for_sim(sim, cache))
+    return _run_light_step_cached(
+        cache,
+        meteo_or_row;
+        use_full_response=_use_full_response_for_sim(sim, cache),
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 """
@@ -2025,6 +3091,17 @@ end
 
 Run one light step from an already computed sky state. The step duration is
 required because there is no meteo row from which to infer it.
+
+Arguments:
+
+- `sim`: [`LightSimulation`](@ref) containing the scene, models, options, and
+  lazy cache.
+- `sky`: precomputed [`SkyState`](@ref) used for one light step.
+
+Keywords:
+
+- `step_duration_seconds`: duration of the step in seconds. This is required
+  for energy integration.
 """
 function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=nothing)
     if step_duration_seconds === nothing
@@ -2037,6 +3114,109 @@ function run_light(sim::LightSimulation, sky::SkyState; step_duration_seconds=no
         step_duration_seconds=step_duration_seconds,
         use_full_response=_use_full_response_for_sim(sim, cache),
     )
+end
+
+function _sky_series_durations(skies::AbstractVector{<:SkyState}, step_duration_seconds)
+    if step_duration_seconds === nothing
+        error(
+            "run_light(sim, skies::AbstractVector{<:SkyState}) requires `step_duration_seconds`; " *
+            "pass one duration for every state or a vector with length $(length(skies)).",
+        )
+    elseif step_duration_seconds isa Real
+        duration = _duration_seconds_strict(
+            step_duration_seconds;
+            field_name="step_duration_seconds",
+        )
+        return fill(duration, length(skies))
+    elseif step_duration_seconds isa AbstractVector
+        length(step_duration_seconds) == length(skies) || throw(
+            ArgumentError(
+                "`step_duration_seconds` has length $(length(step_duration_seconds)), " *
+                "but the SkyState vector has length $(length(skies)).",
+            ),
+        )
+        durations = Vector{Float64}(undef, length(step_duration_seconds))
+        for (i, duration) in enumerate(step_duration_seconds)
+            duration isa Real || throw(
+                ArgumentError(
+                    "`step_duration_seconds[$i]` must be a real number of seconds, " *
+                    "got $(typeof(duration)).",
+                ),
+            )
+            durations[i] = _duration_seconds_strict(
+                duration;
+                field_name="step_duration_seconds[$i]",
+            )
+        end
+        return durations
+    end
+    throw(
+        ArgumentError(
+            "`step_duration_seconds` must be a real number or a vector of real numbers, " *
+            "got $(typeof(step_duration_seconds)).",
+        ),
+    )
+end
+
+"""
+    run_light(sim, skies::AbstractVector{<:SkyState}; step_duration_seconds)
+
+Run a series of already computed sky states. The step duration is required
+because sky states do not contain timing metadata.
+
+`step_duration_seconds` may be either one positive duration shared by every
+state or a vector of positive durations with the same length as `skies`. The
+results are returned as a `Vector{LightStepResult}` in input order, while the
+simulation's prepared scene and radiation cache are reused across the series.
+
+# Examples
+
+```julia
+series = run_light(sim, skies; step_duration_seconds=1800.0)
+series = run_light(sim, skies; step_duration_seconds=[900.0, 1800.0, 900.0])
+```
+"""
+function run_light(
+    sim::LightSimulation,
+    skies::AbstractVector{<:SkyState};
+    step_duration_seconds=nothing,
+)
+    durations = _sky_series_durations(skies, step_duration_seconds)
+    cache = _ensure_light_cache!(sim)
+    use_full_response = _use_full_response_for_sim(sim, cache)
+    out = Vector{LightStepResult}(undef, length(skies))
+    io = stderr
+    started_ns = time_ns()
+    last_report_ns = Ref(started_ns)
+    if !isempty(skies)
+        _report_series_progress!(
+            io,
+            cache,
+            0,
+            length(skies),
+            started_ns,
+            last_report_ns;
+            force=true,
+        )
+    end
+    for (i, (sky, duration)) in enumerate(zip(skies, durations))
+        out[i] = _run_light_sky_cached(
+            cache,
+            sky;
+            step_duration_seconds=duration,
+            use_full_response=use_full_response,
+        )
+        _report_series_progress!(
+            io,
+            cache,
+            i,
+            length(skies),
+            started_ns,
+            last_report_ns;
+            force=(i == length(skies)),
+        )
+    end
+    return out
 end
 
 """
@@ -2057,7 +3237,13 @@ function run_light_step(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
+    resolved = _resolved_meteo_step_or_error(
+        meteo_row,
+        options;
+        check_boundaries=check_boundaries,
+    )
     cache = prepare_light_cache(
         scene,
         models,
@@ -2067,20 +3253,37 @@ function run_light_step(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return _run_light_step_cached(cache, meteo_row; use_full_response=false)
+    return _run_light_step_cached(
+        cache,
+        meteo_row;
+        use_full_response=false,
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 function run_light_step(
     cache::LightSimulationCache,
-    meteo_row,
+    meteo_row;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
-    return _run_light_step_cached(cache, meteo_row)
+    resolved = _resolved_meteo_step_or_error(
+        meteo_row,
+        cache.options;
+        check_boundaries=check_boundaries,
+    )
+    return _run_light_step_cached(
+        cache,
+        meteo_row;
+        check_boundaries=check_boundaries,
+        resolved_step=resolved,
+    )
 end
 
 """
     run_light_series(scene, models, meteo, options; interception_backend=:raster_cpu, scattering_mode=:raycast, scattering_backend=nothing)::Vector{LightStepResult}
 
-Run the complete light pipeline for all rows in a `MeteoTable`, with optional directional
+Run the complete light pipeline for all rows in a `PlantMeteo.TimeStepTable`, with optional directional
 response reuse when `LightOptions(cache_radiation=true)` is enabled.
 Set `LightOptions(include_sky_fraction=true)` to store `sky_fraction` in each step.
 When using `read_config`, this option is enabled by requesting `sky_fraction`
@@ -2089,12 +3292,19 @@ in `component_variables` or `opf_variables`.
 function run_light_series(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
-    meteo::MeteoTable,
+    meteo::PlantMeteo.TimeStepTable,
     options::LightOptions;
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo,
+        options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
     if _can_use_series_radiation_cache(_resolve_interception_backend(interception_backend)) && options.cache_radiation
         cache = prepare_light_cache(
             scene,
@@ -2104,7 +3314,12 @@ function run_light_series(
             scattering_mode=scattering_mode,
             scattering_backend=scattering_backend,
         )
-        return run_light_series(cache, meteo)
+        return _run_light_series_resolved(
+            cache,
+            rows_eff,
+            resolved_steps;
+            check_boundaries=check_boundaries,
+        )
     end
 
     cache = prepare_light_cache(
@@ -2116,64 +3331,45 @@ function run_light_series(
         scattering_backend=scattering_backend,
         memory_limit_bytes=0,
     )
-    return run_light_series(cache, meteo)
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function run_light_series(
     cache::LightSimulationCache,
-    meteo::MeteoTable,
+    meteo::PlantMeteo.TimeStepTable;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
-    rows_eff = _prepare_meteo_rows_for_series(meteo, cache.options)
-    out = Vector{LightStepResult}(undef, length(rows_eff))
-    io = stderr
-    started_ns = time_ns()
-    last_report_ns = Ref(started_ns)
-    if !isempty(rows_eff)
-        _report_series_progress!(io, cache, 0, length(rows_eff), started_ns, last_report_ns; force=true)
-    end
-    for i in eachindex(rows_eff)
-        out[i] = _run_light_step_cached(cache, rows_eff[i])
-        _report_series_progress!(io, cache, i, length(rows_eff), started_ns, last_report_ns; force=(i == length(rows_eff)))
-    end
-    return out
-end
-
-function run_light_series(
-    cache::LightSimulationCache,
-    meteo::PlantMeteo.TimeStepTable,
-)
-    meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-    return run_light_series(cache, meteo_local)
+    rows_eff, resolved_steps = _prepare_meteo_for_series(
+        meteo,
+        cache.options;
+        check_boundaries=check_boundaries,
+        return_resolved=true,
+    )
+    return _run_light_series_resolved(
+        cache,
+        rows_eff,
+        resolved_steps;
+        check_boundaries=check_boundaries,
+    )
 end
 
 function run_light_series(
     cache::LightSimulationCache,
     meteo;
+    check_boundaries::Bool=cache.options.check_meteo_boundaries,
 )
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(cache, meteo)
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(cache, meteo)
-    return run_light_series(cache, _as_plantmeteo_table(meteo))
-end
-
-function run_light_series(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    meteo::PlantMeteo.TimeStepTable,
-    options::LightOptions;
-    interception_backend=:raster_cpu,
-    scattering_mode::Symbol=:raycast,
-    scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
-)
-    meteo_local = MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
-    run_light_series(
-        scene,
-        models,
-        meteo_local,
-        options;
-        interception_backend=interception_backend,
-        scattering_mode=scattering_mode,
-        scattering_backend=scattering_backend,
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
+    meteo isa PlantMeteo.TimeStepTable &&
+        return run_light_series(cache, meteo; check_boundaries=check_boundaries)
+    return run_light_series(
+        cache,
+        _as_plantmeteo_table(meteo);
+        check_boundaries=check_boundaries,
     )
 end
 
@@ -2185,9 +3381,28 @@ function run_light_series(
     interception_backend=:raster_cpu,
     scattering_mode::Symbol=:raycast,
     scattering_backend::Union{Nothing,ScatteringBackend}=nothing,
+    check_boundaries::Bool=options.check_meteo_boundaries,
 )
-    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected MeteoTable, PlantMeteo.TimeStepTable, or a Tables.jl-compatible table.")
-    meteo isa MeteoTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
-    meteo isa PlantMeteo.TimeStepTable && return run_light_series(scene, models, meteo, options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
-    run_light_series(scene, models, _as_plantmeteo_table(meteo), options; interception_backend=interception_backend, scattering_mode=scattering_mode, scattering_backend=scattering_backend)
+    Tables.istable(typeof(meteo)) || error("Unsupported meteo input: expected PlantMeteo.TimeStepTable or a Tables.jl-compatible table.")
+    meteo isa PlantMeteo.TimeStepTable &&
+        return run_light_series(
+            scene,
+            models,
+            meteo,
+            options;
+            interception_backend=interception_backend,
+            scattering_mode=scattering_mode,
+            scattering_backend=scattering_backend,
+            check_boundaries=check_boundaries,
+        )
+    run_light_series(
+        scene,
+        models,
+        _as_plantmeteo_table(meteo),
+        options;
+        interception_backend=interception_backend,
+        scattering_mode=scattering_mode,
+        scattering_backend=scattering_backend,
+        check_boundaries=check_boundaries,
+    )
 end

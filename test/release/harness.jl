@@ -110,6 +110,13 @@ function fixture_runtime_data(fx::JuliaFixture)
         normpath(joinpath(base, fx.meteo_override))
 
     options = ArchimedLight.read_options(fx.config_path)
+    # Frozen release fixtures originate from Java ARCHIMED, where supplied
+    # irradiance is clipped to daylight substeps and averaged over the complete
+    # meteo interval. Preserve an explicit fixture choice, but use the Java
+    # semantics for legacy configs which predate this Julia option.
+    if !haskey(raw, "radiation_input_semantics")
+        options = ArchimedLight.LightOptions(options; radiation_input_semantics=:sunlit_intensity)
+    end
     scene = ArchimedLight.read_scene(scene_path)
     meteo = ArchimedLight.read_meteo(meteo_path)
     models = ArchimedLight.read_models(fx.config_path)
@@ -123,7 +130,7 @@ function fixture_runtime_data(fx::JuliaFixture)
     end
     selected = ArchimedLight.prepare_meteo(meteo, options)
     series = ArchimedLight.run_light_series(scene, models, meteo, options)
-    length(series) == length(selected.rows) || error("fixture $(fx.id): meteo/series length mismatch")
+    length(series) == length(selected) || error("fixture $(fx.id): meteo/series length mismatch")
     return (scene=scene, models=models, options=options, meteo=selected, series=series)
 end
 
@@ -193,7 +200,7 @@ function _meteo_rows_with_step(rows)
     out = Dict{String,Any}[]
     for (i, row) in enumerate(rows)
         d = Dict{String,Any}("step_number" => i - 1)
-        for name in propertynames(row)
+        for name in ArchimedLight._row_propertynames(row)
             d[string(name)] = _format_csv_value(getproperty(row, name))
         end
         push!(out, d)
@@ -382,23 +389,24 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
     files = Dict{String,String}()
 
     comp_path = joinpath(out_root, "component_values.csv")
-    _write_component_series_csv(comp_path, data.scene, data.models, data.series, data.options, data.meteo.rows)
+    meteo_rows = collect(data.meteo)
+    _write_component_series_csv(comp_path, data.scene, data.models, data.series, data.options, meteo_rows)
     files["component_values.csv"] = comp_path
 
     scene_path = joinpath(out_root, "scene_values.csv")
-    _write_scene_series_csv(scene_path, data.scene, data.series, data.meteo.rows)
+    _write_scene_series_csv(scene_path, data.scene, data.series, meteo_rows)
     files["scene_values.csv"] = scene_path
 
     summary_path = joinpath(out_root, "summary.csv")
-    _write_summary_csv(summary_path, data.scene, data.models, data.series, data.options, data.meteo.rows)
+    _write_summary_csv(summary_path, data.scene, data.models, data.series, data.options, meteo_rows)
     files["summary.csv"] = summary_path
 
     meteo_path = joinpath(out_root, "meteo.csv")
-    _rows_to_csv(meteo_path, _meteo_rows_with_step(data.meteo.rows))
+    _rows_to_csv(meteo_path, _meteo_rows_with_step(meteo_rows))
     files["meteo.csv"] = meteo_path
 
     sun_path = joinpath(out_root, "log-sun-position.csv")
-    _write_sun_position_log_csv(sun_path, data.series, data.meteo.rows)
+    _write_sun_position_log_csv(sun_path, data.series, meteo_rows)
     files["log-sun-position.csv"] = sun_path
 
     if data.options.scattering
@@ -413,13 +421,13 @@ function write_fixture_observed_outputs!(fx::JuliaFixture, out_root::AbstractStr
                 data.models,
                 data.series[i],
                 data.options;
-                meteo_row=data.meteo.rows[i],
+                meteo_row=meteo_rows[i],
                 step_number=i - 1,
                 band="PAR",
             )
             rows = _read_csv_rows(part_path)
             if !isempty(rows)
-                CSV.write(scat_path, rows; delim=';', append=!first_write, writeheader=first_write)
+                CSV.write(scat_path, rows; delim=';', append=!first_write, header=first_write)
                 first_write = false
             end
         end
@@ -568,7 +576,7 @@ function _row_get(row, col::String)
         return get(row, col, get(row, Symbol(col), missing))
     end
     s = Symbol(col)
-    return s in propertynames(row) ? getproperty(row, s) : missing
+    return s in ArchimedLight._row_propertynames(row) ? getproperty(row, s) : missing
 end
 
 function _try_float(v)
@@ -583,7 +591,13 @@ end
 function _key_columns_for_file(name::String, cols::Vector{String})
     candidates =
         if name == "component_values.csv"
-            [["step_number", "component_id"], ["step_number", "item_id", "component_id"], ["step_number", "source_topology_id"], ["step_number", "object_id", "source_topology_id"], ["step_number", "node_id"]]
+            [
+                ["step_number", "item_id", "component_id"],
+                ["step_number", "object_id", "source_topology_id"],
+                ["step_number", "source_topology_id"],
+                ["step_number", "component_id"],
+                ["step_number", "node_id"],
+            ]
         elseif name == "scene_values.csv"
             [["step_number"], ["stepNumber"]]
         elseif name == "summary.csv"

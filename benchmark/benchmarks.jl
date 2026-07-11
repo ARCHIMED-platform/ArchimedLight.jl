@@ -24,7 +24,7 @@ end
 function _load_fixture(name::String)
     paths = _fixture_paths(name)
     options, scene, meteo, models = ArchimedLight.read_config(paths.config)
-    rows = ArchimedLight.prepare_meteo(meteo, options).rows
+    rows = collect(ArchimedLight.prepare_meteo(meteo, options))
     return (paths=paths, scene=scene, models=models, options=options, meteo=meteo, rows=rows)
 end
 
@@ -179,15 +179,15 @@ SUITE["Run light"]["step"]["simpleplant toric + coarse pixels"] =
         scene = SIMPLEPLANT.scene;
         models = SIMPLEPLANT.models;
         options = _override_options(SIMPLEPLANT.options; toricity=true, pixel_size_m=0.40);
-        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options).rows)
+        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options))
     ) evals = 1
 
-SUITE["Run light"]["step"]["simpleplant scattering links"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options; scattering_mode=:links) setup = (
+SUITE["Run light"]["step"]["simpleplant scattering raycast"] =
+    @benchmarkable ArchimedLight.run_light_step(scene, models, row, options; scattering_mode=:raycast) setup = (
         scene = SIMPLEPLANT.scene;
         models = SIMPLEPLANT.models;
         options = _override_options(SIMPLEPLANT.options; scattering=true, pixel_size_m=0.05);
-        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options).rows)
+        row = first(ArchimedLight.prepare_meteo(SIMPLEPLANT.meteo, options))
     ) evals = 1
 
 SUITE["Run light"]["step"]["sky direct fixture"] =
@@ -227,7 +227,7 @@ SUITE["Run light"]["series"]["simpleplant prepared cache"] =
 
 SUITE["Run light"]["series"]["simpleplant prepared cache manual loop"] =
     @benchmarkable begin
-        for row in meteo.rows
+        for row in meteo
             ArchimedLight.run_light_step(cache, row)
         end
     end setup = (

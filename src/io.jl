@@ -26,6 +26,13 @@ function _as_string(x, default::String)
     return String(x)
 end
 
+function _as_radiation_input_semantics(x)
+    x === nothing && return :interval_mean
+    s = lowercase(strip(string(x)))
+    startswith(s, ':') && (s = s[2:end])
+    Symbol(s)
+end
+
 function _config_get(raw::AbstractDict, keys::Tuple{Vararg{String}})
     for key in keys
         haskey(raw, key) && return raw[key]
@@ -187,6 +194,10 @@ end
 Read one or more ARCHIMED model YAML files and return them as a
 [`LightModels`](@ref) collection.
 
+Arguments:
+
+- `path_or_paths`: a model source to read.
+
 `path_or_paths` can be:
 - the path to a single model YAML file containing a `Group`
 - the path to a config YAML file containing a `models:` list
@@ -227,6 +238,10 @@ end
 
 Normalize in-memory model definitions into a [`LightModels`](@ref) object.
 
+Arguments:
+
+- `models`: an in-memory model specification.
+
 Accepted inputs are an existing `LightModels`, a single [`GroupModel`](@ref), a
 vector of groups, or an `OrderedDict{String,GroupModel}`.
 """
@@ -254,6 +269,10 @@ Read runtime light options from a config YAML file.
 This parses the ARCHIMED configuration keys such as `sky_sectors`,
 `pixel_size`, `toricity`, scattering controls, and meteo-range options into a
 [`LightOptions`](@ref) instance.
+
+Arguments:
+
+- `path`: path to an ARCHIMED-style configuration YAML file.
 """
 function read_options(path::AbstractString)
     raw = _load_yaml_ordered(path)
@@ -269,10 +288,20 @@ function read_options(path::AbstractString)
         scattering_coeff_nir=_as_float(get(raw, "scattering_coeff_nir", 0.30), 0.30),
         cache_radiation=_as_bool(get(raw, "cache_radiation", false), false),
         include_sky_fraction=_config_output_variable_enabled(raw, "sky_fraction"),
+        store_node_metadata=_as_bool(get(raw, "store_node_metadata", true), true),
+        node_metadata_attributes=_normalize_node_metadata_attributes(
+            get(raw, "node_metadata_attributes", ()),
+        ),
         cache_pixel_table=_as_bool(get(raw, "cache_pixel_table", false), false),
         pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
+        radiation_input_semantics=_as_radiation_input_semantics(get(raw, "radiation_input_semantics", nothing)),
+        scene_rotation_deg=_as_float(get(raw, "scene_rotation", 0.0), 0.0),
+        check_meteo_boundaries=_as_bool(
+            _config_get(raw, ("check_meteo_boundaries", "checkMeteoBoundaries", "check_boundaries")),
+            true,
+        ),
         allow_overlapping_meteo_steps=_as_bool(
             _config_get(raw, ("allow_overlapping_meteo_steps", "allowOverlappingMeteoSteps", "allowOverlappingMeteo")),
             false,
@@ -381,15 +410,68 @@ function read_config(path::AbstractString; plot_paving_override=nothing)
 end
 
 """
-    read_simulation(path; plot_paving_override=nothing, kwargs...)
+    read_simulation(path; plot_paving_override=nothing, check_boundaries=nothing, kwargs...)
 
 Read a complete file-based light simulation and return `(sim, meteo)`, where
 `sim` is a [`LightSimulation`](@ref).
+
+Arguments:
+
+- `path`: path to the ARCHIMED-style configuration YAML file.
+
+Keywords:
+
+- `plot_paving_override`: optional replacement paving count used when
+  materializing model-declared ground geometry.
+- `check_boundaries`: optional boundary-validation policy applied while reading
+  meteo and stored in the returned simulation. Derivability and conflict checks
+  are always performed.
+- `kwargs...`: keyword arguments forwarded to [`LightSimulation`](@ref), such as
+  `interception_backend`, `scattering_mode`, `scattering_backend`, and
+  `memory_limit_bytes`.
+
+This smoke example uses coarse, non-scattering options so it remains quick:
+
+```jldoctest
+julia> repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."));
+
+julia> config = joinpath(repo_root, "example_2", "config.yml");
+
+julia> sim, meteo = read_simulation(config; plot_paving_override=0);
+
+julia> update_options!(
+           sim,
+           LightOptions(
+               sim.options;
+               turtle_sectors=1,
+               pixel_size=0.1,
+               area_ratio=false,
+               scattering=false,
+               toricity=false,
+           ),
+       );
+
+julia> step = run_light(sim, first(meteo));
+
+julia> println(step)
+LightStepResult(PAR=291.777 kJ, NIR=316.092 kJ, sky=463.139 W m^-2 PAR / 501.734 W m^-2 NIR, sectors=1 [sky=1, sun=0], scattering=off)
+```
 """
-function read_simulation(path::AbstractString; plot_paving_override=nothing, kwargs...)
+function read_simulation(
+    path::AbstractString;
+    plot_paving_override=nothing,
+    check_boundaries=nothing,
+    kwargs...,
+)
     options, scene, meteo, models = read_config(path; plot_paving_override=plot_paving_override)
-    meteo_eff = prepare_meteo(meteo, options)
-    sim_options = options.meteo_range === nothing ? options : LightOptions(options; meteo_range=nothing)
+    check_boundaries_eff =
+        check_boundaries === nothing ? options.check_meteo_boundaries : Bool(check_boundaries)
+    meteo_eff = prepare_meteo(meteo, options; check_boundaries=check_boundaries_eff)
+    sim_options = LightOptions(
+        options;
+        meteo_range=nothing,
+        check_meteo_boundaries=check_boundaries_eff,
+    )
     return LightSimulation(scene, models; options=sim_options, kwargs...), meteo_eff
 end
 
@@ -407,6 +489,15 @@ Read a scene file (`.ops`, `.opf`, or `.gwa`) and return a prepared
 
 The scene is relabelled into a dense node-id space and immediately converted to
 the merged-mesh representation expected by the interception pipeline.
+
+Arguments:
+
+- `path`: path to an `.ops`, `.opf`, or `.gwa` scene file.
+
+Keywords:
+
+- `plantgeom_backend`: reserved PlantGeom backend selector. The current default
+  is `:auto`.
 """
 function read_scene(path::AbstractString; plantgeom_backend=:auto)
     ext = lowercase(splitext(path)[2])
@@ -445,6 +536,11 @@ Write an MTG-backed `PlantGeom.SceneGeometry` to `path`.
 
 Supported output formats are `.ops`, `.opf`, and `.gwa`. The function refreshes
 the reference-mesh registry and normalizes topology ids before export.
+
+Arguments:
+
+- `path`: output path ending in `.ops`, `.opf`, or `.gwa`.
+- `scene`: MTG-backed `PlantGeom.SceneGeometry` to write.
 """
 function write_scene(path::AbstractString, scene::PlantGeom.SceneGeometry)
     scene.mtg === nothing && error("write_scene requires an MTG-backed scene.")
@@ -464,10 +560,6 @@ function write_scene(path::AbstractString, scene::PlantGeom.SceneGeometry)
     return path
 end
 
-function _rows_to_namedtuples(table)
-    Tables.rowtable(table) |> collect
-end
-
 function _meta_to_namedtuple(meta)
     if meta isa NamedTuple
         return meta
@@ -477,14 +569,6 @@ function _meta_to_namedtuple(meta)
     else
         return (;)
     end
-end
-
-function _namedtuple_with_meta(row::NamedTuple, meta::NamedTuple)
-    pairs = Pair{Symbol,Any}[]
-    for k in (:latitude, :longitude, :altitude, :use)
-        haskey(meta, k) && push!(pairs, k => getfield(meta, k))
-    end
-    isempty(pairs) ? row : merge(row, (; pairs...))
 end
 
 function _positive_duration_seconds(v; field_name::AbstractString="step_duration")
@@ -523,59 +607,87 @@ function _table_metadata_namedtuple(data)
     _meta_to_namedtuple(meta)
 end
 
-function _as_plantmeteo_table(data)
+function _with_meteo_metadata(table::PlantMeteo.TimeStepTable, metadata)
+    meta = _meta_to_namedtuple(metadata)
+    PlantMeteo.TimeStepTable(getfield(table, :names), meta, getfield(table, :ts))
+end
+
+function _with_inferred_datetime_durations(data)
+    columns = Tables.columntable(data)
+    names = Tables.columnnames(columns)
+    any(name -> name in names, (:duration, :step_duration, :hour_end)) &&
+        return data
+    time_name = :DateTime in names ? :DateTime : :date in names ? :date : nothing
+    time_name === nothing && return data
+    timestamps = getproperty(columns, time_name)
+    length(timestamps) >= 2 || return data
+    all(value -> value isa Dates.DateTime, timestamps) || return data
+    duration_periods = PlantMeteo.timesteps_durations(
+        Dates.DateTime[timestamps...];
+        verbose=false,
+    )
+    durations = Float64[Dates.toms(period) * 1.0e-3 for period in duration_periods]
+    with_duration = merge(columns, (duration=durations,))
+    return data isa PlantMeteo.TimeStepTable ?
+           PlantMeteo.TimeStepTable(with_duration, getfield(data, :metadata)) :
+           with_duration
+end
+
+function _as_plantmeteo_table(data; metadata=_table_metadata_namedtuple(data))
+    data isa PlantMeteo.TimeStepTable && return data
     transformed = Tables.columntable(data)
-    column_names = Tables.columnnames(data)
+    column_names = Tables.columnnames(transformed)
     if !(:date in column_names) && :DateTime in column_names
         transformed = PlantMeteo.set_column(transformed, :date, transformed.DateTime)
+        column_names = Tables.columnnames(transformed)
     end
     transformed = _normalize_raw_meteo_dates(transformed)
-    if !(:duration in column_names)
-        duration = PlantMeteo.compute_duration(transformed, Dates.DateFormat("HH:MM:SS"), nothing)
-        transformed = PlantMeteo.set_column(transformed, :duration, duration)
+    column_names = Tuple(Symbol.(Tables.columnnames(transformed)))
+    if isempty(column_names) || isempty(getproperty(transformed, first(column_names)))
+        return PlantMeteo.TimeStepTable(
+            column_names,
+            _meta_to_namedtuple(metadata),
+            NamedTuple[],
+        )
     end
-    PlantMeteo.TimeStepTable(transformed, _table_metadata_namedtuple(data))
+    PlantMeteo.TimeStepTable(transformed, _meta_to_namedtuple(metadata))
 end
 
 """
-    read_meteo(path)::MeteoTable
+    read_meteo(path)::PlantMeteo.TimeStepTable
+    read_meteo(data)::PlantMeteo.TimeStepTable
 
 Read a meteorological forcing table from `path` and return it as a
-[`MeteoTable`](@ref).
+`PlantMeteo.TimeStepTable`.
 
-The resulting table stores rows as named tuples and keeps available metadata
-such as latitude, longitude, altitude, and source file path.
+The resulting table keeps available metadata such as latitude, longitude,
+altitude, and source file path.
+
+Arguments:
+
+- `path`: path to a meteorological forcing file readable by PlantMeteo.
+- `data`: alternatively, a Tables.jl-compatible table or an existing
+  `PlantMeteo.TimeStepTable`.
 """
 function read_meteo(path::AbstractString)
-    weather, meta =
-        try
-            w = PlantMeteo.read_weather(
-                path;
-                date_formats=(Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd")),
-                forward_fill_date=true,
-            )
-            m = try
-                PlantMeteo.metadata(w)
-            catch
-                (; file=path)
-            end
-            (w, m)
-        catch
-            data, metadata_ = PlantMeteo.read_weather_(path)
-            data = _normalize_raw_meteo_dates(data)
-            (data, metadata_)
-        end
-    meta_nt = merge((; file=path), _meta_to_namedtuple(meta))
-    raw_rows = _rows_to_namedtuples(weather)
-    rows = [_namedtuple_with_meta(r, meta_nt) for r in raw_rows]
-    MeteoTable(rows, meta_nt)
+    try
+        weather = PlantMeteo.read_weather(
+            path;
+            date_formats=(Dates.DateFormat("yyyy/mm/dd"), Dates.DateFormat("yyyy-mm-dd")),
+            forward_fill_date=true,
+        )
+        meta = merge((; file=path), _table_metadata_namedtuple(weather))
+        return _with_meteo_metadata(weather, meta)
+    catch
+        data, metadata_ = PlantMeteo.read_weather_(path)
+        data = _normalize_raw_meteo_dates(data)
+        meta = merge((; file=path), _meta_to_namedtuple(metadata_))
+        return _as_plantmeteo_table(data; metadata=meta)
+    end
 end
 
 function read_meteo(data)
     Tables.istable(typeof(data)) || error("Unsupported meteo input: expected a path or a Tables.jl-compatible table.")
-    data isa MeteoTable && return data
-    data isa PlantMeteo.TimeStepTable && return MeteoTable(_meteo_rows(data), _meteo_metadata(data))
-
-    meteo = _as_plantmeteo_table(data)
-    MeteoTable(_meteo_rows(meteo), _meteo_metadata(meteo))
+    data isa PlantMeteo.TimeStepTable && return data
+    _as_plantmeteo_table(data)
 end

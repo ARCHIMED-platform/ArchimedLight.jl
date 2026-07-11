@@ -46,19 +46,7 @@ function _component_sky_fraction_per_node(
 end
 
 function _component_display_type(scene::PlantGeom.SceneGeometry, models::LightModels, nid::Int)
-    group = _scene_group(scene, nid, "")
-    t = strip(_scene_type(scene, nid, ""))
-    if isempty(t) || lowercase(t) == "mesh"
-        if haskey(models, group)
-            group_model = models[group]
-            if length(group_model.types) == 1
-                return first(keys(group_model.types))
-            end
-        elseif group == "pavement"
-            return "Cobblestone"
-        end
-    end
-    return t
+    _scene_display_type(scene, models, nid)
 end
 
 function _component_rows_for_step(
@@ -124,6 +112,18 @@ Write an ARCHIMED-style `component_values.csv` file from already-computed
 serializes the supplied results only; it does not run the simulation. Step
 numbers are 1-based by default. Use `step_index_base=0` only for historical
 harness compatibility.
+
+Arguments:
+
+- `path`: destination CSV file path.
+- `sim`: [`LightSimulation`](@ref) that supplies scene, model, and option
+  context for component rows.
+- `series`: one [`LightStepResult`](@ref) or a collection of results to
+  serialize.
+
+Keywords:
+
+- `step_index_base`: first step number written to the CSV. The default is `1`.
 """
 function write_component_values(
     path::AbstractString,

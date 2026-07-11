@@ -11,6 +11,7 @@ The example folder contains:
 
 ```text
 example_1/
+├── README.md
 ├── config.yml
 ├── meteo.csv
 ├── model_simple.yml
@@ -28,6 +29,7 @@ The roles of those files are:
 - `simple_OPF_shapes.opf`: plant topology and meshes
 - `model_simple.yml`, `model_soil.yml`: optical properties by functional group and type
 - `meteo.csv`: one or more simulation time steps
+- `full_featured_example.jl`: the public `read_simulation`/`run_light` workflow
 
 ## Step 1: Load Everything From The Config
 
@@ -54,7 +56,7 @@ At this point:
 
 - `options` is a `LightOptions`
 - `scene` is a `PlantGeom.SceneGeometry`
-- `meteo` is a `MeteoTable`
+- `meteo` is a `PlantMeteo.TimeStepTable`
 - `models` is a `LightModels`
 
 The soil optics still come from `model_soil.yml`. The only thing changed here is how the paving geometry is materialized for the demonstration figure.
@@ -167,4 +169,4 @@ In particular:
 - scene, model, and meteo paths are active
 - the light options described on the configuration reference page are active
 - many Java-era output toggles remain as documentation or archival context
-- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime, because they are delegated to [Plantiophysics.jl](https://github.com/VEZY/PlantBiophysics.jl).
+- photosynthesis and energy-balance settings are not part of the current `ArchimedLight.jl` runtime, because they are delegated to [PlantBiophysics.jl](https://github.com/VEZY/PlantBiophysics.jl).

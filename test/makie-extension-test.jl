@@ -14,9 +14,16 @@
         )
 
     fixture = load_fixture_inputs(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input"))
-    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options).rows)
+    row = first(ArchimedLight.prepare_meteo(fixture.meteo, fixture.options))
     step = ArchimedLight.run_light_step(fixture.scene, fixture.models, row, fixture.options)
     render_geometry = ArchimedLight.light_render_geometry(step)
+    updated_render_geometry = ArchimedLight.tile_light_geometry(
+        fixture.scene,
+        render_geometry;
+        nx=2,
+        ny=1,
+        centered=false,
+    )
 
     budget2 = ArchimedLight.LightBudget(
         scale_initial_total(step.budget.incident_flux, 2.0),
@@ -35,7 +42,7 @@
         budget2,
         step.extra_band_irradiance,
         step.sky_fraction,
-        render_geometry,
+        updated_render_geometry,
     )
 
     fig, ax, plt = ArchimedLight.lightplot(
@@ -50,6 +57,7 @@
 
     @test ax isa LScene
     @test render_geometry === step.render_geometry
+    @test Makie.to_value(plt[:light_geometry]) === render_geometry
     @test length(observed_1) == length(expected_1)
     @test all(isapprox.(observed_1, expected_1; atol=1f-6, rtol=1f-6))
     expected_range = (
@@ -59,10 +67,15 @@
     observed_range_1 = Makie.to_value(only(plt.plots).colorrange)
     @test all(isapprox.(collect(observed_range_1), collect(expected_range); atol=1f-6, rtol=1f-6))
 
-    plt[:timestep][] = 2
+    Makie.update!(plt, timestep=2)
     observed_2 = copy(Makie.to_value(plt[:light_color]))
     expected_2 = ArchimedLight.light_face_values([step, step2]; color=:Ri_PAR_f, timestep=2)
 
+    @test Makie.to_value(plt[:light_geometry]) === updated_render_geometry
+    @test length(Makie.to_value(plt[:light_base_mesh])) == length(updated_render_geometry.faces)
+    updated_child = only(plt.plots)
+    @test length(Makie.to_value(updated_child[1]).faces) == length(updated_render_geometry.faces)
+    @test length(observed_2) == length(expected_2)
     @test all(isapprox.(observed_2, expected_2; atol=1f-6, rtol=1f-6))
     @test any(!isapprox(a, b) for (a, b) in zip(observed_1, observed_2))
     observed_range_2 = Makie.to_value(only(plt.plots).colorrange)

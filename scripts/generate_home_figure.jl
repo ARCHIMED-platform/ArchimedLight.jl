@@ -20,7 +20,10 @@ function simulate_home_figure(
 )
     config_path = joinpath(repo_root, "example_2", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config_path; plot_paving_override=plot_paving_override)
-    row = first(ArchimedLight.prepare_meteo(meteo, options).rows)
+    # This one-shot render never performs result queries or updates the scene,
+    # so retaining a 6,000+ node metadata snapshot only adds setup work.
+    options = ArchimedLight.LightOptions(options; store_node_metadata=false)
+    row = first(ArchimedLight.prepare_meteo(meteo, options))
     step = ArchimedLight.run_light_step(scene, models, row, options)
     return scene, models, options, step
 end

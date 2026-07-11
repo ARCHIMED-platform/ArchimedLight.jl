@@ -7,9 +7,9 @@
     selected = ArchimedLight.prepare_meteo(fixture.meteo, fixture.options)
     series = ArchimedLight.run_light_series(fixture.scene, fixture.models, fixture.meteo, fixture.options)
 
-    @test !isempty(selected.rows)
+    @test !isempty(selected)
     @test !isempty(series)
-    @test length(series) == length(selected.rows)
+    @test length(series) == length(selected)
     @test !isempty(series[1].budget.incident_energy.total.par)
     @test length(series[1].turtle.sectors) == 17
     step_summary = sprint(show, series[1])
@@ -25,7 +25,7 @@
 
     options2, scene2, meteo2, models2 = ArchimedLight.read_config(joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml"))
     @test options2.turtle_sectors == fixture.options.turtle_sectors
-    @test length(meteo2.rows) == length(fixture.meteo.rows)
+    @test length(meteo2) == length(fixture.meteo)
     @test collect(keys(models2.groups)) == collect(keys(fixture.models.groups))
     @test any(item -> item.group == "pavement", ArchimedLight.summarize_scene(scene2).group_types)
     @test haskey(scene2.mtg, :geometry)
@@ -64,7 +64,7 @@ end
         options,
     )
 
-    @test length(series) == length(meteo.rows)
+    @test length(series) == length(meteo)
     @test series[1].sky_fraction !== nothing
     @test !isempty(series[1].sky_fraction)
 

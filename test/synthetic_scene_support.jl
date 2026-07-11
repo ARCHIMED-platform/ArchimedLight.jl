@@ -33,6 +33,15 @@ function _budgets_close(a, b; atol::Float64=1e-9, rtol::Float64=1e-9)
         _dicts_close(a.extra_initial_energy_per_band[band], b.extra_initial_energy_per_band[band]; atol=atol, rtol=rtol) || return false
         _dicts_close(a.extra_energy_per_band[band], b.extra_energy_per_band[band]; atol=atol, rtol=rtol) || return false
     end
+    keys(a.emitter_escaped_energy_per_band) == keys(b.emitter_escaped_energy_per_band) || return false
+    for band in keys(a.emitter_escaped_energy_per_band)
+        _dicts_close(
+            a.emitter_escaped_energy_per_band[band],
+            b.emitter_escaped_energy_per_band[band];
+            atol=atol,
+            rtol=rtol,
+        ) || return false
+    end
     return true
 end
 
@@ -96,7 +105,7 @@ function _virtual_sensor_models()
     ])
 end
 
-function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
+function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple}; root_id::Int=1)
     quad_specs = map(specs) do spec
         (
             p1=(spec.x0, spec.y0, spec.z),
@@ -109,15 +118,16 @@ function _synthetic_horizontal_scene(specs::AbstractVector{<:NamedTuple})
             object_id=get(spec, :object_id, 1),
         )
     end
-    _synthetic_quad_scene(quad_specs)
+    _synthetic_quad_scene(quad_specs; root_id=root_id)
 end
 
-function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
+function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple}; root_id::Int=1)
     points = GeometryBasics.Point{3,Float32}[]
     faces = GeometryBasics.TriangleFace{Int}[]
     face2node = Int[]
     nodes = Dict{Int,PlantGeom.SceneNodeData{Float64}}()
     mtg = MultiScaleTreeGraph.Node(
+        root_id,
         MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 0, 0),
         Dict{Symbol,Any}(),
     )

@@ -64,14 +64,17 @@ Makie.documented_attributes(::Type{<:LightPlot}) = _LIGHTPLOT_ATTRIBUTES
 
 Makie.preferred_axis_type(::LightPlot) = Makie.LScene
 
-_payload_geometry(payload::Union{LightStepResult,AbstractVector{<:LightStepResult}}) = ArchimedLight.light_render_geometry(payload)
-_payload_geometry(payload::Tuple{LightRenderGeometry,Any}) = first(payload)
+_payload_geometry(
+    payload::Union{LightStepResult,AbstractVector{<:LightStepResult}},
+    timestep,
+) = ArchimedLight._geometry_for_values(payload, Int(timestep))
+_payload_geometry(payload::Tuple{LightRenderGeometry,Any}, _) = first(payload)
 _payload_data(payload::Union{LightStepResult,AbstractVector{<:LightStepResult}}) = payload
 _payload_data(payload::Tuple{LightRenderGeometry,Any}) = last(payload)
 
 function Makie.plot!(plot::LightPlot)
-    map!(plot.attributes, :payload, :light_geometry) do payload
-        _payload_geometry(payload)
+    map!(plot.attributes, [:payload, :timestep], :light_geometry) do payload, timestep
+        _payload_geometry(payload, timestep)
     end
     map!(plot.attributes, :light_geometry, :light_base_mesh) do geometry
         points = GeometryBasics.Point3d[

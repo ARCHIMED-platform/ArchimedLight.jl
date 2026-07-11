@@ -1,5 +1,4 @@
 /Manifest*.toml
-/benchmark/Manifest*.toml
 /docs/Manifest*.toml
 /test/Manifest*.toml
 /docs/build/
@@ -9,8 +8,11 @@ java_implementation/*
 .julia_depot
 .archimedlight_cache/
 /test/regression_matrix/reports/
-/benchmark/results/
+/benchmark/results/*
+!/benchmark/results/artifact_scene_matrix_cpu.tsv
+!/benchmark/results/artifact_scene_matrix_summary.md
 /benchmark/.asv/
+/example_1/output/
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
@@ -21,4 +23,3 @@ benchmark/*.json
 coverage
 env
 node_modules
-example_1/archimed-lib-2018-0.0.1-SNAPSHOT-jar-with-dependencies.jar

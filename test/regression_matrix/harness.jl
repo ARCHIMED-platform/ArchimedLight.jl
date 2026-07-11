@@ -164,7 +164,6 @@ function _targeted_option_sets()
         OrderedDict("radiation_timestep" => 5),
         OrderedDict("radiation_timestep" => 30),
         OrderedDict("java_logged_turtle_dirs" => true, "sky_mode" => "16_all_in_turtle"),
-        OrderedDict("scattering" => true, "scattering_mode" => :links),
         OrderedDict("scattering" => true, "scattering_mode" => :raycast),
         OrderedDict("sky_mode" => "1_direct", "cache_pixel_table" => true, "toricity" => true),
     ]
@@ -274,10 +273,30 @@ function _ensure_release_harness_loaded!()
     return nothing
 end
 
+_release_func(name::Symbol) = Base.invokelatest(getfield, @__MODULE__, name)
+_release_call(name::Symbol, args...; kwargs...) = Base.invokelatest(_release_func(name), args...; kwargs...)
+_release_cache_pair_fixture_ids() = Set(["test-cached-radiation", "test-cached-radiation3"])
+
+function _release_cached_pair_fixture(fx)
+    cfg2 = joinpath(dirname(fx.config_path), "config2.yml")
+    isfile(cfg2) || error("$(fx.id): missing paired cached-radiation config2.yml")
+    return _release_call(
+        :JuliaFixture,
+        fx.id * "-config2",
+        cfg2,
+        fx.visual_metric,
+        true,
+        fx.scene_override,
+        fx.meteo_override,
+        fx.force_scattering,
+    )
+end
+
 function _release_regression_cases()
     _ensure_release_harness_loaded!()
     cases = RegressionCase[]
-    for fx in select_fixtures(julia_fixtures())
+    fixtures = _release_call(:select_fixtures, _release_call(:julia_fixtures))
+    for fx in fixtures
         scenario = RegressionScenario("release_$(fx.id)", :release_fixture, fx.id)
         opts = _default_case_options()
         push!(cases, RegressionCase("release_fixture__$(fx.id)", scenario, opts, true, true))
@@ -342,7 +361,7 @@ function _synthetic_meteo_for_source(source_id::String)
             _synthetic_meteo_row(; date=Dates.Date(2020, 6, 21), start_time=Dates.Time(13), duration_seconds=1800.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
             _synthetic_meteo_row(; date=Dates.Date(2020, 6, 22), start_time=Dates.Time(12), duration_seconds=600.0, ri_par_f=120.0, ri_nir_f=80.0, direct_fraction=1.0),
         ]
-        return ArchimedLight.MeteoTable(rows, (; source="synthetic_cached_series"))
+        return ArchimedLight.PlantMeteo.TimeStepTable(rows, (; source="synthetic_cached_series"))
     elseif source_id == "toricity_wraparound"
         return _synthetic_meteo_row(; duration_seconds=1.0, ri_par_f=100.0, ri_nir_f=0.0, direct_fraction=1.0, sun_azimut=270.0, sun_elevation=45.0)
     end
@@ -375,7 +394,7 @@ function _compute_synthetic_case(case::RegressionCase)
             models=models,
             options=options_cached,
             series=series_cached,
-            meteo_rows=meteo.rows,
+            meteo_rows=collect(meteo),
             figure=nothing,
             strict_result=strict_result,
             meta=OrderedDict{String,Any}("cache_radiation" => true),
@@ -406,7 +425,7 @@ function _compute_fast_fixture_case(case::RegressionCase)
     options = _apply_case_options(src.options, case.options)
     scattering_mode = _scattering_mode(case.options)
     if startswith(case.scenario.source_id, "sky_")
-        row = first(ArchimedLight.prepare_meteo(src.meteo, options).rows)
+        row = first(ArchimedLight.prepare_meteo(src.meteo, options))
         sky = ArchimedLight.compute_sky(row, options)
         turtle = ArchimedLight.build_turtle(options, sky)
         fluxes = ArchimedLight.compute_directional_fluxes(row, sky, turtle, options)
@@ -436,7 +455,7 @@ function _compute_fast_fixture_case(case::RegressionCase)
         models=src.models,
         options=options,
         series=series,
-        meteo_rows=selected.rows,
+        meteo_rows=collect(selected),
         figure=figure,
         strict_result=strict_result,
         meta=OrderedDict{String,Any}("fixture" => case.scenario.source_id),
@@ -445,10 +464,25 @@ end
 
 function _compute_release_case(case::RegressionCase)
     _ensure_release_harness_loaded!()
-    fx = fixture_by_id(case.scenario.source_id)
+    fx = _release_call(:fixture_by_id, case.scenario.source_id)
     fx === nothing && error("Unknown release fixture $(repr(case.scenario.source_id))")
-    data = fixture_runtime_data(fx)
-    fig = render_fixture_montage(fx; data=data)
+    data = _release_call(:fixture_runtime_data, fx)
+    if fx.id in _release_cache_pair_fixture_ids()
+        pair_fx = _release_cached_pair_fixture(fx)
+        pair_data = _release_call(:fixture_runtime_data, pair_fx)
+        fig = _release_call(:render_fixture_montage, fx; data=data)
+        return (
+            kind=:release_pair_outputs,
+            fx=fx,
+            data=data,
+            pair_fx=pair_fx,
+            pair_data=pair_data,
+            figure=fig,
+            strict_result=(ok=true, detail=""),
+            meta=OrderedDict{String,Any}("fixture" => fx.id, "pair_fixture" => pair_fx.id),
+        )
+    end
+    fig = _release_call(:render_fixture_montage, fx; data=data)
     return (
         kind=:release_outputs,
         fx=fx,
@@ -496,8 +530,18 @@ function _write_observed_outputs!(case::RegressionCase, observed_dir::AbstractSt
         _write_sector_flux_csv(sector_path, data.turtle, data.fluxes; step_number=0)
         files["sector_flux.csv"] = sector_path
     elseif data.kind == :release_outputs
-        files = write_fixture_observed_outputs!(data.fx, observed_dir; data=data.data)
+        files = _release_call(:write_fixture_observed_outputs!, data.fx, observed_dir; data=data.data)
         image_path = _save_figure_png(joinpath(observed_dir, "$(data.fx.id)_montage.png"), data.figure)
+    elseif data.kind == :release_pair_outputs
+        out1 = joinpath(observed_dir, "config")
+        out2 = joinpath(observed_dir, "config2")
+        files1 = _release_call(:write_fixture_observed_outputs!, data.fx, out1; data=data.data)
+        files2 = _release_call(:write_fixture_observed_outputs!, data.pair_fx, out2; data=data.pair_data)
+        image_path = _save_figure_png(
+            joinpath(observed_dir, "$(data.fx.id)_montage.png"),
+            data.figure,
+        )
+        return (files=files1, pair_files=files2, image_path=image_path)
     else
         error("Unsupported observed data kind $(repr(data.kind))")
     end
@@ -508,9 +552,9 @@ end
 function _case_baseline_dir(case::RegressionCase)
     if case.scenario.source_kind == :release_fixture
         _ensure_release_harness_loaded!()
-        fx = fixture_by_id(case.scenario.source_id)
+        fx = _release_call(:fixture_by_id, case.scenario.source_id)
         fx === nothing && error("Unknown release fixture $(repr(case.scenario.source_id))")
-        return fixture_reference_dir(fx)
+        return _release_call(:fixture_reference_dir, fx)
     end
     return joinpath(_baseline_root(), _case_path_token(case.id))
 end
@@ -529,9 +573,9 @@ end
 function _baseline_image_path(case::RegressionCase, observed)
     if case.scenario.source_kind == :release_fixture
         _ensure_release_harness_loaded!()
-        fx = fixture_by_id(case.scenario.source_id)
+        fx = _release_call(:fixture_by_id, case.scenario.source_id)
         fx === nothing && return nothing
-        return fixture_reference_image_path(fx)
+        return _release_call(:fixture_reference_image_path, fx)
     elseif observed.image_path !== nothing
         return joinpath(_case_baseline_dir(case), basename(observed.image_path))
     end
@@ -539,6 +583,21 @@ function _baseline_image_path(case::RegressionCase, observed)
 end
 
 function _compare_case_against_baseline(case::RegressionCase, data, observed, observed_dir::AbstractString)
+    pair_cmp = nothing
+    if data.kind == :release_pair_outputs
+        name = "component_values.csv"
+        obs_path = get(observed.files, name, "")
+        pair_path = get(observed.pair_files, name, "")
+        pair_cmp =
+            if isempty(obs_path) || !isfile(obs_path)
+                (ok=false, missing=0, extra=0, mismatch=0, detail="observed file missing: $(name)", max_abs_error=Inf, max_rel_error=Inf)
+            elseif isempty(pair_path) || !isfile(pair_path)
+                (ok=false, missing=0, extra=0, mismatch=0, detail="paired observed file missing: $(name)", max_abs_error=Inf, max_rel_error=Inf)
+            else
+                compare_stable_csv_paths(obs_path, pair_path; label="$(case.id):$(name)")
+            end
+    end
+
     baseline_dir = _case_baseline_dir(case)
     update = _regression_update_enabled() && case.scenario.source_kind != :release_fixture
     if update
@@ -594,6 +653,16 @@ function _compare_case_against_baseline(case::RegressionCase, data, observed, ob
             ok = false
             push!(details, "missing baseline image")
         end
+    end
+
+    if pair_cmp !== nothing
+        ok &= pair_cmp.ok || !case.strict
+        total_missing += pair_cmp.missing
+        total_extra += pair_cmp.extra
+        total_mismatch += pair_cmp.mismatch
+        max_abs_error = max(max_abs_error, pair_cmp.max_abs_error)
+        max_rel_error = max(max_rel_error, pair_cmp.max_rel_error)
+        pair_cmp.ok || push!(details, "cached radiation pair: $(pair_cmp.detail)")
     end
 
     status =

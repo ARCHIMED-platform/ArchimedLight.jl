@@ -87,7 +87,7 @@ end
 
     config = joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml")
     options, scene, meteo, models = ArchimedLight.read_config(config)
-    row = first(prepare_meteo(meteo, options).rows)
+    row = first(prepare_meteo(meteo, options))
 
     old_step = ArchimedLight.run_light_step(scene, models, row, options)
     sim = LightSimulation(scene, models; options=options)
@@ -96,7 +96,7 @@ end
 
     cached = LightSimulation(scene, models; options=LightOptions(options; cache_radiation=true))
     series = run_light(cached, meteo)
-    @test length(series) == length(prepare_meteo(meteo, options).rows)
+    @test length(series) == length(prepare_meteo(meteo, options))
     @test cache_summary(cached).cached_turtle_count >= 1
 
     scene2 = make_scene(domain=(0.0, 0.0, 1.0, 1.0)) do s
@@ -161,7 +161,7 @@ end
 
     scattering_options = LightOptions(options; scattering=true)
     scattering_sim = LightSimulation(scene, models; options=scattering_options)
-    scattering_step = run_light(scattering_sim, first(prepare_meteo(meteo, scattering_options).rows))
+    scattering_step = run_light(scattering_sim, first(prepare_meteo(meteo, scattering_options)))
     @test scattering_step.scattering !== nothing
     scattering_path = joinpath(mktempdir(), "component_values.csv")
     write_component_values(scattering_path, scattering_sim, scattering_step)
@@ -187,6 +187,29 @@ end
     step = run_light(sim, sky; step_duration_seconds=1800.0)
     @test step.budget.incident_energy.total.par == old_budget.incident_energy.total.par
     @test_throws ErrorException run_light(sim, sky)
+
+    skies = [
+        sky,
+        SkyState(180.0, 45.0, 120.0, 130.0, 0.0, 1.0),
+    ]
+    shared_duration = run_light(sim, skies; step_duration_seconds=1800.0)
+    @test shared_duration isa Vector{LightStepResult}
+    @test length(shared_duration) == length(skies)
+    @test shared_duration[1].budget.incident_energy.total.par ==
+          step.budget.incident_energy.total.par
+
+    durations = [900.0, 3600.0]
+    variable_duration = run_light(sim, skies; step_duration_seconds=durations)
+    for i in eachindex(skies)
+        individual = run_light(sim, skies[i]; step_duration_seconds=durations[i])
+        @test variable_duration[i].budget.incident_energy.total.par ==
+              individual.budget.incident_energy.total.par
+    end
+
+    @test isempty(run_light(sim, SkyState[]; step_duration_seconds=1800.0))
+    @test_throws ErrorException run_light(sim, skies)
+    @test_throws ArgumentError run_light(sim, skies; step_duration_seconds=[1800.0])
+    @test_throws ErrorException run_light(sim, skies; step_duration_seconds=[1800.0, 0.0])
 end
 
 @testitem "Beginner API meteo validation" tags = [:beginner_api, :fast] begin
@@ -232,6 +255,7 @@ end
             hour_end="13:00:00",
             sun_azimuth=180.0,
             sun_elevation=60.0,
+            direct_fraction=0.5,
             RI_PAR_f=120.0,
             RI_NIR_f=80.0,
         ),

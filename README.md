@@ -11,24 +11,53 @@ ArchimedLight.jl is a Julia package for computing radiation interception and sca
 
 It is a reimplementation of the Java-based ARCHIMED model from Jean Dauzat (AMAP, CIRAD), with a focus on performance (~15x faster than the Java implementation on CPU) and flexibility (simpler API). The package supports both file-based and in-memory workflows, and provides a simple API for running light simulations on complex 3D scenes.
 
-![Coffee scene light interception](docs/src/assets/coffee_scene_light_interception.png)
+| A wheat plant | A wheat AgriPV system |
+|:---:|:---:|
+| [![A wheat plant](docs/src/assets/archimedlight_day_cycle_1.png)](docs/src/assets/archimedlight_day_cycle_1.mp4) | [![A wheat AgriPV system](docs/src/assets/archimedlight_day_cycle_2.png)](docs/src/assets/archimedlight_day_cycle_2.mp4) |
 
-The figure above is generated from the bundled coffee fixture with `scripts/generate_home_figure.jl`. The script loads a scene, models, options, and meteo rows, adds explicit ground geometry, runs one light step, attaches `Ri_PAR_f` onto the MTG, and then renders the colored scene with `plantviz(..., color=:Ri_PAR_f)`.
+<details>
+<summary>Reproducing the figures</summary>
 
-## Current scope
-- Scene/model/meteo input pipeline
-- Sky + turtle discretization
-- First-order interception (CPU raster/z-buffer)
-- Iterative scattering (CPU reference)
-- Julia-native fixture regression harness (numeric + visual references)
+The figures above are generated from two example scenes available from an Artifact. You can generate them using the script in `docs/make_video.jl`.
+</details>
 
-Energy balance, transpiration and photosynthesis are intentionally out of scope for now.
+## Installation
+
+ArchimedLight.jl requires Julia 1.10 or newer. Install the registered package
+from the Julia package manager:
+
+```julia
+using Pkg
+Pkg.add("ArchimedLight")
+```
+
+Plotting is provided through the optional Makie extension. Install a Makie
+backend such as GLMakie when you need figures:
+
+```julia
+Pkg.add("GLMakie")
+```
+
+## Scope
+
+ARCHIMED computes:
+
+- A pipeline for managing input scene, models and meteorology
+- A discretization of the sky with a turtle approach (directional fluxes)
+- The first-order light interception on the CPU using a rasterization approach
+- Iterative scattering between scene components making links from the projection of the first-order interception
+- A lot of helpers for reading/writing files, preparing scenes and models, exporting and visualizing the scene with Makie
 
 ## Core API
+
+Here is an example workflow based on input files:
+
 ```julia
 using ArchimedLight
 
-sim, meteo = read_simulation("config.yml")
+repo_root = normpath(joinpath(dirname(pathof(ArchimedLight)), ".."))
+config = joinpath(repo_root, "example_2", "config.yml")
+sim, meteo = read_simulation(config)
 
 summarize_scene(sim.scene; models=sim.models)
 summarize_meteo(meteo; options=sim.options)
@@ -37,15 +66,19 @@ step = run_light(sim, first(meteo))
 series = run_light(sim, meteo)
 ```
 
-`LightSimulation` owns the prepared scene and optional radiation cache. If a host model changes
-the scene, update it explicitly:
+!!! note
+    You can find these files in the `example_2` folder of the repository. The `config.yml` file is a convenient entrypoint for file-driven workflows. It points to the scene, models, and meteo files, and it can also contain optional light options.
+
+`LightSimulation` owns the prepared scene and optional radiation cache. If another model changes
+the scene, you must update it for ARCHIMED explicitly. For example if your other model provides `new_scene`, you would have to run:
 
 ```julia
 update_scene!(sim, new_scene)
 step = run_light(sim, next_meteo_row)
 ```
 
-In Julia code, the result budget is grouped by quantity and waveband:
+In Julia code, the result budget is grouped by quantity and waveband. These
+schematic accesses assume the `step` from the checked workflow above:
 
 ```julia
 step.budget.incident_flux.total.par
@@ -54,7 +87,8 @@ step.budget.absorbed_flux.total.nir
 step.budget.absorbed_energy.initial.par
 ```
 
-File exports and attached MTG attributes keep the ARCHIMED names:
+File exports and attached MTG attributes use the java-version ARCHIMED names:
+
 - `Ri_*`: incident light
 - `Ra_*`: absorbed light
 - `*_f`: irradiance (`W m^-2`)
@@ -62,17 +96,22 @@ File exports and attached MTG attributes keep the ARCHIMED names:
 
 Band coefficients come from the model definition when present. If a model omits one band in
 `optical_properties`, the runtime falls back to the global option for that band:
+
 - `PAR` fallback: `LightOptions(scattering_coeff_par=...)`
 - `NIR` fallback: `LightOptions(scattering_coeff_nir=...)`
 
 With the default options, that means:
+
 - missing model `PAR` coefficient falls back to `0.15`
 - missing model `NIR` coefficient falls back to `0.30`
 - the corresponding default absorptances used in the final budget are `1 - coeff`
 
 ## Interactive inputs
 
-You can also build everything in Julia:
+You can also build everything in Julia. The following is a schematic shape for
+host applications that already provide `sensor.obj`, `plant.opf`, and
+`meteo_row`; the interactive workflow page contains the checked in-memory
+example used by the documentation build.
 
 ```julia
 using ArchimedLight
@@ -103,7 +142,9 @@ step = run_light(sim, meteo_row)
 
 ## Advanced pipeline
 
-The explicit stages remain available for debugging, parity work, and custom research workflows:
+The explicit stages remain available for debugging, parity work, and custom
+research workflows. This snippet is schematic because it assumes stage inputs
+such as `row`, `options`, `scene`, and `models` already exist.
 
 ```julia
 sky = ArchimedLight.compute_sky(row, options)
@@ -116,8 +157,10 @@ budget = ArchimedLight.integrate_light(scene, models, first_order, scat, options
 
 For ordinary simulations prefer `LightSimulation` and `run_light`.
 
-## Full Example
-- Self-contained files and script are under `example_1/`.
+## File-Based Example
+
+- A self-contained one-step file workflow is under `example_1/`.
+- It uses `read_simulation`, `run_light`, and the public output helpers.
 - Run with:
 
 ```bash
@@ -125,6 +168,7 @@ julia --project=. example_1/full_featured_example.jl
 ```
 
 ## Stage flexibility
+
 - `read_simulation("config.yml")` is the convenience entrypoint for file-driven workflows and returns `sim, meteo`.
 - You can call each stage independently through the module (`ArchimedLight.compute_sky`, `ArchimedLight.build_turtle`, `ArchimedLight.compute_first_order`, `ArchimedLight.compute_scattering`, `ArchimedLight.integrate_light`, ...).
 - File-based and in-memory workflows share the same runtime path: `read_scene(...)`, `PlantGeom.prepare_scene(...)`, and `PlantGeom.make_scene(...)` all produce `PlantGeom.SceneGeometry`, while `read_models(...)`, `prepare_models(...)`, and `models_for(...)` produce `LightModels`.
@@ -132,7 +176,7 @@ julia --project=. example_1/full_featured_example.jl
 - `compute_sky` uses substep-weighted sun position (`radiation_timestep`) when sun angles are not provided.
 - Meteo `#' use: ...` consistency checks for `clearness`/`RI_SW_f`/`RI_PAR_f`/`RI_NIR_f` are enforced like Java.
 - `compute_first_order(...; backend=:raster_cpu)` is the current reference backend (`RasterCPUBackend()` also available).
-- `compute_scattering(...; mode=:raycast)` / `compute_scattering(...; mode=:links)` expose the two supported scattering modes; backend objects are also available (`RaycastScatteringBackend()`, `LinksScatteringBackend()`).
+- `compute_scattering(...; mode=:raycast)` is the current scattering mode; `RaycastScatteringBackend()` can also be passed explicitly.
 - `pixel_size` is validated with ARCHIMED-compatible bounds (`0 < pixel_size <= 0.5` meters).
 - `cache_pixel_table=true` enables an on-disk direction projection cache under the interception cache directory.
 - `build_turtle` follows the canonical ARCHIMED sector counts `1, 6, 16, 46, 136, 406`.
@@ -140,6 +184,7 @@ julia --project=. example_1/full_featured_example.jl
 - Virtual sensors are declared on the interception model (`sensor=true`, or legacy `model: VirtualSensor` in YAML). They receive light but stay transparent and non-absorbing in the simulation.
 
 ## Testing
+
 Run the default fast suite:
 
 ```bash
@@ -205,70 +250,11 @@ Generate or refresh fast fixture references (simple-plant numeric CSV + image):
 julia --project=. scripts/generate_fast_fixture_references.jl
 ```
 
-## Release-only heavy regression (artifact)
+## Releasing
 
-Heavy full-fixture regression can be kept outside the package repository and run only before
-releases.
-
-Build a data-only artifact tarball from a heavy fixture dataset checkout (fixtures + references +
-reference images + manifest):
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz
-```
-
-If you want the current Julia outputs to become the packaged references first, refresh and package
-in one step:
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
-  --refresh-references
-```
-
-Optional: bind the artifact in `Artifacts.toml` by providing the download URL:
-
-```bash
-julia --project=. scripts/build_release_fixture_artifact.jl \
-  --test-root /path/to/heavy-test-root \
-  --tarball /tmp/archimedlight-release-fixtures.tar.gz \
-  --refresh-references \
-  --url https://github.com/VEZY/ArchimedLight.jl/releases/download/v0.1.3/archimedlight-release-fixtures-v0.1.3.tar.gz
-```
-
-Run release-only heavy regression:
-
-```bash
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
-```
-
-You can also bypass artifacts and point directly to a local extracted release dataset:
-
-```bash
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :release in ti.tags, verbose=true)'
-```
-
-Run one release fixture directly by tag. Fixture ids are exposed as tags with `-` replaced by `_`:
-
-```bash
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test -e 'using TestItemRunner; TestItemRunner.run_tests("test"; filter=ti -> :test_compare_simpleplant in ti.tags, verbose=true)'
-```
-
-Release test scripts are local in this repository (`test/release/`) and consume only data from the
-artifact/dataset. During release runs, per-fixture progress is logged with start/end timestamps.
-
-The regression matrix also has an optional release profile that reuses the same dataset root:
-
-```bash
-ARCHIMEDLIGHT_REGRESSION_PROFILE=release \
-ARCHIMEDLIGHT_RELEASE_FIXTURES_DIR=/path/to/release-fixtures \
-julia --project=test test/regression_matrix/runtests.jl
-```
+Maintainer release steps, including docs, release fixtures, regression matrix,
+benchmarks, Julia General registration, TagBot, and artifact upload, are in
+[`RELEASE.md`](RELEASE.md).
 
 ## Benchmarks
 

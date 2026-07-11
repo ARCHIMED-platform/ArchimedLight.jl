@@ -157,14 +157,15 @@ objects.
 
 ### `transparency`
 
-`transparency` is the transmitted fraction used when the solver needs a full
-per-pixel hit stack, for example during scattering, virtual-sensor calculations,
-or explicit light-emitter transfer.
+`transparency` is the transmitted fraction. It reduces the fraction intercepted
+by the visible surface in both the fast upper-hit path and the full per-pixel
+stack path.
 
 For first-order-only interception, ArchimedLight follows the historical
-ARCHIMED upper-hit rule: the first visible surface receives the direct light for
-that pixel, and lower surfaces are not lit through it. In that mode a non-zero
-`transparency` does not create direct first-order flux on lower objects.
+ARCHIMED upper-hit rule: only the first visible surface is retained for that
+pixel. It intercepts the fraction `1 - transparency`; the transmitted fraction
+is not assigned to lower objects. This preserves the compact upper-hit pixel
+table instead of switching transparent scenes to a full-stack traversal.
 
 File-based:
 
@@ -231,6 +232,8 @@ absorptance = 1 - scattering_coefficient
 ## 5. Virtual Sensors
 
 Virtual sensors receive light but remain transparent in the transfer logic.
+Their scattering coefficient is zero for every waveband, including custom
+bands.
 
 File-based:
 
@@ -317,8 +320,14 @@ TypeModel(
 ```
 
 This is useful for artificial lighting or diagnostic scenes. Most canopy
-workflows still rely mainly on meteo forcing. For the source notation and how
-emitters enter the light algorithm, see [Artificial Light Emitters](theory_scattering.md#artificial-light-emitters).
+workflows still rely mainly on meteo forcing. `radiance` is expressed per
+emitting surface area and steradian, and `gamma` values are independent
+spectral coefficients rather than fractions that are renormalized. Custom
+entries in `gamma` are transported under the same band name; they do not
+inherit or reuse the PAR coefficient. An emitter-only custom band is included
+in the result even when the meteo table has no matching `RI_<band>_f` column.
+For the source notation and how emitters enter the light algorithm, see
+[Artificial Light Emitters](theory_scattering.md#artificial-light-emitters).
 
 ## 8. Wildcard Models
 

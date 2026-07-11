@@ -20,6 +20,8 @@ meteo: meteo.csv
 sky_sectors: 16
 all_in_turtle: false
 radiation_timestep: 15
+radiation_input_semantics: interval_mean
+scene_rotation: 0
 scattering: true
 pixel_size: 1
 area_ratio: true
@@ -27,6 +29,9 @@ toricity: true
 cache_pixel_table: false
 pixel_hit_stack_mode: auto
 cache_radiation: false
+store_node_metadata: true
+node_metadata_attributes: []
+check_meteo_boundaries: true
 allow_overlapping_meteo_steps: false
 scattering_max_iter: 20
 scattering_stop_ratio: 0.01
@@ -70,7 +75,7 @@ read_simulation
   -> integrate_light
 ```
 
-What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `allow_overlapping_meteo_steps` also acts at that preparation stage by deciding whether overlapping meteo intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps, and requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
+What matters is that the options do not all act at the same stage. `meteo_range` is applied early, when the meteo table is filtered before the series is run. `check_meteo_boundaries` validates the selected forcing values, while `allow_overlapping_meteo_steps` decides whether overlapping intervals are rejected or kept. `radiation_timestep` comes into play when one meteo row is internally subdivided so that the sun path and the direct/diffuse split can be integrated more faithfully. `radiation_input_semantics` determines how supplied irradiance is converted to a full-step mean, while `scene_rotation` maps the geographic sun into the scene-local directional basis. `sky_sectors`, `all_in_turtle`, and `java_logged_turtle_dirs` define the directional representation of the sky itself. `pixel_size`, `toricity`, `area_ratio`, `cache_pixel_table`, `pixel_hit_stack_mode`, and `debug_drop_leading_hit` all belong to the raster projection machinery used for first-order interception. The scattering options act later, when intercepted light is propagated iteratively through the canopy. `cache_radiation` matters only in series mode when directional responses can be reused across many timesteps. `store_node_metadata` controls the lightweight per-scene metadata snapshot referenced by results, while `node_metadata_attributes` opts additional scalar MTG identifiers into that snapshot. Requesting `sky_fraction` in the output variables controls whether an extra per-node sky-view output is stored in each `LightStepResult`.
 
 This distinction is important for interpretation. Changing `pixel_size` or `sky_sectors` does not mean you have changed the plant or the atmosphere; it means you have changed the numerical approximation used to represent them. By contrast, changing `scattering`, `nir_interception`, or `nir_scattering` changes which physical processes are included in the simulation.
 
@@ -115,6 +120,53 @@ This is one of the key ARCHIMED ideas: the meteo time step and the radiative int
 If a meteo row spans 30 minutes and `radiation_timestep: 5`, the direct beam and sky decomposition are evaluated on smaller substeps and integrated back into one directional forcing state. In other words, a meteo row may cover a fairly long interval, but the sun position and the direct/diffuse partition can still change significantly inside that interval. `radiation_timestep` tells the solver how finely it should subdivide the meteo row before averaging those directional fluxes back together.
 
 Smaller values therefore improve temporal fidelity, especially near sunrise, sunset, or whenever direct light changes rapidly, while larger values are cheaper but coarser.
+
+### `radiation_input_semantics`
+
+Controls what a supplied `RI_SW_f`, `RI_PAR_f`, `RI_NIR_f`, or other
+shortwave `RI_*_f` value means when a meteo interval overlaps sunrise or
+sunset. Accepted values are:
+
+- `interval_mean` (the default): the supplied value is already the mean over
+  the complete meteo interval. Its full-timestep energy is preserved. During
+  a partly sunlit step, the internally evaluated daylight substeps are scaled
+  so that averaging them over the full interval recovers the supplied value.
+- `sunlit_intensity`: the supplied value applies only during the daylight
+  portion of the interval. This reproduces the historical Java clipping. If
+  daylight lasts for a fraction `f` of the full step, the effective irradiance
+  is `f` times the supplied value; a fully nighttime step has zero solar flux.
+
+For example, a two-hour step containing one hour of daylight with
+`RI_PAR_f: 200` produces an effective full-step PAR irradiance of `200 W m^-2`
+under `interval_mean`, and `100 W m^-2` under `sunlit_intensity`. The
+[`SkyState`](@ref) returned by `compute_sky` stores this effective full-step
+mean, and the directional turtle fluxes sum to the same value without a later
+energy renormalization.
+
+Choose `interval_mean` for conventional meteorological tables whose radiation
+columns are interval means. Choose `sunlit_intensity` when reproducing Java
+ARCHIMED results or when the supplied values explicitly describe only the
+sunlit part of each interval.
+
+If interval-mean input explicitly contains a direct component but its supplied
+or representative sun lies below the modeled upper hemisphere, there is no
+physical sun sector to receive that component. ArchimedLight then distributes
+the otherwise unrepresentable direct share over the available turtle sectors;
+this conservative fallback preserves the supplied full-step energy.
+
+### `scene_rotation`
+
+Rotation in degrees between geographic north and the scene's local coordinate
+system. Positive values rotate the geographic sun clockwise into local plot
+coordinates, matching ARCHIMED's compass-angle convention.
+
+The diffuse turtle sectors themselves remain fixed in the scene-local basis.
+Only the geographic sun is transformed; clear-sky brightness and direct-beam
+weights are then evaluated against that transformed sun. This keeps the
+projection directions and local artificial-emitter quadrature stable while
+correctly changing which local directions receive anisotropic sky and direct
+radiation. The equivalent Julia constructor keyword is
+`LightOptions(scene_rotation_deg=...)`.
 
 ### `pixel_size`
 
@@ -260,7 +312,13 @@ We can see that there is a shadow on the ground, on all corners, because the cof
 
 Allow you to disable NIR interception or NIR scattering independently when needed for debugging, parity work, or reduced runs.
 
-These options exist because the runtime carries PAR and NIR as separate wavebands, and some studies or debugging workflows may want to simplify the calculation. `nir_interception` is the broader switch: if it is disabled, NIR is removed before the directional fluxes and interception stages, so there is effectively no NIR light in the run. `nir_scattering` is narrower: it keeps the first-order NIR interception but skips the NIR multiple-scattering stage.
+These options exist because the runtime carries PAR and NIR as separate
+wavebands, and some studies or debugging workflows may want to simplify the
+calculation. `nir_interception` is the broader switch: if it is disabled, NIR
+is removed before the directional fluxes and interception stages, so there is
+effectively no NIR light in the run. This includes NIR from artificial
+emitters, both received and escaped. `nir_scattering` is narrower: it keeps the
+first-order NIR interception but skips the NIR multiple-scattering stage.
 
 For normal scientific runs, these options are usually left enabled. Turning them off is mainly useful for parity work, reduced experiments, or targeted diagnostics. The distinction matters because `nir_scattering: false` still retains a first-order NIR contribution, whereas `nir_interception: false` removes the NIR branch much earlier and therefore changes the energy budget more strongly.
 
@@ -286,6 +344,24 @@ meteo_range: 2016/07/01 08:00:00, 2016/07/01 12:00:00
 `meteo_range` simply helps select the meteo rows. That makes it useful whenever a full meteo file contains more data than the run you are trying to reproduce, inspect, or debug.
 
 The range is applied during `prepare_meteo`, after the sequence has been validated, and it can be expressed either with row indices or with datetimes. After that, the optional `active` field in the meteo table can still remove rows one by one.
+
+### `check_meteo_boundaries`
+
+Enable physical range checks for the selected meteorological forcing. The
+default is `true`. It rejects negative irradiance, clearness or direct fractions
+outside `[0, 1]`, invalid latitude and sun-angle ranges, and nonpositive
+durations before numerical work begins.
+
+Set this to `false` only for a deliberate research or compatibility input:
+
+```yaml
+check_meteo_boundaries: false
+```
+
+This disables range checks only. ArchimedLight still requires a positive
+duration, a derivable radiation and solar-geometry path, and consistency among
+redundant finite inputs. In Julia, a one-call override is also available as
+`run_light(sim, meteo; check_boundaries=false)`.
 
 ### `allow_overlapping_meteo_steps`
 
@@ -324,7 +400,6 @@ That last option is intentionally invasive: it changes the interception result i
 
 The bundled examples intentionally preserve several historical ARCHIMED keys such as:
 
-- `scene_rotation`
 - `photosynthesis`
 - `output_directory`
 - `simulation_directory`
