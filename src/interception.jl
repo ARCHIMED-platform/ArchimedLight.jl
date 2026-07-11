@@ -603,7 +603,8 @@ end
 const _DENSE_PIXEL_HITS_MAX_CELLS = 500_000
 const _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS = 300_000
 
-DensePixelHits(::Type{S}, n::Int) where {S} = DensePixelHits{S}(fill(nothing, n))
+DensePixelHits(::Type{S}, n::Int) where {S} =
+    DensePixelHits{S}(Vector{Union{Nothing,S}}(nothing, n))
 function DenseUpperPixelHits(n::Int)
     occupied = Int[]
     # Dense upper-hit tables already commit to per-pixel arrays, so reserving

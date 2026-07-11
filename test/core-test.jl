@@ -116,4 +116,8 @@ end
     @test length(stack) == 300
     @test stack[1] == (1.0, 1)
     @test stack[end] == (300.0, 300)
+
+    dense = ArchimedLight.DensePixelHits(ArchimedLight.SmallHitStack, 3)
+    @test dense.stacks isa Vector{Union{Nothing,ArchimedLight.SmallHitStack}}
+    @test all(isnothing, dense.stacks)
 end
