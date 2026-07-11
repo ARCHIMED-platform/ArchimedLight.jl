@@ -42,6 +42,8 @@ projection when the plotbox is small enough that a flat table is cheaper than a
 """
 struct DensePixelHits{S}
     stacks::Vector{Union{Nothing,S}}
+
+    DensePixelHits{S}(stacks::Vector{Union{Nothing,S}}) where {S} = new{S}(stacks)
 end
 
 struct DenseUpperPixelHits
