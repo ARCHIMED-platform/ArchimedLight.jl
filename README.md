@@ -45,8 +45,15 @@ ARCHIMED computes:
 - A pipeline for managing input scene, models and meteorology
 - A discretization of the sky with a turtle approach (directional fluxes)
 - The first-order light interception on the CPU using a rasterization approach
+- A separate CPU workflow for first-order interception and deterministic isotropic multiple scattering on regular voxel grids containing plant area density (`PAD`)
 - Iterative scattering between scene components making links from the projection of the first-order interception
 - A lot of helpers for reading/writing files, preparing scenes and models, exporting and visualizing the scene with Makie
+
+The triangle-scene and voxel workflows share meteorology, sky directions, and
+directional fluxes, but keep distinct result types and units. See the
+[voxel interception guide](https://VEZY.github.io/ArchimedLight.jl/dev/voxel_interception/)
+for an in-memory example, historical `.vox` I/O, boundary semantics, and
+current limitations.
 
 ## Core API
 

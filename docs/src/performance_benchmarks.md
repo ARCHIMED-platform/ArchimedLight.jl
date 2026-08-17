@@ -200,6 +200,32 @@ obtain a faster number. See [`scattering`](reference_config.md#scattering) and
    directions, scattering, a dense mesh, and a long uncached series multiply
    rather than replace one another.
 
+## Voxel Scattering Baseline
+
+The voxel suite measures geometric transport-path construction separately from
+one cached transport application and from a repeated complete solve. It covers
+dense and sparse `PAD`, two grid sizes, and full-sphere quadratures with 12 and
+32 directions.
+
+On the recorded Apple M3 development baseline, a cached transport application
+for a dense 4×4×4 grid and 12 directions took `0.046 ms` with four allocations.
+Eight complete cached solves took `8.386 ms` and allocated `0.211 MiB`; rebuilding
+paths for every solve took `9.824 ms` and allocated `7.160 MiB`. Cache reuse thus
+reduced wall time by about 15% and cumulative allocation by about 34× in that
+small warmed workload. Larger grids make path construction a larger absolute
+cost.
+
+The same complete case converged in 6 PAR iterations and 16 NIR iterations,
+with relative energy residuals below `3e-16`. The difference is expected from
+the example single-scattering albedos (`0.17` versus `0.85`). See the checked
+record in
+[`benchmark/results/voxel_scattering_cpu_baseline.md`](https://github.com/VEZY/ArchimedLight.jl/blob/main/benchmark/results/voxel_scattering_cpu_baseline.md)
+for the environment, allocation counts, setup scaling, and interpretation.
+
+Voxel transport memory scales with cached path segments—occupied voxels times
+directions—and a small number of grid-sized work arrays. The production solver
+does not allocate a dense voxel-by-voxel exchange matrix.
+
 ## Limitations And Timing Artifacts
 
 - Only three scenes have complete parameter coverage. Agrivoltaics is partial,
@@ -223,6 +249,25 @@ These limitations make the current matrix an exploratory performance
 landscape. A future publication-quality run should record hardware, software
 and commit provenance, warm up every code path, use repeated samples, randomize
 case order, and complete all scenes.
+
+## Voxel CPU Baseline
+
+The voxel backend has a separate warmed microbenchmark because its cost model
+is based on grid cells and traced path segments rather than projected triangle
+faces. On an Apple M3 with Julia 1.12.1, the production DDA traversed the
+recorded 16³-grid ray in 166 ns with two allocations, compared with 583 ns and
+13 allocations for the sorted-plane reference.
+
+For 4 rays per horizontal voxel, one directional response took 52.8 µs on an
+8³ grid, 352 µs on 16³, and 3.02 ms on 32³. Building a 16-direction cache on
+16³ took 17.0 ms. Applying that existing cache to 48 spectral steps took
+4.64 ms, or about 0.097 ms per step, clearly separating geometric construction
+from a warmed many-timestep workload.
+
+These are minimum warmed timings, not portable guarantees. The complete
+parameters, allocation counts, and proposed callback-based allocation
+optimization are recorded in
+[`benchmark/results/voxel_cpu_baseline.md`](https://github.com/VEZY/ArchimedLight.jl/blob/main/benchmark/results/voxel_cpu_baseline.md).
 
 ## Reproduce The Figures And Tables
 

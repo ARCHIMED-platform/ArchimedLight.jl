@@ -21,6 +21,13 @@ include("turtle.jl")
 include("interception.jl")
 include("scattering.jl")
 include("pipeline.jl")
+include("voxel/types.jl")
+include("voxel/io.jl")
+include("voxel/traversal_reference.jl")
+include("voxel/traversal_dda.jl")
+include("voxel/interception.jl")
+include("voxel/scattering.jl")
+include("voxel/pipeline.jl")
 include("attach.jl")
 include("outputs.jl")
 include("visualization.jl")
@@ -44,6 +51,21 @@ export ValidationReport
 export SceneSummary
 export MeteoSummary
 export LightSimulation
+export VoxelGrid
+export VoxelRaySegment
+export VoxelRayPath
+export VoxelCPUBackend
+export VoxelOpticalProperties
+export VoxelGroundOptics
+export VoxelDirectionResponse
+export VoxelResponseCache
+export VoxelFirstOrderResult
+export VoxelScatteringQuadrature
+export VoxelScatteringTransportCache
+export VoxelTransportResult
+export VoxelBandScatteringResult
+export VoxelScatteringResult
+export VoxelLightStepResult
 
 export read_scene
 export write_scene
@@ -68,6 +90,23 @@ export check_simulation
 export summarize_scene
 export summarize_meteo
 export run_light
+export read_voxel_grid
+export write_voxel_grid
+export trace_voxel_ray
+export prepare_voxel_responses
+export compute_voxel_first_order
+export prepare_voxel_scattering_quadrature
+export prepare_voxel_scattering_transport
+export apply_voxel_scattering_transport
+export compute_voxel_scattering
+export voxel_java_parity_optics
+export voxel_generic_green_leaf_optics
+export voxel_single_scattering_albedo
+export voxel_absorptance
+export VOXEL_PAR_WAVELENGTH_NM
+export VOXEL_NIR_WAVELENGTH_NM
+export run_voxel_light_step
+export run_voxel_light_series
 export attach_node_values!
 export attach_light_step!
 export attach_light_series!

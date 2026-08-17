@@ -37,6 +37,7 @@ makedocs(;
             "Scene Files And Semantics" => "reference_scene.md",
             "Model Files" => "reference_models.md",
             "Meteo Inputs" => "reference_meteo.md",
+            "Voxel Light Interception" => "voxel_interception.md",
         ],
         "Outputs" => "outputs.md",
         "Performance Benchmarks" => "performance_benchmarks.md",
@@ -44,6 +45,8 @@ makedocs(;
             "Pipeline Overview" => "theory_pipeline.md",
             "First-Order Interception" => "theory_interception.md",
             "Scattering And Assumptions" => "theory_scattering.md",
+            "Voxel Scattering Theory" => "theory_voxel_scattering.md",
+            "Voxel Future Directions" => "voxel_future_directions.md",
         ],
         "Advanced Usage" => [
             "File-Based Example" => "full_example.md",
