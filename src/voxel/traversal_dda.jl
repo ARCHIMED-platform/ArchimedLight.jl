@@ -114,18 +114,34 @@ function _trace_voxel_transport_ray(
     direction;
     boundary::Symbol=:periodic,
     algorithm::Symbol=:dda,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
 )
-    algorithm == :dda &&
-        return _trace_voxel_ray_dda(grid, origin, direction, boundary; allow_upward=true)
-    algorithm == :reference &&
-        return _trace_voxel_ray_reference(grid, origin, direction, boundary; allow_upward=true)
-    algorithm == :java_reference &&
-        throw(ArgumentError("the Java reference traversal does not support internal upward rays"))
-    throw(ArgumentError("algorithm must be :dda or :reference for internal voxel transport"))
+    path = if algorithm == :dda
+        _trace_voxel_ray_dda(grid, origin, direction, boundary; allow_upward=true)
+    elseif algorithm == :reference
+        _trace_voxel_ray_reference(grid, origin, direction, boundary; allow_upward=true)
+    else
+        algorithm == :java_reference && throw(ArgumentError(
+            "the Java reference traversal does not support internal upward rays",
+        ))
+        throw(ArgumentError("algorithm must be :dda or :reference for internal voxel transport"))
+    end
+    ray_direction = _normalise_voxel_transport_direction(direction)
+    ray_origin = _canonical_voxel_origin(grid, origin, boundary)
+    return _truncate_voxel_path_at_terrain(
+        grid,
+        path,
+        ray_origin,
+        ray_direction,
+        terrain,
+        boundary,
+    )
 end
 
 """
-    trace_voxel_ray(grid, origin, direction; boundary=:periodic, algorithm=:dda)
+    trace_voxel_ray(grid, origin, direction;
+                    boundary=:periodic, algorithm=:dda,
+                    terrain=NoVoxelTerrain())
 
 Trace a normalized propagation ray through `grid`. `direction` is normalized
 internally and must point downward. `boundary=:periodic` wraps horizontally;
@@ -140,10 +156,29 @@ function trace_voxel_ray(
     direction;
     boundary::Symbol=:periodic,
     algorithm::Symbol=:dda,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
 )
-    algorithm == :dda && return _trace_voxel_ray_dda(grid, origin, direction, boundary)
-    algorithm == :reference && return _trace_voxel_ray_reference(grid, origin, direction, boundary)
-    algorithm == :java_reference &&
+    if algorithm == :java_reference
+        terrain isa NoVoxelTerrain || throw(ArgumentError(
+            "terrain is not supported by the Java reference traversal",
+        ))
         return _trace_voxel_ray_java_reference(grid, origin, direction, boundary)
-    throw(ArgumentError("algorithm must be :dda, :reference, or :java_reference"))
+    end
+    path = if algorithm == :dda
+        _trace_voxel_ray_dda(grid, origin, direction, boundary)
+    elseif algorithm == :reference
+        _trace_voxel_ray_reference(grid, origin, direction, boundary)
+    else
+        throw(ArgumentError("algorithm must be :dda, :reference, or :java_reference"))
+    end
+    ray_direction = _normalise_voxel_direction(direction)
+    ray_origin = _canonical_voxel_origin(grid, origin, boundary)
+    return _truncate_voxel_path_at_terrain(
+        grid,
+        path,
+        ray_origin,
+        ray_direction,
+        terrain,
+        boundary,
+    )
 end

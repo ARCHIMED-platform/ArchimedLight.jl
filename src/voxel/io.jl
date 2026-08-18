@@ -12,6 +12,44 @@ function _voxel_header_triplet(lines, key::AbstractString, parser)
     throw(ArgumentError("missing $key voxel header"))
 end
 
+function _voxel_column_layout(lines)
+    dimensions = _voxel_header_triplet(lines, "#split", x -> parse(Int, x))
+    all(>(0), dimensions) || throw(ArgumentError("voxel split values must be positive"))
+    header_index = findfirst(eachindex(lines)) do index
+        index == 1 && return false
+        stripped = strip(lines[index])
+        !isempty(stripped) && !startswith(stripped, "#")
+    end
+    header_index === nothing && throw(ArgumentError("missing voxel column header"))
+    header = split(strip(lines[header_index]))
+    length(header) >= 4 || throw(ArgumentError("invalid voxel column header"))
+    lowercase.(header[1:3]) == ["i", "j", "k"] ||
+        throw(ArgumentError("voxel columns must start with i j k"))
+    return dimensions, header_index, header
+end
+
+function _read_voxel_numeric_column(lines, dimensions, header_index, header, column_index)
+    values = Array{Float64,3}(undef, dimensions...)
+    seen = falses(dimensions...)
+    for line_index in (header_index + 1):length(lines)
+        stripped = strip(lines[line_index])
+        (isempty(stripped) || startswith(stripped, "#")) && continue
+        words = split(stripped)
+        length(words) >= length(header) ||
+            throw(ArgumentError("voxel row $line_index has too few columns"))
+        i = parse(Int, words[1]) + 1
+        j = parse(Int, words[2]) + 1
+        k = parse(Int, words[3]) + 1
+        checkbounds(Bool, values, i, j, k) ||
+            throw(ArgumentError("voxel row $line_index has out-of-bounds index"))
+        seen[i, j, k] && throw(ArgumentError("duplicate voxel index at row $line_index"))
+        values[i, j, k] = parse(Float64, words[column_index])
+        seen[i, j, k] = true
+    end
+    all(seen) || throw(ArgumentError("voxel file does not define every grid cell"))
+    return values
+end
+
 """
     read_voxel_grid(path)::VoxelGrid
 
@@ -27,42 +65,39 @@ function read_voxel_grid(path::AbstractString)
 
     minimum = _voxel_header_triplet(lines, "#min_corner", x -> parse(Float64, x))
     maximum = _voxel_header_triplet(lines, "#max_corner", x -> parse(Float64, x))
-    dimensions = _voxel_header_triplet(lines, "#split", x -> parse(Int, x))
-    all(>(0), dimensions) || throw(ArgumentError("voxel split values must be positive"))
-
-    header_index = findfirst(eachindex(lines)) do index
-        index == 1 && return false
-        stripped = strip(lines[index])
-        !isempty(stripped) && !startswith(stripped, "#")
-    end
-    header_index === nothing && throw(ArgumentError("missing voxel column header"))
-    header = split(strip(lines[header_index]))
-    length(header) >= 4 || throw(ArgumentError("invalid voxel column header"))
-    lowercase.(header[1:3]) == ["i", "j", "k"] ||
-        throw(ArgumentError("voxel columns must start with i j k"))
+    dimensions, header_index, header = _voxel_column_layout(lines)
 
     pad_column = findfirst(name -> lowercase(name) in ("pad", "padbvtotal"), header)
     pad_column === nothing && throw(ArgumentError("voxel file has no PAD or PadBVTotal column"))
 
-    pad = zeros(Float64, dimensions...)
-    seen = falses(dimensions...)
-    for line_index in (header_index + 1):length(lines)
-        stripped = strip(lines[line_index])
-        (isempty(stripped) || startswith(stripped, "#")) && continue
-        words = split(stripped)
-        length(words) >= length(header) ||
-            throw(ArgumentError("voxel row $line_index has too few columns"))
-        i = parse(Int, words[1]) + 1
-        j = parse(Int, words[2]) + 1
-        k = parse(Int, words[3]) + 1
-        checkbounds(Bool, pad, i, j, k) ||
-            throw(ArgumentError("voxel row $line_index has out-of-bounds index"))
-        seen[i, j, k] && throw(ArgumentError("duplicate voxel index at row $line_index"))
-        pad[i, j, k] = parse(Float64, words[pad_column])
-        seen[i, j, k] = true
-    end
-    all(seen) || throw(ArgumentError("voxel file does not define every grid cell"))
+    pad = _read_voxel_numeric_column(lines, dimensions, header_index, header, pad_column)
     return VoxelGrid(minimum, maximum, pad)
+end
+
+"""
+    read_voxel_column(path, name; required=true)
+
+Read one numeric column from a complete historical/AMAPVox voxel table while
+preserving its 0-based `i j k` indexing convention at the file boundary.
+Column matching is case-insensitive. With `required=false`, return `nothing`
+when the column is absent.
+"""
+function read_voxel_column(
+    path::AbstractString,
+    name::AbstractString;
+    required::Bool=true,
+)
+    lines = readlines(path)
+    isempty(lines) && throw(ArgumentError("empty voxel file: $path"))
+    strip(lines[1]) == "VOXEL SPACE" ||
+        throw(ArgumentError("invalid voxel file: missing VOXEL SPACE identifier"))
+    dimensions, header_index, header = _voxel_column_layout(lines)
+    column = findfirst(==(lowercase(name)), lowercase.(header))
+    if column === nothing
+        required && throw(ArgumentError("voxel file has no $name column"))
+        return nothing
+    end
+    return _read_voxel_numeric_column(lines, dimensions, header_index, header, column)
 end
 
 function _check_voxel_result_size(grid::VoxelGrid, result::VoxelFirstOrderResult)

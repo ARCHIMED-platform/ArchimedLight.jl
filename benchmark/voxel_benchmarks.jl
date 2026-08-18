@@ -95,6 +95,55 @@ SUITE["Voxel"]["cache and series"] = BenchmarkGroup()
 SUITE["Voxel"]["scattering setup"] = BenchmarkGroup()
 SUITE["Voxel"]["scattering apply"] = BenchmarkGroup()
 SUITE["Voxel"]["scattering warmed"] = BenchmarkGroup()
+SUITE["Voxel"]["terrain intersection"] = BenchmarkGroup()
+SUITE["Voxel"]["terrain transport setup"] = BenchmarkGroup()
+
+const VOXEL_TERRAIN_GRID = _voxel_benchmark_grid((16, 16, 16))
+const VOXEL_TERRAIN_SOIL = ArchimedLight.SoilOpticalProperties(
+    par_reflectance=0.15,
+    nir_reflectance=0.40,
+)
+const VOXEL_TERRAIN_X = collect(0.0:1.0:16.0)
+const VOXEL_TERRAIN_Y = collect(0.0:1.0:16.0)
+const VOXEL_TERRAIN_Z = [
+    0.75 + 0.25sinpi(2x / 16) * cospi(2y / 16)
+    for x in VOXEL_TERRAIN_X, y in VOXEL_TERRAIN_Y
+]
+const VOXEL_TERRAIN_PLANAR = ArchimedLight.PlanarTerrain(
+    VOXEL_TERRAIN_GRID,
+    VOXEL_TERRAIN_SOIL;
+    elevation=0.75,
+    periodic=true,
+)
+const VOXEL_TERRAIN_HEIGHT = ArchimedLight.HeightFieldTerrain(
+    VOXEL_TERRAIN_X,
+    VOXEL_TERRAIN_Y,
+    VOXEL_TERRAIN_Z,
+    VOXEL_TERRAIN_SOIL;
+    periodic=true,
+)
+const VOXEL_TERRAIN_MESH = VOXEL_TERRAIN_HEIGHT.mesh
+const VOXEL_TERRAIN_OPEN_BACKEND = ArchimedLight.VoxelCPUBackend(
+    rays_per_voxel=4,
+    boundary=:open,
+    traversal=:dda,
+)
+const VOXEL_TERRAIN_RAY_ORIGIN = (8.25, 7.5, 16.0)
+const VOXEL_TERRAIN_RAY_DIRECTION = (0.37, -0.21, -1.0)
+
+for (name, terrain) in (
+    "planar 16x16 patches" => VOXEL_TERRAIN_PLANAR,
+    "height field 16x16 cells" => VOXEL_TERRAIN_HEIGHT,
+    "triangle mesh 512 facets" => VOXEL_TERRAIN_MESH,
+)
+    SUITE["Voxel"]["terrain intersection"][name] =
+        @benchmarkable ArchimedLight.intersect_terrain(
+            $terrain,
+            $VOXEL_TERRAIN_RAY_ORIGIN,
+            $VOXEL_TERRAIN_RAY_DIRECTION,
+            32.0,
+        )
+end
 
 const VOXEL_RAY_ORIGIN = (8.25, 7.5, 16.0)
 const VOXEL_RAY_DIRECTION = (0.37, -0.21, -1.0)
@@ -232,6 +281,21 @@ const VOXEL_SCATTER_QUADRATURE_6 = ArchimedLight.prepare_voxel_scattering_quadra
 const VOXEL_SCATTER_QUADRATURE_16 = ArchimedLight.prepare_voxel_scattering_quadrature(
     VOXEL_SCATTER_TURTLE_16,
 )
+
+for (name, terrain, terrain_backend) in (
+    ("planar 16x16 patches", VOXEL_TERRAIN_PLANAR, VOXEL_BACKEND),
+    ("height field 16x16 cells", VOXEL_TERRAIN_HEIGHT, VOXEL_BACKEND),
+    ("triangle mesh 512 facets", VOXEL_TERRAIN_MESH, VOXEL_TERRAIN_OPEN_BACKEND),
+)
+    SUITE["Voxel"]["terrain transport setup"][name] =
+        @benchmarkable ArchimedLight.prepare_voxel_scattering_transport(
+            $VOXEL_TERRAIN_GRID,
+            $VOXEL_SCATTER_QUADRATURE_6,
+            $terrain_backend,
+            $terrain,
+        ) evals = 1
+end
+
 const VOXEL_SCATTER_OPTICS_SMALL = ArchimedLight.voxel_generic_green_leaf_optics(
     VOXEL_SCATTER_SMALL_DENSE,
 )

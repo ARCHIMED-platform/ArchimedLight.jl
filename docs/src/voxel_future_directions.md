@@ -18,14 +18,15 @@ The current [voxel workflow](voxel_interception.md) represents vegetation as pla
 interception with Beer–Lambert attenuation, then optional deterministic
 isotropic multiple scattering with explicit scalar or per-voxel optics. It
 supports a spherical leaf-angle distribution (`G = 0.5`), open or periodic
-horizontal boundaries, a Lambertian planar ground, and cached CPU DDA paths.
+horizontal boundaries, continuous planar/height-field/triangle terrain with
+local-normal Lambertian soil reflection, and cached CPU DDA/BVH paths.
 Directional responses and internal transport paths can be reused over a
 meteorological series.
 
 The current implementation deliberately does not infer unsupported physics.
-It does not yet include non-planar topography, non-spherical leaf-angle
-distributions, anisotropic leaf scattering, separate material identities,
-adaptive grids, or GPU execution.
+It does not yet include non-spherical leaf-angle distributions, anisotropic
+leaf scattering, separate vegetation material identities, adaptive grids, or
+GPU execution.
 
 Future extensions should preserve four properties of this baseline:
 
@@ -43,10 +44,9 @@ without considering their shared data requirements.
 | Phase | Direction | Main prerequisite | Intended outcome |
 | --- | --- | --- | --- |
 | 0 | Harden the CPU transport kernel | Current DDA/reference parity | Allocation-light reference kernel suitable for reuse and porting |
-| 1 | Add non-planar terrain | Validated planar Lambertian ground | Deterministic vegetation–soil redistribution over continuous slopes |
-| 2 | Add GPU execution | Stable matrix-free CPU kernels | Accelerated response construction and scattering without changing results |
-| 3 | Add structural and angular detail | Validated core solver | Multiple components, non-spherical LIDF, and anisotropic scattering |
-| 4 | Add alternative spatial representations | Stable material and backend interfaces | Point-cloud ingestion, non-uniform grids, or octrees where justified |
+| 1 | Add GPU execution | Stable matrix-free CPU kernels | Accelerated response construction and scattering without changing results |
+| 2 | Add structural and angular detail | Validated core solver | Multiple components, non-spherical LIDF, and anisotropic scattering |
+| 3 | Add alternative spatial representations | Stable material and backend interfaces | Point-cloud ingestion, non-uniform grids, or octrees where justified |
 
 The GPU prototype can begin before phase 3 is complete, but the public GPU
 backend should follow the same equations and conservation rules as the CPU
@@ -138,11 +138,11 @@ first-order-only model:
 The words *intercepted* and *absorbed* must not be used interchangeably once
 ``\omega > 0``.
 
-## Soil And Non-Planar Terrain
+## Soil And Non-Planar Terrain Baseline
 
 ### Representation
 
-The voxel domain should remain a rectangular Cartesian box even when the soil
+The implemented voxel domain remains a rectangular Cartesian box even when the soil
 surface is not planar. Vegetation remains a volumetric medium inside this box,
 while terrain is represented as a boundary surface.
 
@@ -154,11 +154,11 @@ The transport model needs an explicit distinction between:
 - foliage or other participating media;
 - soil or excluded below-ground space.
 
-The preferred design is a hybrid representation:
+The implemented hybrid representation is:
 
 - foliage is stored in the regular `PAD` grid;
 - terrain is a height field or triangle mesh;
-- cells below terrain are masked out of radiative transport;
+- paths are truncated at terrain before below-surface portions can receive energy;
 - ray propagation stops or scatters at the exact terrain intersection.
 
 ### Interaction With Soil
@@ -184,20 +184,19 @@ Using local surface normals is important on slopes. Treating the boundary of
 binary solid voxels as the soil surface would create staircase geometry and
 axis-aligned normals, which can bias both shadows and reflected radiation.
 
-### Incremental Implementation
+### Implemented Scope And Further Extensions
 
-The explicit planar soil boundary and its multiple-scattering energy closure
-are implemented. The remaining sequence is:
+The reference solver now supports finite planes, regular height fields,
+arbitrary non-periodic triangle meshes, exact intersections, facet or explicit
+interpolated normals, BVH acceleration, aligned AAIGrid/AMAPVox input, and
+geometry-only cache invalidation. Open and periodic semantics are explicit;
+periodic canopy transport over non-periodic topography is rejected.
 
-1. Generalize the boundary to a raster height field.
-2. Triangulate or otherwise intersect the height field at sub-voxel precision
-   to obtain continuous slopes and local normals.
-3. Support arbitrary terrain meshes only if overhangs, cliffs, or non-height-
-   field geometries are required.
-
-Open and periodic horizontal boundaries must remain well defined. Periodic
-canopy transport over non-periodic topography should be rejected or require an
-explicitly periodic terrain definition.
+Potential future terrain work includes wavelength-resolved or BRDF soil
+reflection, robust overhang semantics for general meshes, external GIS raster
+reprojection, and sub-patch integration of reflected source position. These
+extensions must retain the energy and nearest-event contracts documented in
+[Voxel Terrain And Soil](voxel_terrain.md).
 
 ## GPU Computing
 

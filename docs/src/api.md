@@ -140,6 +140,26 @@ PlantGeom.add_ground!(scene; z=0.0, nx=9, ny=9, xy_bounds=nothing, group="paveme
 write_scene(path, scene)
 ```
 
+## Voxel Terrain API
+
+The voxel workflow has an independent continuous terrain interface. Use
+`NoVoxelTerrain()` for the historical open bottom, or construct a
+`PlanarTerrain`, `HeightFieldTerrain`, or `TriangulatedTerrain` with explicit
+`SoilOpticalProperties`. Pass it through `terrain=` to
+`run_voxel_light_step`/`run_voxel_light_series`.
+
+AAIGrid and AMAPVox workflows use:
+
+```julia
+aai = read_aai_grid(dtm_path; crs="EPSG:2154")
+terrain = height_field_terrain(aai, soil; transform=dtm_to_voxel)
+input = VoxelTerrainSceneInput(voxel_path, dtm_path; dtm_to_voxel=dtm_to_voxel)
+scene = read_voxel_terrain_scene(input, soil)
+```
+
+See [Voxel Terrain And Soil](voxel_terrain.md) for coordinate, coverage,
+periodicity, `ground_distance`, cache, and energy-balance contracts.
+
 ## Validation
 
 Use these to diagnose inputs before running. This block is schematic and uses

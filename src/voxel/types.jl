@@ -13,6 +13,78 @@ struct VoxelGrid{T<:AbstractFloat}
     voxel_size::NTuple{3,T}
 end
 
+"""Abstract interface for a surface that bounds voxel transport from below."""
+abstract type AbstractVoxelTerrain end
+
+"""Open lower boundary: rays may leave the voxel grid through `:bottom`."""
+struct NoVoxelTerrain <: AbstractVoxelTerrain end
+
+"""
+    SoilOpticalProperties(; par_reflectance, nir_reflectance)
+
+Lambertian soil reflectance in the operational PAR and NIR bands. Soil is
+opaque in the initial terrain model, so absorptance is `1 - reflectance` and
+transmittance is zero.
+"""
+struct SoilOpticalProperties{T<:AbstractFloat}
+    par_reflectance::T
+    nir_reflectance::T
+end
+
+function SoilOpticalProperties(; par_reflectance::Real, nir_reflectance::Real)
+    par = Float64(par_reflectance)
+    nir = Float64(nir_reflectance)
+    isfinite(par) && 0 <= par <= 1 ||
+        throw(ArgumentError("soil PAR reflectance must be finite and lie in [0, 1]"))
+    isfinite(nir) && 0 <= nir <= 1 ||
+        throw(ArgumentError("soil NIR reflectance must be finite and lie in [0, 1]"))
+    return SoilOpticalProperties(par, nir)
+end
+
+"""The nearest positive terrain intersection along a normalized ray."""
+struct TerrainHit{T<:AbstractFloat}
+    distance::T
+    point::NTuple{3,T}
+    normal::NTuple{3,T}
+    patch_id::Int
+    material_id::Int
+
+    function TerrainHit(
+        distance::T,
+        point::NTuple{3,T},
+        normal::NTuple{3,T},
+        patch_id::Int,
+        material_id::Int,
+    ) where {T<:AbstractFloat}
+        isfinite(distance) && distance > 0 ||
+            throw(ArgumentError("terrain-hit distance must be finite and positive"))
+        all(isfinite, point) || throw(ArgumentError("terrain-hit point must be finite"))
+        all(isfinite, normal) || throw(ArgumentError("terrain-hit normal must be finite"))
+        magnitude = sqrt(sum(abs2, normal))
+        isapprox(magnitude, one(T); atol=128eps(T), rtol=128eps(T)) ||
+            throw(ArgumentError("terrain-hit normal must be normalized"))
+        normal[3] > 0 || throw(ArgumentError("terrain-hit normal must point from soil toward air"))
+        patch_id > 0 || throw(ArgumentError("terrain-hit patch_id must be positive"))
+        material_id > 0 || throw(ArgumentError("terrain-hit material_id must be positive"))
+        return new{T}(distance, point, normal, patch_id, material_id)
+    end
+end
+
+function TerrainHit(distance::Real, point, normal, patch_id::Integer, material_id::Integer)
+    values = promote(
+        Float64(distance),
+        (Float64(point[1]), Float64(point[2]), Float64(point[3]))...,
+        (Float64(normal[1]), Float64(normal[2]), Float64(normal[3]))...,
+    )
+    return TerrainHit(
+        values[1],
+        (values[2], values[3], values[4]),
+        (values[5], values[6], values[7]),
+        Int(patch_id),
+        Int(material_id),
+    )
+end
+
 function VoxelGrid(minimum, maximum, pad::AbstractArray{<:Real,3})
     length(minimum) == 3 || throw(ArgumentError("minimum must contain three coordinates"))
     length(maximum) == 3 || throw(ArgumentError("maximum must contain three coordinates"))
@@ -85,14 +157,19 @@ struct VoxelRaySegment{T<:AbstractFloat}
 end
 
 """
-An ordered ray path through a voxel grid. `exit_reason` is `:top`, `:bottom`,
-or `:side`. Public first-order rays point downward; internal scattering rays
-may leave through either vertical boundary.
+An ordered ray path through a voxel grid. `exit_reason` is `:terrain`, `:top`,
+`:bottom`, or `:side`. A terrain path carries its nearest `terrain_hit`;
+no-terrain paths retain `nothing`. Public first-order rays point downward;
+internal scattering rays may leave through either vertical boundary.
 """
 struct VoxelRayPath{T<:AbstractFloat}
     segments::Vector{VoxelRaySegment{T}}
     exit_reason::Symbol
+    terrain_hit::Union{Nothing,TerrainHit{T}}
 end
+
+VoxelRayPath(segments::Vector{VoxelRaySegment{T}}, exit_reason::Symbol) where {T<:AbstractFloat} =
+    VoxelRayPath{T}(segments, exit_reason, nothing)
 
 Base.length(path::VoxelRayPath) = length(path.segments)
 Base.iterate(path::VoxelRayPath, state...) = iterate(path.segments, state...)
@@ -313,12 +390,15 @@ struct VoxelDirectionResponse{T<:AbstractFloat}
     escaped_side_weight::T
     escaped_bottom_weight::T
     bottom_exit_fraction::Array{T,2}
+    terrain_incident_weight::T
+    terrain_incident_fraction::Vector{T}
     effective_ray_count::Int
 end
 
 """Reusable directional responses aligned with a `TurtleGrid`."""
 struct VoxelResponseCache{T<:AbstractFloat}
     grid_fingerprint::UInt
+    terrain_fingerprint::UInt
     backend::VoxelCPUBackend
     directions::Vector{NTuple{3,T}}
     responses::Vector{VoxelDirectionResponse{T}}
@@ -344,6 +424,10 @@ struct VoxelFirstOrderResult{T<:AbstractFloat}
     nir_escaped_bottom_energy::T
     par_bottom_energy::Array{T,2}
     nir_bottom_energy::Array{T,2}
+    par_terrain_incident_energy::T
+    nir_terrain_incident_energy::T
+    par_terrain_energy::Vector{T}
+    nir_terrain_energy::Vector{T}
 end
 
 """Normalized full-sphere angular quadrature for isotropic voxel scattering."""
@@ -355,13 +439,17 @@ end
 """Geometry-dependent internal-ray paths reused by the matrix-free transport operator."""
 struct VoxelScatteringTransportCache{T<:AbstractFloat}
     grid_fingerprint::UInt
+    terrain_fingerprint::UInt
     backend::VoxelCPUBackend
     quadrature_fingerprint::UInt
     source_paths::Dict{Tuple{Int,Int},VoxelRayPath{T}}
     ground_paths::Dict{Tuple{Int,Int},VoxelRayPath{T}}
+    terrain_paths::Dict{Tuple{Int,Int},VoxelRayPath{T}}
+    terrain_direction_weights::Dict{Int,Tuple{Vector{Int},Vector{T}}}
+    terrain_patch_count::Int
 end
 
-"""One application of the voxel scattering transport operator."""
+"""One conservative application of foliage and optional soil transport."""
 struct VoxelTransportResult{T<:AbstractFloat}
     intercepted_energy::Array{T,3}
     ground_absorbed_energy::T
@@ -369,6 +457,7 @@ struct VoxelTransportResult{T<:AbstractFloat}
     escaped_top_energy::T
     escaped_side_energy::T
     escaped_bottom_energy::T
+    unresolved_energy::T
     balance_residual::T
 end
 
@@ -392,6 +481,14 @@ struct VoxelBandScatteringResult{T<:AbstractFloat}
     relative_balance_residual::T
     order_intercepted_energy::Vector{T}
 end
+
+"""Soil absorption diagnostic (the stored `ground_*` field name is legacy-compatible)."""
+soil_absorbed_energy(result::Union{VoxelTransportResult,VoxelBandScatteringResult}) =
+    result.ground_absorbed_energy
+
+"""Soil reflection diagnostic (an internal transfer, not an external source)."""
+soil_reflected_energy(result::Union{VoxelTransportResult,VoxelBandScatteringResult}) =
+    result.ground_reflected_energy
 
 """PAR and NIR voxel multiple-scattering results."""
 struct VoxelScatteringResult{T<:AbstractFloat}

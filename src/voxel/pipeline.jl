@@ -1,4 +1,4 @@
-const VoxelScatteringCacheKey = Tuple{UInt,VoxelCPUBackend,UInt}
+const VoxelScatteringCacheKey = Tuple{UInt,UInt,VoxelCPUBackend,UInt}
 
 function _check_voxel_pipeline_options(
     grid::VoxelGrid,
@@ -6,7 +6,12 @@ function _check_voxel_pipeline_options(
     backend::VoxelCPUBackend,
     optics::Union{Nothing,VoxelOpticalProperties},
     ground::Union{Nothing,VoxelGroundOptics},
+    terrain::AbstractVoxelTerrain,
 )
+    ground === nothing || terrain isa NoVoxelTerrain || throw(ArgumentError(
+        "provide either legacy `ground` optics or a terrain, not both",
+    ))
+    _validate_terrain_for_grid(grid, terrain, backend.boundary)
     options.scattering || return nothing
     optics === nothing && throw(ArgumentError(
         "voxel scattering requires explicit `optics=VoxelOpticalProperties(...)`; " *
@@ -36,17 +41,19 @@ function _voxel_scattering_cache_for_turtle!(
     grid::VoxelGrid,
     turtle::TurtleGrid,
     backend::VoxelCPUBackend,
+    terrain::AbstractVoxelTerrain,
 )
     quadrature = prepare_voxel_scattering_quadrature(turtle)
     key = (
         _voxel_grid_fingerprint(grid),
+        _terrain_geometry_fingerprint(terrain),
         backend,
         _voxel_scattering_quadrature_fingerprint(quadrature),
     )
     cache = get!(cache_by_configuration, key) do
-        prepare_voxel_scattering_transport(grid, quadrature, backend)
+        prepare_voxel_scattering_transport(grid, quadrature, backend, terrain)
     end
-    return _validate_voxel_scattering_cache(grid, quadrature, backend, cache)
+    return _validate_voxel_scattering_cache(grid, quadrature, backend, terrain, cache)
 end
 
 function _voxel_cache_for_turtle!(
@@ -54,18 +61,25 @@ function _voxel_cache_for_turtle!(
     grid::VoxelGrid,
     turtle::TurtleGrid,
     backend::VoxelCPUBackend,
+    terrain::AbstractVoxelTerrain,
 )
     directions = NTuple{3,Float64}[]
     responses = VoxelDirectionResponse{Float64}[]
     for sector in turtle.sectors
         direction = _normalise_voxel_direction(ntuple(i -> -Float64(sector.direction[i]), 3))
         response = get!(response_by_direction, direction) do
-            compute_voxel_direction_response(grid, direction, backend)
+            compute_voxel_direction_response(grid, direction, backend, terrain)
         end
         push!(directions, direction)
         push!(responses, response)
     end
-    return VoxelResponseCache(_voxel_grid_fingerprint(grid), backend, directions, responses)
+    return VoxelResponseCache(
+        _voxel_grid_fingerprint(grid),
+        _terrain_geometry_fingerprint(terrain),
+        backend,
+        directions,
+        responses,
+    )
 end
 
 function _run_voxel_light_step_resolved(
@@ -77,13 +91,14 @@ function _run_voxel_light_step_resolved(
     response_by_direction::Dict{NTuple{3,Float64},VoxelDirectionResponse{Float64}};
     optics::Union{Nothing,VoxelOpticalProperties}=nothing,
     ground::Union{Nothing,VoxelGroundOptics}=nothing,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
     scattering_cache_by_configuration::Union{
         Nothing,
         Dict{VoxelScatteringCacheKey,VoxelScatteringTransportCache{Float64}},
     }=nothing,
     check_boundaries::Bool=options.check_meteo_boundaries,
 )
-    _check_voxel_pipeline_options(grid, options, backend, optics, ground)
+    _check_voxel_pipeline_options(grid, options, backend, optics, ground, terrain)
     sky = compute_sky(
         meteo_row,
         options;
@@ -99,7 +114,7 @@ function _run_voxel_light_step_resolved(
         check_boundaries=check_boundaries,
         resolved_step=resolved,
     )
-    cache = _voxel_cache_for_turtle!(response_by_direction, grid, turtle, backend)
+    cache = _voxel_cache_for_turtle!(response_by_direction, grid, turtle, backend, terrain)
     first_order = compute_voxel_first_order(
         grid,
         turtle,
@@ -107,6 +122,7 @@ function _run_voxel_light_step_resolved(
         backend;
         duration_seconds=resolved.duration_seconds,
         cache=cache,
+        terrain=terrain,
     )
     scattering = if options.scattering
         transport_cache = _voxel_scattering_cache_for_turtle!(
@@ -114,6 +130,7 @@ function _run_voxel_light_step_resolved(
             grid,
             turtle,
             backend,
+            terrain,
         )
         compute_voxel_scattering(
             grid,
@@ -124,6 +141,7 @@ function _run_voxel_light_step_resolved(
             backend;
             duration_seconds=resolved.duration_seconds,
             ground=ground,
+            terrain=terrain,
             cache=transport_cache,
         )
     else
@@ -154,6 +172,7 @@ function run_voxel_light_step(
     backend::VoxelCPUBackend=VoxelCPUBackend(),
     optics::Union{Nothing,VoxelOpticalProperties}=nothing,
     ground::Union{Nothing,VoxelGroundOptics}=nothing,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
     check_boundaries::Bool=options.check_meteo_boundaries,
 )
     resolved = _resolved_meteo_step_or_error(
@@ -176,6 +195,7 @@ function run_voxel_light_step(
         responses;
         optics=optics,
         ground=ground,
+        terrain=terrain,
         scattering_cache_by_configuration=scattering_caches,
         check_boundaries=check_boundaries,
     )
@@ -188,6 +208,7 @@ function run_voxel_light_series(
     backend::VoxelCPUBackend=VoxelCPUBackend(),
     optics::Union{Nothing,VoxelOpticalProperties}=nothing,
     ground::Union{Nothing,VoxelGroundOptics}=nothing,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
     check_boundaries::Bool=options.check_meteo_boundaries,
 )
     rows, resolved_steps = _prepare_meteo_for_series(
@@ -213,6 +234,7 @@ function run_voxel_light_series(
             responses;
             optics=optics,
             ground=ground,
+            terrain=terrain,
             scattering_cache_by_configuration=scattering_caches,
             check_boundaries=check_boundaries,
         )
@@ -235,6 +257,7 @@ function run_voxel_light_series(
     backend::VoxelCPUBackend=VoxelCPUBackend(),
     optics::Union{Nothing,VoxelOpticalProperties}=nothing,
     ground::Union{Nothing,VoxelGroundOptics}=nothing,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
     check_boundaries::Bool=options.check_meteo_boundaries,
 )
     Tables.istable(typeof(meteo)) ||
@@ -247,6 +270,7 @@ function run_voxel_light_series(
         backend=backend,
         optics=optics,
         ground=ground,
+        terrain=terrain,
         check_boundaries=check_boundaries,
     )
 end

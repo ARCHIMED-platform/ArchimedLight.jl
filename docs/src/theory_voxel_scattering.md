@@ -144,7 +144,7 @@ The terminal energy invariant is checked independently for PAR and NIR:
 
 ```math
 E_\mathrm{external}+E_\mathrm{injected} =
-E_\mathrm{foliage\ absorbed}+E_\mathrm{ground\ absorbed}+
+E_\mathrm{foliage\ absorbed}+E_\mathrm{soil\ absorbed}+
 E_\mathrm{top}+E_\mathrm{side}+E_\mathrm{bottom}+E_\mathrm{unresolved}.
 ```
 
@@ -160,25 +160,29 @@ band or timestep results is deferred: the current implementation favors clear
 result ownership and thread-safe read-only caches. A future in-place workspace
 API may reduce the remaining warmed allocations without changing equations.
 
-## Ground Boundary
+## Terrain And Legacy Ground Boundaries
 
-`VoxelGroundOptics` represents a horizontal Lambertian receptor. Energy that
-reaches the lower boundary is split into absorbed and reflected fractions.
-Reflected energy is redistributed over upward directions with weights
-proportional to quadrature solid angle times ``\cos\theta``.
+`AbstractVoxelTerrain` represents a continuous planar, height-field, or
+triangulated soil receptor. A ray path stops at its nearest terrain
+intersection. Energy is split into absorbed and reflected fractions, then
+reflected over the existing full-sphere directions with weights proportional
+to quadrature solid angle times ``\max(0,n\cdot\omega)`` around the patch's
+local normal. See [Voxel Terrain And Soil](voxel_terrain.md) for the geometry,
+AMAPVox/DTM import, boundary, and cache contracts.
 
-Without a ground object, lower-boundary radiation is reported as bottom
-escape. With a black ground it is reported as ground absorption. With a
-reflective ground it can be intercepted by foliage again or leave through the
-top or an open side. These outcomes remain separate in the result.
+Without terrain, lower-boundary radiation is reported as bottom escape. With a
+black soil it is reported as soil absorption. With a reflective soil it can be
+intercepted by foliage again, strike another terrain patch, or leave through
+the top or an open side. `VoxelGroundOptics` remains available as the legacy
+horizontal lower-boundary API; it is mutually exclusive with `terrain`.
 
 ## Scope And Limitations
 
 The CPU reference solver supports spherical LIDF, isotropic foliage scattering,
 open or horizontally periodic regular grids, scalar or dense effective optical
-fields, and an optional Lambertian ground. It does not yet model specular
+fields, and Lambertian planar, height-field, or triangle terrain. It does not yet model specular
 reflection, polarized light, fluorescence, wavelength-resolved transport,
-anisotropic leaf phase functions, separate material identities, adaptive
+anisotropic leaf phase functions, separate vegetation material identities, adaptive
 voxels, or GPU execution.
 
 The isotropic assumption uses only ``\rho+\tau`` during redistribution. The

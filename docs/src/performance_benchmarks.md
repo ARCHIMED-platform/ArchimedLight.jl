@@ -226,6 +226,14 @@ Voxel transport memory scales with cached path segments—occupied voxels times
 directions—and a small number of grid-sized work arrays. The production solver
 does not allocate a dense voxel-by-voxel exchange matrix.
 
+Terrain cost is measured in two additional groups. `terrain intersection`
+times one nearest-hit query separately for a plane, a 16×16-cell triangulated
+height field, and the equivalent 512-facet generic mesh. `terrain transport
+setup` measures construction of terrain-aware foliage and soil paths for those
+same representations. These timings are intentionally separate from
+`scattering apply` and `scattering warmed`, so an acceleration-structure or
+intersection regression cannot be hidden inside a different iteration count.
+
 ## Limitations And Timing Artifacts
 
 - Only three scenes have complete parameter coverage. Agrivoltaics is partial,

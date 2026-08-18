@@ -132,6 +132,30 @@ whole horizontal domain. The corresponding `*_escaped_energy` fields close the
 energy balance. `*_injected_energy` is zero for the public boundary modes and
 records only the artificial reinjection required by `:java_nontoric`.
 
+## Add Terrain And Soil
+
+Use an independent surface whenever the lower boundary represents real soil,
+especially when the terrain lies above the grid minimum or is sloped:
+
+```@example voxel
+soil = SoilOpticalProperties(
+    par_reflectance=0.10,
+    nir_reflectance=0.30,
+)
+terrain = PlanarTerrain(
+    grid,
+    soil;
+    elevation=grid.minimum[3],
+    periodic=backend.boundary == :periodic,
+)
+```
+
+Pass it as `terrain=terrain` to `run_voxel_light_step` or
+`run_voxel_light_series`. First-order energy reaching soil is stored by patch
+in `par_terrain_energy` and `nir_terrain_energy`; it is not bottom escape.
+Height fields, triangle meshes, local-normal reflection, and aligned AMAPVox
+DTM import are documented in [Voxel Terrain And Soil](voxel_terrain.md).
+
 ## Add Multiple Scattering
 
 Voxel scattering requires explicit optical properties. It deliberately does
@@ -279,7 +303,9 @@ Directional geometric responses and internal scattering paths are cached
 across a series. The cache key
 includes grid bounds, dimensions, all `PAD` values, the normalized direction,
 `G`, boundary mode, traversal, and ray sampling settings. A changed grid or
-backend cannot silently reuse an incompatible explicit cache. Optical albedos
+backend cannot silently reuse an incompatible explicit cache. With terrain,
+the key also includes surface geometry, topology, periodicity, normal mode, and
+patch material assignment. Optical albedos and soil reflectance
 are applied during iteration rather than baked into geometric paths, so changing
 only optics does not require rebuilding those paths.
 
@@ -287,11 +313,13 @@ only optics does not require rebuilding those paths.
 
 !!! warning
     The voxel workflow currently supports spherical LIDF, isotropic foliage
-    scattering, effective optical fields on regular Cartesian voxels, an
-    optional Lambertian ground, and CPU execution. Specular or anisotropic
-    scattering, separate material identities, adaptive grids, wavelength-
-    resolved transport, and GPU execution are not implemented. Internal
-    emission uses the voxel centre as a deterministic sub-voxel approximation.
+    scattering, effective optical fields on regular Cartesian voxels,
+    planar/height-field/triangle Lambertian terrain, and CPU execution.
+    Specular or anisotropic scattering, separate vegetation material
+    identities, adaptive grids, wavelength-resolved transport, and GPU
+    execution are not implemented. Internal foliage emission uses the voxel
+    centre (or the above-surface part of a terrain-straddling voxel) as a
+    deterministic sub-voxel approximation; terrain emission uses patch centres.
 
 The voxel workflow is intentionally separate from the triangle-based
 `LightSimulation` / `run_light` API. It reuses the same sky and meteorological

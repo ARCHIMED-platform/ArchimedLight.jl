@@ -22,13 +22,20 @@ function _voxel_grid_fingerprint(grid::VoxelGrid)
     return UInt(state)
 end
 
-function _voxel_path_for_backend(grid, origin, direction, backend::VoxelCPUBackend)
+function _voxel_path_for_backend(
+    grid,
+    origin,
+    direction,
+    backend::VoxelCPUBackend,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
+)
     return trace_voxel_ray(
         grid,
         origin,
         direction;
         boundary=backend.boundary,
         algorithm=backend.traversal,
+        terrain=terrain,
     )
 end
 
@@ -144,6 +151,8 @@ function _compute_java_direction_response(
         Float64(escaped_side_weight),
         Float64(escaped_bottom_weight),
         Float64.(bottom_exit_fraction),
+        0.0,
+        Float64[],
         effective_ray_count,
     )
 end
@@ -159,9 +168,15 @@ function compute_voxel_direction_response(
     grid::VoxelGrid,
     propagation_direction,
     backend::VoxelCPUBackend=VoxelCPUBackend(),
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
 )
-    backend.traversal == :java_reference &&
+    _validate_terrain_for_grid(grid, terrain, backend.boundary)
+    if backend.traversal == :java_reference
+        terrain isa NoVoxelTerrain || throw(ArgumentError(
+            "terrain is not supported by the Java reference traversal",
+        ))
         return _compute_java_direction_response(grid, propagation_direction, backend)
+    end
     direction = _normalise_voxel_direction(propagation_direction)
     offsets = _voxel_reference_ray_offsets(grid, backend.rays_per_voxel)
     effective_ray_count = length(offsets)
@@ -172,6 +187,8 @@ function compute_voxel_direction_response(
     escaped_side_weight = 0.0
     escaped_bottom_weight = 0.0
     bottom_exit_fraction = zeros(Float64, size(grid)[1:2])
+    terrain_incident_fraction = zeros(Float64, terrain_patch_count(terrain))
+    terrain_incident_weight = 0.0
     injected_weight = 0.0
     nx, ny, _ = size(grid)
     dx, dy, _ = grid.voxel_size
@@ -185,7 +202,7 @@ function compute_voxel_direction_response(
                 lo[2] + (start_j - 1) * dy + offset[2],
                 top,
             )
-            path = _voxel_path_for_backend(grid, origin, direction, backend)
+            path = _voxel_path_for_backend(grid, origin, direction, backend, terrain)
             incoming = ray_weight
             previous_index = nothing
             last_index = nothing
@@ -206,13 +223,19 @@ function compute_voxel_direction_response(
                 previous_index = segment.index
                 last_index = segment.index
             end
-            escaped_weight += incoming
-            if path.exit_reason == :bottom
+            if path.exit_reason == :terrain
+                hit = something(path.terrain_hit)
+                terrain_incident_fraction[hit.patch_id] += incoming
+                terrain_incident_weight += incoming
+            elseif path.exit_reason == :bottom
+                escaped_weight += incoming
                 escaped_bottom_weight += incoming
                 last_index === nothing || (bottom_exit_fraction[last_index[1], last_index[2]] += incoming)
             elseif path.exit_reason == :side
+                escaped_weight += incoming
                 escaped_side_weight += incoming
             elseif path.exit_reason == :top
+                escaped_weight += incoming
                 escaped_top_weight += incoming
             else
                 error("unsupported voxel exit reason: $(path.exit_reason)")
@@ -223,7 +246,12 @@ function compute_voxel_direction_response(
     incoming_weight = Float64(nx * ny)
     intercepted_weight = sum(interception)
     expected = incoming_weight + injected_weight
-    isapprox(intercepted_weight + escaped_weight, expected; atol=1e-11, rtol=1e-11) ||
+    isapprox(
+        intercepted_weight + escaped_weight + terrain_incident_weight,
+        expected;
+        atol=1e-11,
+        rtol=1e-11,
+    ) ||
         error("voxel directional energy balance does not close")
     return VoxelDirectionResponse(
         interception,
@@ -235,6 +263,8 @@ function compute_voxel_direction_response(
         escaped_side_weight,
         escaped_bottom_weight,
         bottom_exit_fraction,
+        terrain_incident_weight,
+        terrain_incident_fraction,
         effective_ray_count,
     )
 end
@@ -249,7 +279,9 @@ function prepare_voxel_responses(
     grid::VoxelGrid,
     turtle::TurtleGrid,
     backend::VoxelCPUBackend=VoxelCPUBackend(),
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
 )
+    _validate_terrain_for_grid(grid, terrain, backend.boundary)
     directions = NTuple{3,Float64}[]
     responses = VoxelDirectionResponse{Float64}[]
     sizehint!(directions, length(turtle.sectors))
@@ -258,15 +290,30 @@ function prepare_voxel_responses(
         propagation = ntuple(i -> -Float64(sector.direction[i]), 3)
         direction = _normalise_voxel_direction(propagation)
         push!(directions, direction)
-        push!(responses, compute_voxel_direction_response(grid, direction, backend))
+        push!(responses, compute_voxel_direction_response(grid, direction, backend, terrain))
     end
-    return VoxelResponseCache(_voxel_grid_fingerprint(grid), backend, directions, responses)
+    return VoxelResponseCache(
+        _voxel_grid_fingerprint(grid),
+        _terrain_geometry_fingerprint(terrain),
+        backend,
+        directions,
+        responses,
+    )
 end
 
-function _validate_voxel_cache(grid, turtle, backend, cache::VoxelResponseCache)
+function _validate_voxel_cache(
+    grid,
+    turtle,
+    backend,
+    terrain::AbstractVoxelTerrain,
+    cache::VoxelResponseCache,
+)
     cache.grid_fingerprint == _voxel_grid_fingerprint(grid) ||
         throw(ArgumentError("voxel response cache does not match the grid or PAD values"))
     cache.backend == backend || throw(ArgumentError("voxel response cache uses different backend settings"))
+    cache.terrain_fingerprint == _terrain_geometry_fingerprint(terrain) || throw(ArgumentError(
+        "voxel response cache does not match the terrain geometry or material assignment",
+    ))
     length(cache.responses) == length(turtle.sectors) ||
         throw(ArgumentError("voxel response cache does not match turtle sector count"))
     for (index, sector) in enumerate(turtle.sectors)
@@ -301,6 +348,7 @@ function compute_voxel_first_order(
     backend::VoxelCPUBackend=VoxelCPUBackend();
     duration_seconds::Real,
     cache::Union{Nothing,VoxelResponseCache}=nothing,
+    terrain::AbstractVoxelTerrain=NoVoxelTerrain(),
 )
     isfinite(duration_seconds) && duration_seconds >= 0 ||
         throw(ArgumentError("duration_seconds must be finite and non-negative"))
@@ -315,8 +363,9 @@ function compute_voxel_first_order(
     all(isfinite, fluxes.nir) && all(>=(0), fluxes.nir) ||
         throw(ArgumentError("NIR directional fluxes must be finite and non-negative"))
 
-    responses = cache === nothing ? prepare_voxel_responses(grid, turtle, backend) :
-                _validate_voxel_cache(grid, turtle, backend, cache)
+    _validate_terrain_for_grid(grid, terrain, backend.boundary)
+    responses = cache === nothing ? prepare_voxel_responses(grid, turtle, backend, terrain) :
+                _validate_voxel_cache(grid, turtle, backend, terrain, cache)
     par_energy = zeros(Float64, size(grid))
     nir_energy = zeros(Float64, size(grid))
     area_time = voxel_horizontal_area(grid) * Float64(duration_seconds)
@@ -334,6 +383,10 @@ function compute_voxel_first_order(
     nir_escaped_bottom = 0.0
     par_bottom = zeros(Float64, size(grid)[1:2])
     nir_bottom = zeros(Float64, size(grid)[1:2])
+    par_terrain = zeros(Float64, terrain_patch_count(terrain))
+    nir_terrain = zeros(Float64, terrain_patch_count(terrain))
+    par_terrain_incident = 0.0
+    nir_terrain_incident = 0.0
 
     for sector_index in 1:sector_count
         response = responses.responses[sector_index]
@@ -356,10 +409,17 @@ function compute_voxel_first_order(
         nir_escaped_side += response.escaped_side_weight * nir_scale
         par_escaped_bottom += response.escaped_bottom_weight * par_scale
         nir_escaped_bottom += response.escaped_bottom_weight * nir_scale
+        par_terrain_incident += response.terrain_incident_weight * par_scale
+        nir_terrain_incident += response.terrain_incident_weight * nir_scale
         for index in eachindex(response.bottom_exit_fraction)
             fraction = response.bottom_exit_fraction[index]
             par_bottom[index] += fraction * par_scale
             nir_bottom[index] += fraction * nir_scale
+        end
+        for index in eachindex(response.terrain_incident_fraction)
+            fraction = response.terrain_incident_fraction[index]
+            par_terrain[index] += fraction * par_scale
+            nir_terrain[index] += fraction * nir_scale
         end
     end
 
@@ -367,9 +427,19 @@ function compute_voxel_first_order(
     nir_flux = similar(nir_energy)
     _voxel_flux_from_energy!(par_flux, par_energy, grid, Float64(duration_seconds))
     _voxel_flux_from_energy!(nir_flux, nir_energy, grid, Float64(duration_seconds))
-    isapprox(sum(par_energy) + par_escaped, par_incoming + par_injected; atol=1e-8, rtol=1e-10) ||
+    isapprox(
+        sum(par_energy) + par_escaped + par_terrain_incident,
+        par_incoming + par_injected;
+        atol=1e-8,
+        rtol=1e-10,
+    ) ||
         error("voxel PAR energy balance does not close")
-    isapprox(sum(nir_energy) + nir_escaped, nir_incoming + nir_injected; atol=1e-8, rtol=1e-10) ||
+    isapprox(
+        sum(nir_energy) + nir_escaped + nir_terrain_incident,
+        nir_incoming + nir_injected;
+        atol=1e-8,
+        rtol=1e-10,
+    ) ||
         error("voxel NIR energy balance does not close")
 
     return VoxelFirstOrderResult(
@@ -391,5 +461,9 @@ function compute_voxel_first_order(
         nir_escaped_bottom,
         par_bottom,
         nir_bottom,
+        par_terrain_incident,
+        nir_terrain_incident,
+        par_terrain,
+        nir_terrain,
     )
 end

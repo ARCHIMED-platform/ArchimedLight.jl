@@ -4,7 +4,7 @@ import PlantGeom
 import MultiScaleTreeGraph
 import GeometryBasics
 import StaticArrays
-import LinearAlgebra: norm, dot, cross
+import LinearAlgebra: norm, dot, cross, det, diag, I
 import Serialization
 import Dates
 import OrderedCollections: OrderedDict
@@ -22,7 +22,9 @@ include("interception.jl")
 include("scattering.jl")
 include("pipeline.jl")
 include("voxel/types.jl")
+include("voxel/terrain.jl")
 include("voxel/io.jl")
+include("voxel/terrain_io.jl")
 include("voxel/traversal_reference.jl")
 include("voxel/traversal_dda.jl")
 include("voxel/interception.jl")
@@ -52,6 +54,18 @@ export SceneSummary
 export MeteoSummary
 export LightSimulation
 export VoxelGrid
+export AbstractVoxelTerrain
+export NoVoxelTerrain
+export TerrainHit
+export SoilOpticalProperties
+export PlanarTerrain
+export HeightFieldTerrain
+export TriangulatedTerrain
+export TerrainCoordinateTransform
+export AAIGrid
+export GroundDistanceAlignment
+export VoxelTerrainSceneInput
+export VoxelTerrainScene
 export VoxelRaySegment
 export VoxelRayPath
 export VoxelCPUBackend
@@ -91,7 +105,24 @@ export summarize_scene
 export summarize_meteo
 export run_light
 export read_voxel_grid
+export read_voxel_column
 export write_voxel_grid
+export read_aai_grid
+export height_field_terrain
+export validate_ground_distance
+export terrain_from_ground_distance
+export read_voxel_terrain_scene
+export intersect_terrain
+export terrain_bounds
+export terrain_patch_count
+export terrain_patch_point
+export terrain_patch_normal
+export terrain_patch_material
+export terrain_elevation_at
+export terrain_lambertian_weights
+export soil_optics
+export soil_absorbed_energy
+export soil_reflected_energy
 export trace_voxel_ray
 export prepare_voxel_responses
 export compute_voxel_first_order

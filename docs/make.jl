@@ -38,6 +38,7 @@ makedocs(;
             "Model Files" => "reference_models.md",
             "Meteo Inputs" => "reference_meteo.md",
             "Voxel Light Interception" => "voxel_interception.md",
+            "Voxel Terrain And Soil" => "voxel_terrain.md",
         ],
         "Outputs" => "outputs.md",
         "Performance Benchmarks" => "performance_benchmarks.md",
