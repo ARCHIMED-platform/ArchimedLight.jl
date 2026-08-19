@@ -151,13 +151,23 @@ The default backend is the CPU raster path:
 step = run_light_step(scene, models, row, options; interception_backend=:raster_cpu)
 ```
 
-An experimental Raycore/KernelAbstractions backend is also available. It keeps
-the same public pipeline but builds a Raycore acceleration structure for
-interception and, when requested, for scattering-transfer topology:
+The native KernelAbstractions raster backend keeps the same public pipeline while
+running projection, visibility-stack, area-reduction, and scattering-topology
+kernels on the selected device:
 
 ```julia
-ib = RaycoreInterceptionBackend()
-sb = RaycoreScatteringBackend(ib)
+using CUDA
+using KernelAbstractions
+
+dev = KernelAbstractions.get_backend(CUDA.CuArray(zeros(Float32, 1)))
+ib = RasterGPUBackend(
+    backend=dev,
+    max_hits_per_pixel=128,
+    tile_size=1,
+    tile_face_capacity=128,
+    edge_accumulation=:auto,
+)
+sb = RasterGPUScatteringBackend(ib)
 
 step = run_light_step(
     scene,
@@ -169,98 +179,43 @@ step = run_light_step(
 )
 ```
 
-For a CPU Raycore run, the symbol form is also accepted:
+GPU packages are intentionally not hard dependencies of ArchimedLight. Load
+Metal, CUDA, oneAPI, or AMDGPU in the calling environment and pass the
+corresponding KernelAbstractions backend. The symbol `:raster_gpu` selects the
+same implementation with the KernelAbstractions CPU backend and is useful for
+portable validation.
 
-```julia
-first = compute_first_order(scene, models, turtle, fluxes, options; backend=:raycore_cpu)
-```
-
-GPU-specific packages are intentionally not hard dependencies of
-`ArchimedLight`. If you load one yourself, pass its KernelAbstractions backend
-object into the Raycore backend:
-
-```julia
-using CUDA
-using KernelAbstractions
-
-dev = KernelAbstractions.get_backend(CUDA.CuArray(zeros(Float32, 1)))
-ib = RaycoreInterceptionBackend(backend=dev)
-sb = RaycoreScatteringBackend(ib)
-```
-
-Raycore scattering propagation uses `Float64` by default on
-`KernelAbstractions.CPU()` and `Float32` by default on non-CPU backends. Pass
-`scattering_eltype=Float64` or `scattering_eltype=Float32` to
-`RaycoreInterceptionBackend` when you need to override that default.
-Full-stack Raycore projections keep up to `max_hits_per_pixel=32` hits per
-projected pixel by default. Dense scenes can raise that value explicitly, but
-larger values allocate proportionally larger device and host buffers.
-
-The Raycore top-hit and full-stack paths launch KernelAbstractions kernels for
-batched Raycore traversal, then perform ArchimedLight's semantic accumulation
-on the host. For very coarse rasters where several scene faces collapse into
-fewer projection cells, ArchimedLight falls back to the CPU raster projection
-for that sector because a single point ray per cell cannot reproduce the CPU
-coverage and coplanar tie semantics. You can smoke-test a backend package from
-an environment where that package is already installed with:
-
-```sh
-ARCHIMEDLIGHT_DEVICE_BACKEND=cuda julia --project=. scripts/raycore_device_smoke.jl
-```
-
-Use `cpu`, `cuda`, `metal`, `oneapi`, or `amdgpu` for
-`ARCHIMEDLIGHT_DEVICE_BACKEND`.
+Full-stack projections keep up to `max_hits_per_pixel=32` hits per projected
+pixel by default. Dense scenes can raise that value explicitly, with
+proportionally larger device buffers. `edge_accumulation=:auto` selects dense
+atomics when the backend supports them and the dense edge matrix fits; otherwise
+it uses counted sparse keys with host reduction.
 
 ### Optional Metal validation
 
-Metal.jl is intentionally kept out of ArchimedLight's main package environment
-and normal test environment. Local Apple Silicon validation uses a dedicated
-optional environment:
+Metal.jl remains outside the main package dependencies. The dedicated GPU test
+environment requires Metal 1.10.3 or newer, the first registered release with
+the atomic support needed by the RasterGPU kernels:
 
 ```sh
 julia --project=test/gpu -e 'using Pkg; Pkg.instantiate()'
-ARCHIMEDLIGHT_TEST_METAL=1 julia --check-bounds=auto --project=test/gpu test/gpu/runtests.jl
+ARCHIMEDLIGHT_TEST_METAL=required julia --project=test/gpu test/gpu/runtests.jl
 ```
 
-The Metal runner checks `Sys.isapple()` and `Sys.ARCH == :aarch64`, imports
-Metal only after `ARCHIMEDLIGHT_TEST_METAL` is set, constructs the
-KernelAbstractions backend from `Metal.MtlArray(zeros(Float32, 1))`, and runs
-the Raycore smoke validation against CPU references. It verifies first-order
-projected area and PAR against `RasterCPUBackend`, then verifies Raycore
-scattering graph counts and iterative scattering against `RaycastScatteringBackend`
-with Float32 tolerances.
+The RasterGPU atomic kernels use `:monotonic` ordering. They need working
+Metal/KernelAbstractions atomics, but do not require acquire/release semantics.
+Metal.jl reports that capability only when the active toolchain provides MSL 4.1
+or newer; installing Metal.jl 1.10.3 does not by itself upgrade the system
+toolchain. The focused suite verifies atomic availability and compares
+first-order and scattering results against the CPU raster reference.
 
-Use `ARCHIMEDLIGHT_TEST_METAL=required` instead of `1` when a missing Metal
-package, unsupported machine, or unavailable GPU should fail the run instead of
-recording a skipped test. The `--check-bounds=auto` flag follows Raycore's GPU
-test guidance: Julia keeps normal bounds checks on CPU code while allowing GPU
-kernels to compile in their expected mode.
-
-For a manual smoke script run from the same optional environment:
-
-```sh
-ARCHIMEDLIGHT_DEVICE_BACKEND=metal julia --check-bounds=auto --project=test/gpu scripts/raycore_device_smoke.jl
-```
-
-Standard GitHub-hosted macOS runners are not a reliable target for Metal GPU
-validation. Future CI should use paid Apple Silicon xlarge runners, for example
-the `macos-*-xlarge` runner family, and set
-`ARCHIMEDLIGHT_TEST_METAL=required` so hardware or driver failures are visible.
+Use `ARCHIMEDLIGHT_TEST_METAL=1` to skip gracefully when Metal is unavailable,
+or `required` to make missing hardware, drivers, or packages fail the run.
 
 !!! warning
-    The Raycore backend is still experimental. The current implementation uses
-    Raycore for scene traversal and preserves ArchimedLight semantics for
-    toricity, virtual sensors, transparency, emitters, scattering topology,
-    response caching, and extra wavebands. Scattering topology can emit packed
-    edge keys for sparse host reduction or use a dense atomic edge-count matrix
-    on the selected backend when it fits. Iterative scattering propagation has a
-    dense KernelAbstractions path and uses atomic edge-transfer accumulation
-    when the selected backend supports atomics. Non-CPU backends default to
-    `Float32` for iterative scattering arrays because some GPU backends have
-    limited `Float64` support. Sparse edge-key reduction, dense matrix
-    materialization, and the per-iteration convergence sum still copy data back
-    to the host, so GPU runs should be treated as a development target rather
-    than a production performance path.
+    `RasterGPUBackend` is experimental. Validate new devices and large scenes
+    against `RasterCPUBackend`, and size `max_hits_per_pixel`, `tile_size`, and
+    `tile_face_capacity` for the target geometry.
 
 ## Advanced Light Pipeline
 

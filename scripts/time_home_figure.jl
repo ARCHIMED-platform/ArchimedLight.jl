@@ -7,11 +7,21 @@ Pkg.activate(joinpath(REPO_ROOT, "benchmark"))
 
 using ArchimedLight
 using KernelAbstractions
-using Metal
-metal_backend = KernelAbstractions.get_backend(MtlArray(zeros(Float32, 1)))
 
 backend = :normal_cpu
 # backend = :rasterizer_gpu
+metal_backend = if backend == :rasterizer_gpu
+    Base.find_package("Metal") === nothing && error(
+        "Metal is not available. Run this script from an environment that provides Metal 1.10.3 or newer.",
+    )
+    metal = Base.require(Main, :Metal)
+    array_type = getproperty(metal, :MtlArray)
+    device_array = Base.invokelatest(array_type, zeros(Float32, 1))
+    Base.invokelatest(KernelAbstractions.get_backend, device_array)
+else
+    nothing
+end
+
 if backend == :normal_cpu
     interception = ArchimedLight.RasterCPUBackend()
     scattering = ArchimedLight.RaycastScatteringBackend()
