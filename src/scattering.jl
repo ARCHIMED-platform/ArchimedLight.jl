@@ -1566,11 +1566,6 @@ KernelAbstractions.@kernel function _rastergpu_scattering_dense_counts_kernel!(
     end
 end
 
-KernelAbstractions.@kernel function _rastergpu_clear_dense_counts_kernel!(dense_counts)
-    pair_idx = @index(Global, Linear)
-    @inbounds dense_counts[pair_idx] = 0
-end
-
 function _rastergpu_scattering_edge_keys_from_device_stacks(data::RasterGPUSceneData)
     n_pixels = length(data.overflow_host)
     max_hits = data.max_hits_per_pixel
