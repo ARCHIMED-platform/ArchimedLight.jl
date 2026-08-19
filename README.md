@@ -31,18 +31,16 @@ using Pkg
 Pkg.add(url="https://github.com/VEZY/ArchimedLight.jl", rev="gpu")
 ```
 
-If you are on MacOS and want to use the Metal backend, you also need to install `Atomix` and `Metal` branches that contain bug fixes (atomic-ordering changes):
+Metal remains an optional dependency. On Apple Silicon, install Metal 1.10.3 or
+newer in the environment that runs the GPU backend. The active Metal toolchain
+must also expose atomic support through KernelAbstractions (MSL 4.1 or newer):
 
 ```julia
 using Pkg
 
-Pkg.add(url="https://github.com/VEZY/Atomix.jl", rev="codex/metal-atomic-ordering")
-Pkg.add(url="https://github.com/VEZY/Metal.jl", rev="codex/atomic-order-refit")
+Pkg.add("Metal")
 Pkg.add(url="https://github.com/VEZY/ArchimedLight.jl", rev="gpu")
 ```
-
-If ArchimedLight is already installed in the active environment, run the `Atomix` command
-above and then `Pkg.resolve()` so Julia records the compatible Atomix source in the manifest.
 
 ## Core API
 ```julia

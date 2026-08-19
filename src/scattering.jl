@@ -662,630 +662,8 @@ end
     return nothing
 end
 
-KernelAbstractions.@kernel function _raycore_scattering_edge_keys_kernel!(
-    edge_keys,
-    edge_key_counts,
-    counts,
-    nodes,
-    virtual_node_mask,
-    pavement_node_mask,
-    node_ids,
-    max_hits::Int,
-)
-    pixel_idx = @index(Global, Linear)
-    @inbounds begin
-        max_edges = 2 * (max_hits - 1)
-        out_base = (pixel_idx - 1) * max_edges
-        out_slot = 0
-        n_hits = Int(counts[pixel_idx])
-        if n_hits > 1
-            stack_base = (pixel_idx - 1) * max_hits
-            nearest_above_idx = 0
-            for h in 1:(n_hits - 1)
-                current_idx = Int(nodes[stack_base+h])
-                if !virtual_node_mask[current_idx]
-                    nearest_above_idx = current_idx
-                end
-
-                from_below_idx = 0
-                for k in (h + 1):n_hits
-                    candidate_idx = Int(nodes[stack_base+k])
-                    if !virtual_node_mask[candidate_idx]
-                        from_below_idx = candidate_idx
-                        break
-                    end
-                end
-
-                if from_below_idx != 0 && !(pavement_node_mask[current_idx] && pavement_node_mask[from_below_idx])
-                    out_slot += 1
-                    to_node = node_ids[current_idx]
-                    from_node = node_ids[from_below_idx]
-                    edge_keys[out_base+out_slot] = _pack_scattering_edge(to_node, from_node)
-                end
-
-                next_idx = Int(nodes[stack_base+h+1])
-                if nearest_above_idx != 0 && !(pavement_node_mask[next_idx] && pavement_node_mask[nearest_above_idx])
-                    out_slot += 1
-                    to_node = node_ids[next_idx]
-                    from_node = node_ids[nearest_above_idx]
-                    edge_keys[out_base+out_slot] = _pack_scattering_edge(to_node, from_node)
-                end
-            end
-        end
-        edge_key_counts[pixel_idx] = Int32(out_slot)
-    end
-end
-
-function _raycore_scattering_edge_keys_from_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-)
-    n_pixels = length(traced.counts)
-    max_hits = traced.max_hits
-    max_edges = 2 * (max_hits - 1)
-    (n_pixels == 0 || max_edges <= 0) && return (keys=UInt64[], counts=Int32[], max_edges=max_edges)
-
-    backend = data.backend
-    counts_dev = KernelAbstractions.allocate(backend, Int32, n_pixels)
-    nodes_dev = KernelAbstractions.allocate(backend, UInt32, length(traced.nodes))
-    edge_keys_dev = KernelAbstractions.allocate(backend, UInt64, n_pixels * max_edges)
-    edge_key_counts_dev = KernelAbstractions.allocate(backend, Int32, n_pixels)
-
-    KernelAbstractions.copyto!(backend, counts_dev, traced.counts)
-    KernelAbstractions.copyto!(backend, nodes_dev, traced.nodes)
-
-    kernel = _raycore_scattering_edge_keys_kernel!(backend, data.workgroupsize)
-    kernel(
-        edge_keys_dev,
-        edge_key_counts_dev,
-        counts_dev,
-        nodes_dev,
-        data.virtual_node_mask_dev,
-        data.pavement_node_mask_dev,
-        data.node_ids_dev,
-        max_hits;
-        ndrange=n_pixels,
-    )
-    KernelAbstractions.synchronize(backend)
-
-    return (
-        keys=Array(edge_keys_dev),
-        counts=Array(edge_key_counts_dev),
-        max_edges=max_edges,
-    )
-end
-
-function _raycore_scattering_edge_keys_from_device_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-)
-    n_pixels = length(traced.overflow)
-    max_hits = traced.max_hits
-    max_edges = 2 * (max_hits - 1)
-    (n_pixels == 0 || max_edges <= 0) && return (keys=UInt64[], counts=Int32[], max_edges=max_edges)
-
-    backend = data.backend
-    edge_keys_dev = data.edge_keys_dev
-    edge_key_counts_dev = data.edge_key_counts_dev
-    if edge_keys_dev === nothing || edge_key_counts_dev === nothing
-        error(
-            "Raycore sparse edge-key scratch was not allocated. " *
-            "Use edge_accumulation=:sparse_host_reduce or an :auto configuration " *
-            "that does not select dense atomics for this scene.",
-        )
-    end
-
-    kernel = _raycore_scattering_edge_keys_kernel!(backend, data.workgroupsize)
-    kernel(
-        edge_keys_dev,
-        edge_key_counts_dev,
-        traced.counts_dev,
-        traced.nodes_dev,
-        data.virtual_node_mask_dev,
-        data.pavement_node_mask_dev,
-        data.node_ids_dev,
-        max_hits;
-        ndrange=n_pixels,
-    )
-    KernelAbstractions.synchronize(backend)
-    edge_key_len = n_pixels * max_edges
-    length(data.edge_keys_host) < edge_key_len && resize!(data.edge_keys_host, edge_key_len)
-    length(data.edge_key_counts_host) < n_pixels && resize!(data.edge_key_counts_host, n_pixels)
-    copyto!(data.edge_keys_host, edge_keys_dev)
-    copyto!(data.edge_key_counts_host, edge_key_counts_dev)
-
-    return (
-        keys=data.edge_keys_host,
-        counts=data.edge_key_counts_host,
-        max_edges=max_edges,
-    )
-end
-
-function _raycore_dense_edge_matrix_fits(data::RaycoreSceneData)
-    n_nodes = length(data.prepared.geometry.node_ids)
-    Int128(n_nodes) * Int128(n_nodes) <= typemax(Int) || return false
-    bytes = Int128(n_nodes) * Int128(n_nodes) * Int128(sizeof(Int32))
-    return bytes <= data.dense_edge_limit_bytes
-end
-
-function _raycore_dense_edge_accumulation_supported(data::RaycoreSceneData)
-    return _raycore_dense_edge_matrix_fits(data) && KernelAbstractions.supports_atomics(data.backend)
-end
-
-function _raycore_auto_dense_edge_accumulation_supported(data::RaycoreSceneData)
-    data.chunked_tlas && return false
-    return _raycore_dense_edge_accumulation_supported(data)
-end
-
-function _raycore_use_device_edge_accumulation_in_flat_path(data::RaycoreSceneData)
-    data.edge_accumulation == :dense_atomic &&
-        return KernelAbstractions.supports_atomics(data.backend) && _raycore_dense_edge_matrix_fits(data)
-    data.edge_accumulation == :auto && return _raycore_auto_dense_edge_accumulation_supported(data)
-    return false
-end
-
-function _raycore_accumulate_device_scattering_edges!(
-    edge_counts::Dict{UInt64,Int},
-    data::RaycoreSceneData,
-    traced,
-)
-    dense_supported = _raycore_auto_dense_edge_accumulation_supported(data)
-    if data.edge_accumulation == :dense_atomic && !KernelAbstractions.supports_atomics(data.backend)
-        error(
-            "Raycore edge_accumulation=:dense_atomic requires a KernelAbstractions backend " *
-            "with atomic support. Use :auto or :sparse_host_reduce for this backend.",
-        )
-    end
-    if data.edge_accumulation == :dense_atomic && !_raycore_dense_edge_matrix_fits(data)
-        n_nodes = length(data.prepared.geometry.node_ids)
-        error(
-            "Raycore edge_accumulation=:dense_atomic requires a dense $n_nodes x $n_nodes edge matrix " *
-            "larger than dense_edge_limit_bytes=$(data.dense_edge_limit_bytes). " *
-            "Increase RaycoreBackendConfig(dense_edge_limit_bytes=...) or use :sparse_host_reduce.",
-        )
-    end
-
-    if data.edge_accumulation == :dense_atomic || (data.edge_accumulation == :auto && dense_supported)
-        dense_counts = _raycore_scattering_dense_counts_from_device_traced_stacks(data, traced)
-        _merge_dense_edge_counts!(edge_counts, dense_counts, data.prepared.geometry.node_ids)
-    else
-        edge_keys = _raycore_scattering_edge_keys_from_device_traced_stacks(data, traced)
-        _merge_counted_packed_edge_keys!(
-            edge_counts,
-            edge_keys.keys,
-            edge_keys.counts,
-            edge_keys.max_edges,
-            data.edge_compact_host,
-        )
-    end
-    return edge_counts
-end
-
-KernelAbstractions.@kernel function _raycore_scattering_dense_counts_kernel!(
-    dense_counts,
-    counts,
-    nodes,
-    virtual_node_mask,
-    pavement_node_mask,
-    max_hits::Int,
-    n_nodes::Int,
-)
-    pixel_idx = @index(Global, Linear)
-    @inbounds begin
-        n_hits = Int(counts[pixel_idx])
-        if n_hits > 1
-            stack_base = (pixel_idx - 1) * max_hits
-            nearest_above_idx = 0
-            for h in 1:(n_hits - 1)
-                current_idx = Int(nodes[stack_base+h])
-                if !virtual_node_mask[current_idx]
-                    nearest_above_idx = current_idx
-                end
-
-                from_below_idx = 0
-                for k in (h + 1):n_hits
-                    candidate_idx = Int(nodes[stack_base+k])
-                    if !virtual_node_mask[candidate_idx]
-                        from_below_idx = candidate_idx
-                        break
-                    end
-                end
-
-                if from_below_idx != 0 &&
-                   !(pavement_node_mask[current_idx] && pavement_node_mask[from_below_idx])
-                    dense_idx = (current_idx - 1) * n_nodes + from_below_idx
-                    @atomic :monotonic dense_counts[dense_idx] += 1
-                end
-
-                next_idx = Int(nodes[stack_base+h+1])
-                if nearest_above_idx != 0 &&
-                   !(pavement_node_mask[next_idx] && pavement_node_mask[nearest_above_idx])
-                    dense_idx = (next_idx - 1) * n_nodes + nearest_above_idx
-                    @atomic :monotonic dense_counts[dense_idx] += 1
-                end
-            end
-        end
-    end
-end
-
-KernelAbstractions.@kernel function _raycore_clear_dense_counts_kernel!(dense_counts)
-    pair_idx = @index(Global, Linear)
-    @inbounds dense_counts[pair_idx] = 0
-end
-
-KernelAbstractions.@kernel function _raycore_stack_node_counts_kernel!(
-    node_counts,
-    counts,
-    nodes,
-    max_hits::Int,
-    n_nodes::Int,
-)
-    pixel_idx = @index(Global, Linear)
-    @inbounds begin
-        n_hits = Int(counts[pixel_idx])
-        stack_base = (pixel_idx - 1) * max_hits
-        for h in 1:n_hits
-            node_idx = Int(nodes[stack_base+h])
-            1 <= node_idx <= n_nodes || continue
-            @atomic :monotonic node_counts[node_idx] += Int32(1)
-        end
-    end
-end
-
-KernelAbstractions.@kernel function _raycore_clear_node_counts_kernel!(node_counts)
-    node_idx = @index(Global, Linear)
-    @inbounds node_counts[node_idx] = Int32(0)
-end
-
-KernelAbstractions.@kernel function _raycore_stack_sector_area_kernel!(
-    sector_area,
-    counts,
-    nodes,
-    virtual_node_mask,
-    node_transparency,
-    pixel_area::Float32,
-    max_hits::Int,
-    n_nodes::Int,
-)
-    pixel_idx = @index(Global, Linear)
-    @inbounds begin
-        n_hits = Int(counts[pixel_idx])
-        stack_base = (pixel_idx - 1) * max_hits
-        for h in 1:n_hits
-            node_idx = Int(nodes[stack_base+h])
-            1 <= node_idx <= n_nodes || continue
-            if virtual_node_mask[node_idx]
-                @atomic :monotonic sector_area[node_idx] += pixel_area
-                continue
-            end
-
-            transparency = node_transparency[node_idx]
-            intercepted_fraction = 1.0f0 - transparency
-            if intercepted_fraction > 0.0f0
-                @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction
-            end
-            transparency > 0.0f0 || break
-        end
-    end
-end
-
-KernelAbstractions.@kernel function _raycore_clear_sector_area_kernel!(sector_area)
-    node_idx = @index(Global, Linear)
-    @inbounds sector_area[node_idx] = 0.0f0
-end
-
-KernelAbstractions.@kernel function _raycore_clear_node_counts_and_sector_area_kernel!(
-    node_counts,
-    sector_area,
-)
-    node_idx = @index(Global, Linear)
-    @inbounds begin
-        node_counts[node_idx] = Int32(0)
-        sector_area[node_idx] = 0.0f0
-    end
-end
-
-KernelAbstractions.@kernel function _raycore_stack_node_counts_and_sector_area_kernel!(
-    node_counts,
-    sector_area,
-    counts,
-    nodes,
-    virtual_node_mask,
-    node_transparency,
-    pixel_area::Float32,
-    max_hits::Int,
-    n_nodes::Int,
-)
-    pixel_idx = @index(Global, Linear)
-    @inbounds begin
-        n_hits = Int(counts[pixel_idx])
-        stack_base = (pixel_idx - 1) * max_hits
-        area_active = true
-        for h in 1:n_hits
-            node_idx = Int(nodes[stack_base+h])
-            1 <= node_idx <= n_nodes || continue
-            @atomic :monotonic node_counts[node_idx] += Int32(1)
-
-            area_active || continue
-            if virtual_node_mask[node_idx]
-                @atomic :monotonic sector_area[node_idx] += pixel_area
-                continue
-            end
-
-            transparency = node_transparency[node_idx]
-            intercepted_fraction = 1.0f0 - transparency
-            if intercepted_fraction > 0.0f0
-                @atomic :monotonic sector_area[node_idx] += pixel_area * intercepted_fraction
-            end
-            area_active = transparency > 0.0f0
-        end
-    end
-end
-
-function _raycore_use_device_node_count_reduction(data::RaycoreSceneData)
-    data.node_counts_dev === nothing && return false
-    return KernelAbstractions.supports_atomics(data.backend)
-end
-
-function _raycore_copy_node_counts_host!(data::RaycoreSceneData, n_nodes::Int)
-    length(data.node_counts_host) == n_nodes || resize!(data.node_counts_host, n_nodes)
-    copyto!(data.node_counts_host, data.node_counts_dev)
-    return data.node_counts_host
-end
-
-function _raycore_copy_sector_area_host!(data::RaycoreSceneData, n_nodes::Int)
-    length(data.sector_area_host) == n_nodes || resize!(data.sector_area_host, n_nodes)
-    copyto!(data.sector_area_host, data.sector_area_dev)
-    return data.sector_area_host
-end
-
-function _raycore_stack_node_counts_from_device_traced_stacks(data::RaycoreSceneData, traced)
-    _raycore_use_device_node_count_reduction(data) || return nothing
-    n_nodes = length(data.prepared.geometry.node_ids)
-    n_nodes == 0 && (empty!(data.node_counts_host); return data.node_counts_host)
-
-    backend = data.backend
-    node_counts_dev = data.node_counts_dev
-    clear_kernel = _raycore_clear_node_counts_kernel!(backend, data.workgroupsize)
-    clear_kernel(node_counts_dev; ndrange=n_nodes)
-    KernelAbstractions.synchronize(backend)
-
-    n_pixels = length(traced.overflow)
-    kernel = _raycore_stack_node_counts_kernel!(backend, data.workgroupsize)
-    kernel(
-        node_counts_dev,
-        traced.counts_dev,
-        traced.nodes_dev,
-        traced.max_hits,
-        n_nodes;
-        ndrange=n_pixels,
-    )
-    KernelAbstractions.synchronize(backend)
-    return _raycore_copy_node_counts_host!(data, n_nodes)
-end
-
-function _raycore_use_device_sector_area_reduction(data::RaycoreSceneData)
-    data.sector_area_dev === nothing && return false
-    return KernelAbstractions.supports_atomics(data.backend)
-end
-
-function _raycore_sector_area_from_device_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-    pixel_area::Real,
-)
-    _raycore_use_device_sector_area_reduction(data) || return nothing
-    n_nodes = length(data.prepared.geometry.node_ids)
-    n_nodes == 0 && (empty!(data.sector_area_host); return data.sector_area_host)
-
-    backend = data.backend
-    sector_area_dev = data.sector_area_dev
-    try
-        clear_kernel = _raycore_clear_sector_area_kernel!(backend, data.workgroupsize)
-        clear_kernel(sector_area_dev; ndrange=n_nodes)
-        KernelAbstractions.synchronize(backend)
-
-        n_pixels = length(traced.overflow)
-        kernel = _raycore_stack_sector_area_kernel!(backend, data.workgroupsize)
-        kernel(
-            sector_area_dev,
-            traced.counts_dev,
-            traced.nodes_dev,
-            data.virtual_node_mask_dev,
-            data.node_transparency_dev,
-            Float32(pixel_area),
-            traced.max_hits,
-            n_nodes;
-            ndrange=n_pixels,
-        )
-        KernelAbstractions.synchronize(backend)
-        return _raycore_copy_sector_area_host!(data, n_nodes)
-    catch err
-        @debug "Raycore device projected-area reduction failed; falling back to host stack walk" exception = (
-            err,
-            catch_backtrace(),
-        )
-        return nothing
-    end
-end
-
-function _raycore_use_device_node_count_and_sector_area_reduction(data::RaycoreSceneData)
-    data.node_counts_dev === nothing && return false
-    data.sector_area_dev === nothing && return false
-    return KernelAbstractions.supports_atomics(data.backend)
-end
-
-function _raycore_node_counts_and_sector_area_from_device_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-    pixel_area::Real,
-)
-    _raycore_use_device_node_count_and_sector_area_reduction(data) || return nothing
-    n_nodes = length(data.prepared.geometry.node_ids)
-    n_nodes == 0 && begin
-        empty!(data.node_counts_host)
-        empty!(data.sector_area_host)
-        return (node_counts=data.node_counts_host, sector_area=data.sector_area_host)
-    end
-
-    backend = data.backend
-    node_counts_dev = data.node_counts_dev
-    sector_area_dev = data.sector_area_dev
-    try
-        clear_kernel = _raycore_clear_node_counts_and_sector_area_kernel!(backend, data.workgroupsize)
-        clear_kernel(node_counts_dev, sector_area_dev; ndrange=n_nodes)
-        KernelAbstractions.synchronize(backend)
-
-        n_pixels = length(traced.overflow)
-        kernel = _raycore_stack_node_counts_and_sector_area_kernel!(backend, data.workgroupsize)
-        kernel(
-            node_counts_dev,
-            sector_area_dev,
-            traced.counts_dev,
-            traced.nodes_dev,
-            data.virtual_node_mask_dev,
-            data.node_transparency_dev,
-            Float32(pixel_area),
-            traced.max_hits,
-            n_nodes;
-            ndrange=n_pixels,
-        )
-        KernelAbstractions.synchronize(backend)
-        return (
-            node_counts=_raycore_copy_node_counts_host!(data, n_nodes),
-            sector_area=_raycore_copy_sector_area_host!(data, n_nodes),
-        )
-    catch err
-        @debug "Raycore fused device count/projected-area reduction failed; falling back to separate reducers or host stack walk" exception = (
-            err,
-            catch_backtrace(),
-        )
-        return nothing
-    end
-end
-
-function _raycore_device_reduction_capabilities(data::RaycoreSceneData)
-    supports_atomics = KernelAbstractions.supports_atomics(data.backend)
-    return (
-        supports_atomics=supports_atomics,
-        dense_edge_accumulation=_raycore_use_device_edge_accumulation_in_flat_path(data),
-        node_count_reduction=_raycore_use_device_node_count_reduction(data),
-        sector_area_reduction=_raycore_use_device_sector_area_reduction(data),
-        fused_count_area_reduction=_raycore_use_device_node_count_and_sector_area_reduction(data),
-    )
-end
-
 @inline _profile_flag_at(flag::Bool, ::Int) = flag
 @inline _profile_flag_at(flag, i::Int) = Bool(flag[i])
-
-function _raycore_stack_profile(
-    data::Union{Nothing,RaycoreSceneData},
-    directions,
-    options::LightOptions;
-    accumulate_edges=true,
-    needs_sector_area=true,
-)
-    data === nothing && return nothing
-
-    pixel_area = data.prepared.geometry.plotbox.pixel_area
-    trace_ms = 0.0
-    count_area_ms = 0.0
-    edge_ms = 0.0
-    copy_ms = 0.0
-    overflow = false
-    traced_dirs = 0
-    reduced_dirs = 0
-    edge_dirs = 0
-    copied_dirs = 0
-    copy_required_dirs = 0
-    total_hits = 0
-    total_pixels = 0
-    occupied_pixels = 0
-    max_seen = 0
-
-    for (dir_idx, direction) in pairs(directions)
-        traced_timed = @timed _raycore_trace_direction_stack_nodes_device(data, direction, options)
-        traced = traced_timed.value
-        trace_ms += 1000 * traced_timed.time
-        traced_dirs += 1
-        overflow |= any(traced.overflow)
-        dir_accumulate_edges = _profile_flag_at(accumulate_edges, dir_idx)
-        dir_needs_sector_area = _profile_flag_at(needs_sector_area, dir_idx)
-
-        count_area_timed = @timed begin
-            fused = _raycore_node_counts_and_sector_area_from_device_traced_stacks(data, traced, pixel_area)
-            if fused === nothing
-                counts = _raycore_stack_node_counts_from_device_traced_stacks(data, traced)
-                area = _raycore_sector_area_from_device_traced_stacks(data, traced, pixel_area)
-                counts === nothing && area === nothing ? nothing : (node_counts=counts, sector_area=area)
-            else
-                fused
-            end
-        end
-        count_area_ms += 1000 * count_area_timed.time
-        count_area_result = count_area_timed.value
-        count_area_result !== nothing && (reduced_dirs += 1)
-        device_node_counts = count_area_result === nothing ? nothing : count_area_result.node_counts
-        device_sector_area = count_area_result === nothing ? nothing : count_area_result.sector_area
-
-        device_edge_accumulation = dir_accumulate_edges && _raycore_use_device_edge_accumulation_in_flat_path(data)
-        if device_edge_accumulation
-            edge_timed = @timed _raycore_scattering_dense_counts_from_device_traced_stacks(data, traced)
-            edge_ms += 1000 * edge_timed.time
-            edge_dirs += 1
-        end
-
-        _raycore_flat_stack_host_copy_required(
-            dir_accumulate_edges,
-            device_edge_accumulation,
-            device_node_counts,
-            device_sector_area,
-            dir_needs_sector_area,
-        ) && (copy_required_dirs += 1)
-
-        copy_timed = @timed _raycore_copy_direction_stack_nodes_host!(data, traced)
-        host_traced = copy_timed.value
-        copy_ms += 1000 * copy_timed.time
-        copied_dirs += 1
-        @inbounds for count in host_traced.counts
-            c = Int(count)
-            total_hits += c
-            total_pixels += 1
-            occupied_pixels += c > 0
-            max_seen = max(max_seen, c)
-        end
-    end
-
-    hit_util = total_pixels == 0 ? 0.0 : 100 * total_hits / (total_pixels * data.max_hits_per_pixel)
-    occupied = total_pixels == 0 ? 0.0 : 100 * occupied_pixels / total_pixels
-    hits_per_dir = traced_dirs == 0 ? 0.0 : total_hits / traced_dirs
-    trace_ms_per_dir = traced_dirs == 0 ? 0.0 : trace_ms / traced_dirs
-    copy_ms_per_dir = copied_dirs == 0 ? 0.0 : copy_ms / copied_dirs
-
-    return (
-        trace_ms=trace_ms,
-        count_area_ms=count_area_ms,
-        edge_ms=edge_ms,
-        copy_ms=copy_ms,
-        total_ms=trace_ms + count_area_ms + edge_ms + copy_ms,
-        trace_ms_per_dir=trace_ms_per_dir,
-        copy_ms_per_dir=copy_ms_per_dir,
-        traced_dirs=traced_dirs,
-        reduced_dirs=reduced_dirs,
-        edge_dirs=edge_dirs,
-        copied_dirs=copied_dirs,
-        copy_required_dirs=copy_required_dirs,
-        copy_skippable_dirs=traced_dirs - copy_required_dirs,
-        total_hits=total_hits,
-        total_pixels=total_pixels,
-        occupied_pixels=occupied_pixels,
-        hit_util=hit_util,
-        occupied=occupied,
-        max_seen=max_seen,
-        hits_per_dir=hits_per_dir,
-        overflow=overflow,
-    )
-end
 
 function _merge_dense_edge_counts!(
     edge_counts::Dict{UInt64,Int},
@@ -1302,82 +680,6 @@ function _merge_dense_edge_counts!(
         edge_counts[edge] = get(edge_counts, edge, 0) + count
     end
     return edge_counts
-end
-
-function _raycore_scattering_dense_counts_from_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-)
-    n_nodes = length(data.prepared.geometry.node_ids)
-    n_pixels = length(traced.counts)
-    n_pairs = n_nodes * n_nodes
-    (n_pixels == 0 || n_nodes == 0) && return Int[]
-
-    backend = data.backend
-    counts_dev = KernelAbstractions.allocate(backend, Int32, n_pixels)
-    nodes_dev = KernelAbstractions.allocate(backend, UInt32, length(traced.nodes))
-    dense_counts_dev = KernelAbstractions.allocate(backend, Int, n_pairs)
-
-    KernelAbstractions.copyto!(backend, counts_dev, traced.counts)
-    KernelAbstractions.copyto!(backend, nodes_dev, traced.nodes)
-    KernelAbstractions.copyto!(backend, dense_counts_dev, zeros(Int, n_pairs))
-
-    kernel = _raycore_scattering_dense_counts_kernel!(backend, data.workgroupsize)
-    kernel(
-        dense_counts_dev,
-        counts_dev,
-        nodes_dev,
-        data.virtual_node_mask_dev,
-        data.pavement_node_mask_dev,
-        traced.max_hits,
-        n_nodes;
-        ndrange=n_pixels,
-    )
-    KernelAbstractions.synchronize(backend)
-
-    return Array(dense_counts_dev)
-end
-
-function _raycore_scattering_dense_counts_from_device_traced_stacks(
-    data::RaycoreSceneData,
-    traced,
-)
-    n_nodes = length(data.prepared.geometry.node_ids)
-    n_pixels = length(traced.overflow)
-    n_pairs = n_nodes * n_nodes
-    if n_pixels == 0 || n_nodes == 0
-        empty!(data.dense_edge_counts_host)
-        return data.dense_edge_counts_host
-    end
-
-    backend = data.backend
-    dense_counts_dev = data.dense_edge_counts_dev
-    dense_counts_dev === nothing && error(
-        "Raycore dense edge-count scratch was not allocated. " *
-        "Use edge_accumulation=:auto or :dense_atomic only when the dense edge matrix fits " *
-        "and the backend supports atomics.",
-    )
-
-    clear_kernel = _raycore_clear_dense_counts_kernel!(backend, data.workgroupsize)
-    clear_kernel(dense_counts_dev; ndrange=n_pairs)
-    KernelAbstractions.synchronize(backend)
-
-    kernel = _raycore_scattering_dense_counts_kernel!(backend, data.workgroupsize)
-    kernel(
-        dense_counts_dev,
-        traced.counts_dev,
-        traced.nodes_dev,
-        data.virtual_node_mask_dev,
-        data.pavement_node_mask_dev,
-        traced.max_hits,
-        n_nodes;
-        ndrange=n_pixels,
-    )
-    KernelAbstractions.synchronize(backend)
-
-    length(data.dense_edge_counts_host) == n_pairs || resize!(data.dense_edge_counts_host, n_pairs)
-    copyto!(data.dense_edge_counts_host, dense_counts_dev)
-    return data.dense_edge_counts_host
 end
 
 function _accumulate_scattering_counts!(
@@ -1580,50 +882,6 @@ function _pair_counts_from_streamed_projections(
                 stacks_sorted=stacks_sorted,
             )
         end
-    end
-
-    return _edge_counts_from_packed(edge_counts), sun_hits
-end
-
-function _pair_counts_from_raycore_projections(
-    data::RaycoreSceneData,
-    turtle::TurtleGrid,
-    options::LightOptions;
-    stacks_sorted::Bool=false,
-)
-    prepared = data.prepared
-    edge_counts = Dict{UInt64,Int}()
-    sun_hits = Dict{Int,Int}()
-    scratch = ScatteringStackScratch()
-    no_virtual_nodes = isempty(prepared.virtual_nodes)
-
-    for sector in turtle.sectors
-        if sector.source != :sun &&
-           !_raycore_use_raster_compat_projection(data, sector.direction, options) &&
-           Float32(sector.direction[3]) > 0.0f0
-            traced = _raycore_trace_direction_stack_nodes_device(data, sector.direction, options)
-            overflow_pixel = findfirst(traced.overflow)
-            overflow_pixel === nothing || error(
-                "Raycore max_hits_per_pixel=$(traced.max_hits) exceeded for pixel $overflow_pixel. " *
-                "Increase RaycoreBackendConfig(max_hits_per_pixel=...).",
-            )
-            _raycore_accumulate_device_scattering_edges!(edge_counts, data, traced)
-            continue
-        end
-
-        projection = _raycore_direction_projection(data, sector.direction, options)
-        _accumulate_scattering_counts!(
-            edge_counts,
-            sun_hits,
-            sector,
-            projection,
-            prepared.virtual_node_mask,
-            prepared.geometry.pavement_node_mask,
-            scratch;
-            node_ids=prepared.geometry.node_ids,
-            stacks_sorted=stacks_sorted,
-            no_virtual_nodes=no_virtual_nodes,
-        )
     end
 
     return _edge_counts_from_packed(edge_counts), sun_hits
@@ -2193,7 +1451,7 @@ end
 function _resolve_scattering_backend(mode::Symbol, backend)
     error(
         "Unsupported scattering backend selector type: $(typeof(backend)). " *
-        "Use `nothing`, `RaycastScatteringBackend()`, `LinksScatteringBackend()`, `RasterGPUScatteringBackend()`, or `RaycoreScatteringBackend()`.",
+        "Use `nothing`, `RaycastScatteringBackend()`, `LinksScatteringBackend()`, or `RasterGPUScatteringBackend()`.",
     )
 end
 
@@ -2203,6 +1461,109 @@ end
 
 function _rastergpu_auto_dense_edge_accumulation_supported(data::RasterGPUSceneData)
     return _rastergpu_dense_edge_counts_fits(data) && KernelAbstractions.supports_atomics(data.backend)
+end
+
+KernelAbstractions.@kernel function _rastergpu_scattering_edge_keys_kernel!(
+    edge_keys,
+    edge_key_counts,
+    counts,
+    nodes,
+    virtual_node_mask,
+    pavement_node_mask,
+    node_ids,
+    max_hits::Int,
+)
+    pixel_idx = @index(Global, Linear)
+    @inbounds begin
+        max_edges = 2 * (max_hits - 1)
+        out_base = (pixel_idx - 1) * max_edges
+        out_slot = 0
+        n_hits = Int(counts[pixel_idx])
+        if n_hits > 1
+            stack_base = (pixel_idx - 1) * max_hits
+            nearest_above_idx = 0
+            for h in 1:(n_hits - 1)
+                current_idx = Int(nodes[stack_base+h])
+                if !virtual_node_mask[current_idx]
+                    nearest_above_idx = current_idx
+                end
+
+                from_below_idx = 0
+                for k in (h + 1):n_hits
+                    candidate_idx = Int(nodes[stack_base+k])
+                    if !virtual_node_mask[candidate_idx]
+                        from_below_idx = candidate_idx
+                        break
+                    end
+                end
+
+                if from_below_idx != 0 &&
+                   !(pavement_node_mask[current_idx] && pavement_node_mask[from_below_idx])
+                    out_slot += 1
+                    to_node = node_ids[current_idx]
+                    from_node = node_ids[from_below_idx]
+                    edge_keys[out_base+out_slot] = _pack_scattering_edge(to_node, from_node)
+                end
+
+                next_idx = Int(nodes[stack_base+h+1])
+                if nearest_above_idx != 0 &&
+                   !(pavement_node_mask[next_idx] && pavement_node_mask[nearest_above_idx])
+                    out_slot += 1
+                    to_node = node_ids[next_idx]
+                    from_node = node_ids[nearest_above_idx]
+                    edge_keys[out_base+out_slot] = _pack_scattering_edge(to_node, from_node)
+                end
+            end
+        end
+        edge_key_counts[pixel_idx] = Int32(out_slot)
+    end
+end
+
+KernelAbstractions.@kernel function _rastergpu_scattering_dense_counts_kernel!(
+    dense_counts,
+    counts,
+    nodes,
+    virtual_node_mask,
+    pavement_node_mask,
+    max_hits::Int,
+    n_nodes::Int,
+)
+    pixel_idx = @index(Global, Linear)
+    @inbounds begin
+        n_hits = Int(counts[pixel_idx])
+        if n_hits > 1
+            stack_base = (pixel_idx - 1) * max_hits
+            nearest_above_idx = 0
+            for h in 1:(n_hits - 1)
+                current_idx = Int(nodes[stack_base+h])
+                if !virtual_node_mask[current_idx]
+                    nearest_above_idx = current_idx
+                end
+
+                from_below_idx = 0
+                for k in (h + 1):n_hits
+                    candidate_idx = Int(nodes[stack_base+k])
+                    if !virtual_node_mask[candidate_idx]
+                        from_below_idx = candidate_idx
+                        break
+                    end
+                end
+
+                if from_below_idx != 0 &&
+                   !(pavement_node_mask[current_idx] && pavement_node_mask[from_below_idx])
+                    dense_idx = (current_idx - 1) * n_nodes + from_below_idx
+                    @atomic :monotonic dense_counts[dense_idx] += 1
+                end
+
+                next_idx = Int(nodes[stack_base+h+1])
+                if nearest_above_idx != 0 &&
+                   !(pavement_node_mask[next_idx] && pavement_node_mask[nearest_above_idx])
+                    dense_idx = (next_idx - 1) * n_nodes + nearest_above_idx
+                    @atomic :monotonic dense_counts[dense_idx] += 1
+                end
+            end
+        end
+    end
 end
 
 function _rastergpu_scattering_edge_keys_from_device_stacks(data::RasterGPUSceneData)
@@ -2220,7 +1581,7 @@ function _rastergpu_scattering_edge_keys_from_device_stacks(data::RasterGPUScene
         )
     end
 
-    kernel = _raycore_scattering_edge_keys_kernel!(data.backend, data.workgroupsize)
+    kernel = _rastergpu_scattering_edge_keys_kernel!(data.backend, data.workgroupsize)
     kernel(
         edge_keys_dev,
         edge_key_counts_dev,
@@ -2291,13 +1652,13 @@ function _rastergpu_accumulate_device_scattering_edges!(
         )
     end
 
-    clear_kernel = _raycore_clear_dense_counts_kernel!(data.backend, data.workgroupsize)
+    clear_kernel = _rastergpu_clear_dense_counts_kernel!(data.backend, data.workgroupsize)
     clear_kernel(data.dense_edge_counts_dev; ndrange=n_pairs)
     KernelAbstractions.synchronize(data.backend)
 
     n_pixels = data.prepared.geometry.plotbox.nx * data.prepared.geometry.plotbox.ny
     if n_pixels > 0
-        edge_kernel = _raycore_scattering_dense_counts_kernel!(data.backend, data.workgroupsize)
+        edge_kernel = _rastergpu_scattering_dense_counts_kernel!(data.backend, data.workgroupsize)
         edge_kernel(
             data.dense_edge_counts_dev,
             data.counts_dev,
@@ -2375,42 +1736,6 @@ end
 function build_scattering_transfer_graph(
     scene::PlantGeom.SceneGeometry,
     models::LightModels,
-    data::RaycoreSceneData,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    backend::RaycoreScatteringBackend,
-)
-    stack_validation = _raycore_stack_trace_validation(data, options)
-    if !stack_validation.ok
-        chunked_data, chunked_validation = _raycore_retry_stack_chunked_scene_data(
-            data.prepared,
-            backend.config,
-            options,
-            stack_validation;
-            toricity=options.toricity,
-            skip_face_chunk_limit=data.chunked_tlas ? _raycore_face_chunk_limit() : nothing,
-        )
-        if chunked_data !== nothing
-            data = chunked_data
-        else
-            stack_validation = chunked_validation
-            _raycore_throw_validation_error(
-                backend.config,
-                :raycore_stack_trace_validation,
-                :scattering_topology,
-                stack_validation,
-            )
-        end
-    end
-    pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)
-    topology = _build_scattering_topology_cache(scene, models, data.prepared, pair_counts, sun_hits)
-    return _transfer_graph_from_topology(topology, first, options)
-end
-
-function build_scattering_transfer_graph(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
     turtle::TurtleGrid,
     first::FirstOrderResult,
     options::LightOptions;
@@ -2454,75 +1779,9 @@ function build_scattering_transfer_graph(
     options::LightOptions,
     backend::RasterGPUScatteringBackend,
 )
-    prepared = _prepare_interception_data(scene, models, options; include_raycore_instancing=false)
+    prepared = _prepare_interception_data(scene, models, options)
     data = _rastergpu_scene_data(prepared, backend.config)
     return build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
-end
-
-function build_scattering_transfer_graph(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    backend::RaycoreScatteringBackend,
-)
-    prepared = _prepare_interception_data(scene, models, options; include_raycore_instancing=true)
-    prechunk_status =
-        _raycore_prechunk_instance_limit_status(prepared, backend.config; toricity=options.toricity)
-    if prechunk_status.exceeded
-        _raycore_throw_validation_error(
-            backend.config,
-            :raycore_prechunk_instance_cap,
-            :scattering_topology,
-            prechunk_status,
-        )
-    end
-    data, data_was_chunked =
-        _raycore_initial_scene_data(prepared, backend.config, options; toricity=options.toricity)
-    validation = _raycore_vertical_trace_validation(data, options)
-    if !validation.ok
-        chunked_data, chunked_validation =
-            data_was_chunked ?
-            (nothing, validation) :
-            _raycore_retry_chunked_scene_data(prepared, backend.config, options, validation; toricity=options.toricity)
-        if chunked_data === nothing
-            validation = chunked_validation
-            _raycore_throw_validation_error(
-                backend.config,
-                :raycore_trace_validation,
-                :scattering_topology,
-                validation,
-            )
-        end
-        data = chunked_data
-        data_was_chunked = true
-    end
-    stack_validation = _raycore_stack_trace_validation(data, options)
-    if !stack_validation.ok
-        chunked_data, chunked_validation = _raycore_retry_stack_chunked_scene_data(
-            prepared,
-            backend.config,
-            options,
-            stack_validation;
-            toricity=options.toricity,
-            skip_face_chunk_limit=data_was_chunked ? _raycore_face_chunk_limit() : nothing,
-        )
-        if chunked_data !== nothing
-            data = chunked_data
-        else
-            stack_validation = chunked_validation
-            _raycore_throw_validation_error(
-                backend.config,
-                :raycore_stack_trace_validation,
-                :scattering_topology,
-                stack_validation,
-            )
-        end
-    end
-    pair_counts, sun_hits = _pair_counts_from_raycore_projections(data, turtle, options; stacks_sorted=false)
-    topology = _build_scattering_topology_cache(scene, models, data.prepared, pair_counts, sun_hits)
-    return _transfer_graph_from_topology(topology, first, options)
 end
 
 function build_scattering_transfer_graph(
@@ -2559,15 +1818,6 @@ function build_scattering_transfer_graph(
     first::FirstOrderResult,
     options::LightOptions,
     ::RasterGPUScatteringBackend,
-)
-    return _transfer_graph_from_topology(topology, first, options)
-end
-
-function build_scattering_transfer_graph(
-    topology::ScatteringTopologyCache,
-    first::FirstOrderResult,
-    options::LightOptions,
-    ::RaycoreScatteringBackend,
 )
     return _transfer_graph_from_topology(topology, first, options)
 end
@@ -3420,14 +2670,6 @@ function _propagate_scattering_two_bands_device(
     )
 end
 
-function _raycore_use_cpu_scattering_propagation(graph::ScatteringTransferGraph, backend::RaycoreScatteringBackend)
-    policy = backend.config.propagation_backend
-    policy == :cpu && return true
-    policy == :device && return false
-    backend.config.backend isa KernelAbstractions.CPU && return true
-    return false
-end
-
 _rastergpu_scattering_eltype(backend::RasterGPUScatteringBackend) =
     backend.config.backend isa KernelAbstractions.CPU ? Float64 : Float32
 
@@ -3476,81 +2718,6 @@ function _compute_scattering_band_dense(
         backend.config.backend,
         backend.config.workgroupsize,
         T,
-    )
-end
-
-function _compute_scattering_band_dense(
-    graph::ScatteringTransferGraph,
-    initial_power::AbstractVector{<:Real},
-    options::LightOptions,
-    backend::RaycoreScatteringBackend;
-    band::AbstractString="PAR",
-    coeff_by_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
-    coeffs = isnothing(coeff_by_node) ? _coeff_by_node(graph, String(band), dflt) : coeff_by_node
-    if _raycore_use_cpu_scattering_propagation(graph, backend)
-        return _compute_scattering_band_dense(
-            graph,
-            initial_power,
-            options,
-            RaycastScatteringBackend();
-            band=band,
-            coeff_by_node=coeffs,
-            default_coeff=dflt,
-        )
-    end
-    return _propagate_scattering_one_band_device_dense_only(
-        initial_power,
-        graph,
-        coeffs,
-        options,
-        dflt,
-        backend.config.backend,
-        backend.config.workgroupsize,
-        backend.config.scattering_eltype,
-    )
-end
-
-function _compute_scattering_band_dense(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
-    backend::RaycoreScatteringBackend;
-    band::AbstractString="PAR",
-    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
-    if _raycore_use_cpu_scattering_propagation(graph, backend)
-        return _compute_scattering_band_dense(
-            graph,
-            first,
-            options,
-            RaycastScatteringBackend();
-            band=band,
-            initial_power_per_node=initial_power_per_node,
-            default_coeff=dflt,
-        )
-    end
-    initial = _dense_initial_scattering_power(
-        graph,
-        first,
-        initial_power_per_node,
-        band,
-        backend.config.scattering_eltype,
-    )
-    coeffs = _coeff_by_node(graph, String(band), dflt)
-    return _propagate_scattering_one_band_device_dense_only(
-        initial,
-        graph,
-        coeffs,
-        options,
-        dflt,
-        backend.config.backend,
-        backend.config.workgroupsize,
-        backend.config.scattering_eltype,
     )
 end
 
@@ -3665,54 +2832,6 @@ function compute_scattering_band(
     graph::ScatteringTransferGraph,
     first::FirstOrderResult,
     options::LightOptions,
-    backend::RaycoreScatteringBackend;
-    band::AbstractString="PAR",
-    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    dflt = isnothing(default_coeff) ? _default_band_coeff(options, String(band)) : default_coeff
-    if _raycore_use_cpu_scattering_propagation(graph, backend)
-        return compute_scattering_band(
-            graph,
-            first,
-            options,
-            RaycastScatteringBackend();
-            band=band,
-            initial_power_per_node=initial_power_per_node,
-            default_coeff=dflt,
-        )
-    end
-    initial = _dense_initial_scattering_power(
-        graph,
-        first,
-        initial_power_per_node,
-        band,
-        backend.config.scattering_eltype,
-    )
-    coeffs = _coeff_by_node(graph, String(band), dflt)
-    added, iterations, converged, dense = _propagate_scattering_one_band_device(
-        initial,
-        graph,
-        coeffs,
-        options,
-        dflt,
-        backend.config.backend,
-        backend.config.workgroupsize,
-        backend.config.scattering_eltype,
-    )
-    return (
-        added_power_per_node=added,
-        iterations=iterations,
-        converged=converged,
-        node_ids=graph.node_ids,
-        dense_added_power_per_node=dense,
-    )
-end
-
-function compute_scattering_band(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
     backend::RasterGPUScatteringBackend;
     band::AbstractString="PAR",
     initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
@@ -3777,30 +2896,6 @@ function compute_scattering_band(
         first,
         options,
         RaycastScatteringBackend();
-        band=band,
-        initial_power_per_node=initial_power_per_node,
-        default_coeff=default_coeff,
-    )
-end
-
-function compute_scattering_band(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    data::RaycoreSceneData,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    backend::RaycoreScatteringBackend;
-    band::AbstractString="PAR",
-    initial_power_per_node::Union{Nothing,Dict{Int,Float64}}=nothing,
-    default_coeff::Union{Nothing,Float64}=nothing,
-)
-    graph = build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
-    return compute_scattering_band(
-        graph,
-        first,
-        options,
-        backend;
         band=band,
         initial_power_per_node=initial_power_per_node,
         default_coeff=default_coeff,
@@ -3944,54 +3039,6 @@ function compute_scattering(
     graph::ScatteringTransferGraph,
     first::FirstOrderResult,
     options::LightOptions,
-    backend::RaycoreScatteringBackend,
-)
-    if _raycore_use_cpu_scattering_propagation(graph, backend)
-        return compute_scattering(graph, first, options, RaycastScatteringBackend())
-    end
-    initial_par = _dense_initial_scattering_power(
-        graph,
-        first,
-        nothing,
-        "PAR",
-        backend.config.scattering_eltype,
-    )
-    initial_nir = _dense_initial_scattering_power(
-        graph,
-        first,
-        nothing,
-        "NIR",
-        backend.config.scattering_eltype,
-    )
-    propagated = _propagate_scattering_two_bands_device(
-        initial_par,
-        graph.coeff_par_by_node,
-        graph.default_coeff_par,
-        initial_nir,
-        graph.coeff_nir_by_node,
-        graph.default_coeff_nir,
-        graph,
-        options,
-        backend.config.backend,
-        backend.config.workgroupsize,
-        backend.config.scattering_eltype,
-    )
-
-    return ScatteringResult(
-        SpectralNodeValues(propagated.added_par, propagated.added_nir),
-        propagated.iterations,
-        propagated.converged,
-        DenseScatteringResult(
-            graph.node_ids,
-            DenseSpectralNodeValues(propagated.dense_par, propagated.dense_nir),
-        ),
-    )
-end
-
-function compute_scattering(
-    graph::ScatteringTransferGraph,
-    first::FirstOrderResult,
-    options::LightOptions,
     backend::RasterGPUScatteringBackend,
 )
     T = _rastergpu_scattering_eltype(backend)
@@ -4020,19 +3067,6 @@ function compute_scattering(
             DenseSpectralNodeValues(propagated.dense_par, propagated.dense_nir),
         ),
     )
-end
-
-function compute_scattering(
-    scene::PlantGeom.SceneGeometry,
-    models::LightModels,
-    data::RaycoreSceneData,
-    turtle::TurtleGrid,
-    first::FirstOrderResult,
-    options::LightOptions,
-    backend::RaycoreScatteringBackend,
-)
-    graph = build_scattering_transfer_graph(scene, models, data, turtle, first, options, backend)
-    return compute_scattering(graph, first, options, backend)
 end
 
 function compute_scattering(

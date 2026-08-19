@@ -151,7 +151,6 @@ function main()
             fixture.models,
             fixture.options;
             include_budget_maps=true,
-            include_raycore_instancing=true,
         )
         metrics = _scene_metrics(prepared)
         cpu_timing = _time_samples(BENCH_SAMPLES) do
@@ -161,17 +160,6 @@ function main()
         push!(rows, _row(fixture.name, "raster_cpu_prepared", cpu_timing, nothing, metrics))
 
         if metal_backend !== nothing
-            ray_backend = ArchimedLight.RaycoreInterceptionBackend(
-                backend=metal_backend,
-                max_hits_per_pixel=BENCH_MAX_HITS,
-                validate=false,
-            )
-            ray_data = ArchimedLight._raycore_scene_data(prepared, ray_backend.config; toricity=fixture.options.toricity)
-            ray_timing = _time_samples(BENCH_SAMPLES) do
-                ArchimedLight.compute_first_order(ray_data, fixture.turtle, fixture.fluxes, fixture.options)
-            end
-            push!(rows, _row(fixture.name, "raycore_metal_prepared", ray_timing, reference, metrics))
-
             raster_backend = ArchimedLight.RasterGPUBackend(
                 backend=metal_backend,
                 max_hits_per_pixel=BENCH_MAX_HITS,
