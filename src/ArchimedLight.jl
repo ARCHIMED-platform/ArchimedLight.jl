@@ -150,5 +150,7 @@ export light_face_values
 export light_vertex_values
 export lightplot
 export lightplot!
+export voxelplot
+export voxelplot!
 
 end

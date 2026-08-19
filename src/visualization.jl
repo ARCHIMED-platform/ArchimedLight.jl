@@ -601,3 +601,31 @@ Keywords:
   `color`, `timestep`, `interpolate`, and `fill_value`.
 """
 function lightplot! end
+
+"""
+    voxelplot(grid, [terrain]; rays=(), quadrature=nothing, boundary=:open, kwargs...)
+
+Makie plotting entry point for a [`VoxelGrid`](@ref) and its optional
+[`AbstractVoxelTerrain`](@ref). Load a Makie backend before calling it.
+
+`rays` is a collection of named tuples with `origin` and `direction` fields.
+Each direction must point downward; the extension traces it with
+[`trace_voxel_ray`](@ref). When `quadrature` is a
+[`VoxelScatteringQuadrature`](@ref), terrain hits also display the corresponding
+Lambertian redistribution directions.
+
+The most useful ArchimedLight-specific attributes are `pad_threshold`,
+`cutaway`, `show_voxels`, `show_lattice`, `show_terrain`, `show_rays`, and
+`show_normals`. `cutaway` accepts `:none` or `:front`; the latter hides the
+lower-y half of the PAD array for inspection without modifying the grid.
+"""
+function voxelplot end
+
+"""
+    voxelplot!(parent, grid, [terrain]; rays=(), quadrature=nothing,
+               boundary=:open, kwargs...)
+
+In-place variant of [`voxelplot`](@ref). `parent` may be a Makie `LScene`,
+`Scene`, or another scene-like plotting parent.
+"""
+function voxelplot! end

@@ -26,6 +26,33 @@ Pages = ["voxel_terrain.md"]
 Depth = 3
 ```
 
+## Explore The Geometry In 3D
+
+The interactive view below shows the geometric contract used by the solver.
+Its deterministic voxel field is arranged as a stylized single tree: a narrow
+lower column makes the trunk visible and an irregular ellipsoidal crown carries
+the foliage PAD. Empty cells remain transparent air. The terrain is an
+independent triangulated surface that may cut through the lower voxel layers.
+Incoming rays stop at their first terrain intersection, and soil-reflected
+energy leaves along existing discrete transport directions weighted by the
+local surface normal.
+
+```@example voxel_terrain_3d
+using ArchimedLight, Bonito, WGLMakie
+Bonito.Page() # hide
+include(joinpath(pkgdir(ArchimedLight), "docs", "voxel_terrain_3d.jl")) # hide
+voxel_terrain_app()
+```
+
+!!! note
+    The tree and terrain are deterministic pedagogical inputs. The brown
+    stem-like column is a visualization scaffold, not a separate woody-stem
+    optical model: ArchimedLight still interprets every non-zero cell as
+    participating PAD. Every ray segment, soil hit, local normal, and reflected
+    direction shown above is computed through `voxelplot`, `trace_voxel_ray`,
+    and `terrain_lambertian_weights`; only the displayed ray energies are
+    illustrative.
+
 ## Construct A Terrain
 
 Soil is opaque in the initial model. Define its band reflectance explicitly;

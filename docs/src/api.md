@@ -399,11 +399,19 @@ lightplot!(axis, step; color=:incident_par_flux, timestep=1, interpolate=false, 
 lightplot!(axis, steps; color=:incident_par_flux, timestep=1, interpolate=false, ...)
 lightplot(scene, models, options, data; color=:incident_par_flux, timestep=1, interpolate=false, ...)
 lightplot!(axis, scene, models, options, data; color=:incident_par_flux, timestep=1, interpolate=false, ...)
+voxelplot(grid, terrain=NoVoxelTerrain(); rays=(), quadrature=nothing, cutaway=:none, ...)
+voxelplot!(axis, grid, terrain=NoVoxelTerrain(); rays=(), quadrature=nothing, cutaway=:none, ...)
 ```
 
 For `lightplot(steps; colorrange=automatic)`, the Makie extension keeps a
 single color range across the whole series so animated timesteps remain
 comparable.
+
+`voxelplot` renders nonzero PAD with Makie's voxel primitive, the terrain mesh,
+and optional ray paths computed by [`trace_voxel_ray`](@ref). Supplying a
+[`VoxelScatteringQuadrature`](@ref) adds the fixed-direction Lambertian
+redistribution at each terrain hit. Use `cutaway=:front` to inspect the
+interior without changing the source [`VoxelGrid`](@ref).
 
 ## Backend Types
 

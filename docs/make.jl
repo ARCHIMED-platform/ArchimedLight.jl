@@ -61,5 +61,8 @@ makedocs(;
     ],
 )
 
+include(joinpath(@__DIR__, "check_inline_voxel_plot.jl"))
+check_inline_voxel_plot(joinpath(@__DIR__, "build"))
+
 deploydocs(; repo="github.com/VEZY/ArchimedLight.jl.git", devbranch="main", push_preview=true)
 # Visit https://VEZY.github.io/ArchimedLight.jl/previews/PR26 to visualize the preview of the PR #26
