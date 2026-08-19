@@ -255,42 +255,6 @@ SUITE["Synthetic"]["stacked plates with scattering"] =
         options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=true, pixel_size=0.01)
     ) evals = 1
 
-SUITE["Raycore"] = BenchmarkGroup()
-SUITE["Raycore"]["first order stacked plates cpu"] =
-    @benchmarkable ArchimedLight.run_light_step(scene, models, meteo_row, options; interception_backend=backend) setup = (
-        scene = SYNTHETIC.scene;
-        models = SYNTHETIC.models;
-        meteo_row = SYNTHETIC.meteo;
-        options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=false, pixel_size=0.01);
-        backend = ArchimedLight.RaycoreInterceptionBackend()
-    ) evals = 1
-
-SUITE["Raycore"]["stacked plates scattering cpu"] =
-    @benchmarkable ArchimedLight.run_light_step(
-        scene,
-        models,
-        meteo_row,
-        options;
-        interception_backend=interception_backend,
-        scattering_backend=scattering_backend,
-    ) setup = (
-        scene = SYNTHETIC.scene;
-        models = SYNTHETIC.models;
-        meteo_row = SYNTHETIC.meteo;
-        options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=true, pixel_size=0.01);
-        interception_backend = ArchimedLight.RaycoreInterceptionBackend();
-        scattering_backend = ArchimedLight.RaycoreScatteringBackend(interception_backend)
-    ) evals = 1
-
-SUITE["Raycore"]["series cached cpu"] =
-    @benchmarkable ArchimedLight.run_light_series(scene, models, meteo, options; interception_backend=backend) setup = (
-        scene = SYNTHETIC.scene;
-        models = SYNTHETIC.models;
-        meteo = ArchimedLight.MeteoTable([SYNTHETIC.meteo, SYNTHETIC.meteo], (; source="benchmark_raycore_synthetic"));
-        options = ArchimedLight.LightOptions(turtle_sectors=46, all_in_turtle=false, scattering=false, pixel_size=0.01, cache_radiation=true);
-        backend = ArchimedLight.RaycoreInterceptionBackend()
-    ) evals = 1
-
 SUITE["Docs"] = BenchmarkGroup()
 SUITE["Docs"]["home figure build"] =
     @benchmarkable simulate_home_figure(PKG_ROOT) evals = 1

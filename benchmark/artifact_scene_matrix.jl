@@ -19,12 +19,11 @@ const DEFAULT_SCENES = [
     "elaeis",
     "elaeis_two_plants",
 ]
-const DEFAULT_BACKENDS = ["normal_cpu", "rastergpu_metal", "raycore_metal"]
+const DEFAULT_BACKENDS = ["normal_cpu", "rastergpu_metal"]
 const DEFAULT_DIRECTIONS = [16, 46, 136]
 const DEFAULT_PIXELS_CM = [0.1, 0.5, 1.0, 10.0]
 const DEFAULT_BOOL = [false, true]
 const DEFAULT_STEPS = [1, 12, 24, 48]
-const DEFAULT_RAYCORE_TORIC_TRAVERSAL = [:replicated, :periodic]
 
 function _split_string_env(name::AbstractString, default::Vector{String})
     raw = get(ENV, name, "")
@@ -68,12 +67,6 @@ function _parse_bool_token(name::AbstractString, raw::AbstractString)
     error("Unsupported boolean value in $name: $(repr(raw)). Use true or false.")
 end
 
-function _split_symbol_env(name::AbstractString, default::Vector{Symbol})
-    raw = get(ENV, name, "")
-    isempty(strip(raw)) && return default
-    return [Symbol(strip(value)) for value in split(raw, ',') if !isempty(strip(value))]
-end
-
 function _int_or_auto_env(name::AbstractString, default)
     raw = get(ENV, name, "")
     isempty(strip(raw)) && return default
@@ -105,8 +98,6 @@ const BENCH_PIXELS_CM = _split_float_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_PIXELS_CM
 const BENCH_SCATTERING = _split_bool_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_SCATTERING", DEFAULT_BOOL)
 const BENCH_CACHE_RADIATION = _split_bool_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_CACHE_RADIATION", DEFAULT_BOOL)
 const BENCH_STEPS = _split_int_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_STEPS", DEFAULT_STEPS)
-const BENCH_RAYCORE_TORIC_TRAVERSAL =
-    _split_symbol_env("ARCHIMEDLIGHT_ARTIFACT_BENCH_RAYCORE_TORIC_TRAVERSAL", DEFAULT_RAYCORE_TORIC_TRAVERSAL)
 const BENCH_SAMPLES = parse(Int, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_SAMPLES", "1"))
 const BENCH_WARMUPS = parse(Int, get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_WARMUPS", "0"))
 const BENCH_OUTPUT = get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_OUTPUT", DEFAULT_OUTPUT)
@@ -155,10 +146,6 @@ const RESULT_COLUMNS = Symbol[
     :median_alloc_mb,
     :resolved_backend,
     :geometry_mode,
-    :raycore_chunked,
-    :raycore_tlas_instances,
-    :raycore_tlas_geometries,
-    :raycore_expanded_face_count,
     :rastergpu_fused_dense,
     :rastergpu_max_hits_per_pixel,
     :rastergpu_tile_size,
@@ -177,25 +164,13 @@ const RESULT_COLUMNS = Symbol[
 
 function _preload_metal_if_requested()
     selected = lowercase.(BENCH_BACKENDS)
-    ("rastergpu_metal" in selected || "raycore_metal" in selected) || return nothing
+    "rastergpu_metal" in selected || return nothing
     Sys.isapple() && Sys.ARCH == :aarch64 || return nothing
     Base.find_package("Metal") === nothing && return nothing
     return Base.require(Main, :Metal)
 end
 
 const BENCH_METAL_MODULE = _preload_metal_if_requested()
-
-function _validate_raycore_toric_traversal_values(values)
-    allowed = Set(DEFAULT_RAYCORE_TORIC_TRAVERSAL)
-    unknown = setdiff(Set(values), allowed)
-    isempty(unknown) || error(
-        "Unsupported ARCHIMEDLIGHT_ARTIFACT_BENCH_RAYCORE_TORIC_TRAVERSAL value(s): " *
-        "$(join(string.(sort!(collect(unknown))), ", ")). Use replicated, periodic, or both.",
-    )
-    return values
-end
-
-_validate_raycore_toric_traversal_values(BENCH_RAYCORE_TORIC_TRAVERSAL)
 
 function _benchmark_scenes_root()
     override = get(ENV, "ARCHIMEDLIGHT_ARTIFACT_BENCH_SCENES_ROOT", "")
@@ -402,41 +377,24 @@ function _backend_cases()
     unknown = setdiff(selected, DEFAULT_BACKENDS)
     isempty(unknown) || error(
         "Unsupported ARCHIMEDLIGHT_ARTIFACT_BENCH_BACKENDS value(s): $(join(sort!(unknown), ", ")). " *
-        "Use normal_cpu, rastergpu_metal, raycore_metal, or all.",
+        "Use normal_cpu, rastergpu_metal, or all.",
     )
 
     if BENCH_DRY_RUN
         cases = NamedTuple[]
         for name in selected
-            if name == "raycore_metal"
-                for toric_traversal in BENCH_RAYCORE_TORIC_TRAVERSAL
-                    push!(
-                        cases,
-                        (
-                            name=name,
-                            available=true,
-                            unavailable_reason="",
-                            interception_backend=nothing,
-                            scattering_backend=nothing,
-                            toric_traversal=toric_traversal,
-                            metal_backend=nothing,
-                        ),
-                    )
-                end
-            else
-                push!(
-                    cases,
-                    (
-                        name=name,
-                        available=true,
-                        unavailable_reason="",
-                        interception_backend=nothing,
-                        scattering_backend=nothing,
-                        toric_traversal=:not_applicable,
-                        metal_backend=nothing,
-                    ),
-                )
-            end
+            push!(
+                cases,
+                (
+                    name=name,
+                    available=true,
+                    unavailable_reason="",
+                    interception_backend=nothing,
+                    scattering_backend=nothing,
+                    toric_traversal=:not_applicable,
+                    metal_backend=nothing,
+                ),
+            )
         end
         return cases
     end
@@ -490,49 +448,6 @@ function _backend_cases()
                         rastergpu_edge_accumulation=config.edge_accumulation,
                     ),
                 )
-            end
-        elseif name == "raycore_metal"
-            if metal === nothing
-                for toric_traversal in BENCH_RAYCORE_TORIC_TRAVERSAL
-                    push!(
-                        cases,
-                        (
-                            name=name,
-                            available=false,
-                            unavailable_reason=metal_reason,
-                            interception_backend=nothing,
-                            scattering_backend=nothing,
-                            toric_traversal=toric_traversal,
-                            metal_backend=nothing,
-                        ),
-                    )
-                end
-            else
-                for toric_traversal in BENCH_RAYCORE_TORIC_TRAVERSAL
-                    ib = ArchimedLight.RaycoreInterceptionBackend(
-                        backend=metal,
-                        max_hits_per_pixel=_setting_value(BENCH_MAX_HITS, 32),
-                        workgroupsize=BENCH_WORKGROUPSIZE,
-                        edge_accumulation=BENCH_EDGE_ACCUMULATION,
-                        toric_traversal=toric_traversal,
-                        validate=BENCH_VALIDATE,
-                    )
-                    push!(
-                        cases,
-                        (
-                            name=name,
-                            available=true,
-                            unavailable_reason="",
-                            interception_backend=ib,
-                            scattering_backend=ArchimedLight.RaycoreScatteringBackend(
-                                ib;
-                                edge_accumulation=BENCH_EDGE_ACCUMULATION,
-                            ),
-                            toric_traversal=toric_traversal,
-                            metal_backend=metal,
-                        ),
-                    )
-                end
             end
         end
     end
@@ -690,24 +605,8 @@ function _cache_info(sim)
     cache === nothing && return (
         resolved_backend="",
         geometry_mode=:unprepared,
-        raycore_chunked=false,
-        raycore_tlas_instances=0,
-        raycore_tlas_geometries=0,
-        raycore_expanded_face_count=0,
         rastergpu_fused_dense=missing,
     )
-    if cache.raycore_data !== nothing
-        shape = ArchimedLight._raycore_scene_shape_summary(cache.raycore_data)
-        return (
-            resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
-            geometry_mode=shape.geometry_mode,
-            raycore_chunked=shape.chunked_tlas,
-            raycore_tlas_instances=shape.tlas_instances,
-            raycore_tlas_geometries=shape.tlas_geometries,
-            raycore_expanded_face_count=shape.expanded_face_count,
-            rastergpu_fused_dense=missing,
-        )
-    end
     if hasproperty(cache, :rastergpu_data) && cache.rastergpu_data !== nothing
         fused_dense = try
             ArchimedLight._rastergpu_use_fused_dense_edges(cache.rastergpu_data)
@@ -717,20 +616,12 @@ function _cache_info(sim)
         return (
             resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
             geometry_mode=:raster_gpu,
-            raycore_chunked=false,
-            raycore_tlas_instances=0,
-            raycore_tlas_geometries=0,
-            raycore_expanded_face_count=0,
             rastergpu_fused_dense=fused_dense,
         )
     end
     return (
         resolved_backend=string(nameof(typeof(cache.resolved_interception_backend))),
         geometry_mode=:raster_cpu,
-        raycore_chunked=false,
-        raycore_tlas_instances=0,
-        raycore_tlas_geometries=0,
-        raycore_expanded_face_count=0,
         rastergpu_fused_dense=missing,
     )
 end
@@ -759,10 +650,6 @@ function _measure(scene, models, options, case, skies; row_context=nothing)
     info = (
         resolved_backend="",
         geometry_mode=:unknown,
-        raycore_chunked=false,
-        raycore_tlas_instances=0,
-        raycore_tlas_geometries=0,
-        raycore_expanded_face_count=0,
         rastergpu_fused_dense=missing,
     )
     for sample in 1:BENCH_SAMPLES
@@ -959,10 +846,6 @@ function _empty_measurement(status::AbstractString; error_type::AbstractString="
         median_alloc_mb=NaN,
         resolved_backend=String(resolved_backend),
         geometry_mode=geometry_mode,
-        raycore_chunked=false,
-        raycore_tlas_instances=0,
-        raycore_tlas_geometries=0,
-        raycore_expanded_face_count=0,
         rastergpu_fused_dense=missing,
         incident_par=NaN,
         incident_nir=NaN,
@@ -1082,7 +965,6 @@ function _print_header(scene_root, cases)
     println("scattering: ", join(BENCH_SCATTERING, ", "))
     println("cache_radiation: ", join(BENCH_CACHE_RADIATION, ", "))
     println("steps: ", join(BENCH_STEPS, ", "))
-    println("raycore toric traversal: ", join(BENCH_RAYCORE_TORIC_TRAVERSAL, ", "))
     println("samples: ", BENCH_SAMPLES)
     println("dry run: ", BENCH_DRY_RUN)
     println("max pixel cells: ", BENCH_MAX_PIXEL_CELLS == 0 ? "disabled" : string(BENCH_MAX_PIXEL_CELLS))
