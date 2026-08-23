@@ -155,6 +155,8 @@ const SIMPLEPLANT = _load_fixture("simpleplant_16_notoric")
 const SKY_DIRECT = _load_fixture("sky_46_direct")
 const SYNTHETIC = _synthetic_fixture()
 
+include(joinpath(@__DIR__, "component_values.jl"))
+
 SUITE["IO"] = BenchmarkGroup()
 SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_config($(SIMPLEPLANT.paths.config))
 SUITE["IO"]["read models"]["simpleplant"] = @benchmarkable ArchimedLight.read_models($(SIMPLEPLANT.paths.config))
