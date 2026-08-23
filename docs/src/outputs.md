@@ -235,17 +235,28 @@ The meaning follows the historical ARCHIMED naming:
 - `_f`: irradiance-like quantity in `W m^-2`
 - `_q`: energy per component and per step in `J`
 
-You can also rename attached attributes for downstream packages. For example,
-PlantBiophysics can use `Ra_SW_f` as an alias for absorbed NIR:
+Shortwave radiation is the sum of its PAR and NIR wavebands. In particular,
+`Ra_SW_f` is **not** an alias for `Ra_NIR_f`. The typed component and
+source-owner tables derive it as
+
+```math
+Ra\_SW\_f = Ra\_PAR\_f + Ra\_NIR\_f.
+```
+
+The table also derives `aPPFD` from absorbed PAR using the requested
+PAR-energy-to-photon conversion factor:
 
 ```@example outputs
-attach_light_step!(
-    sim.scene,
-    step;
-    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
-    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
-);
+owner_light = component_values(step; level=:source_owner)
+all(isapprox.(
+    owner_light.Ra_SW_f,
+    owner_light.Ra_PAR_f .+ owner_light.Ra_NIR_f,
+))
 ```
+
+If a downstream package reads attributes attached to the scene, attach the PAR
+and NIR values under distinct names and form their sum explicitly. Do not
+rename `:absorbed_nir_flux` to `:Ra_SW_f`.
 
 ## 4. Disk Outputs: Exported Scenes
 
