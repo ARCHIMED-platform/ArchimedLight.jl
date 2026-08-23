@@ -5,6 +5,7 @@ using CairoMakie
 using Dates
 using GeometryBasics
 using PlantGeom
+using PlantSimEngine
 
 const PKG_ROOT = dirname(dirname(pathof(ArchimedLight)))
 const FAST_FIXTURE_ROOT = joinpath(PKG_ROOT, "test", "fast_fixtures")
@@ -156,6 +157,7 @@ const SKY_DIRECT = _load_fixture("sky_46_direct")
 const SYNTHETIC = _synthetic_fixture()
 
 include(joinpath(@__DIR__, "component_values.jl"))
+include(joinpath(@__DIR__, "plantsimengine.jl"))
 
 SUITE["IO"] = BenchmarkGroup()
 SUITE["IO"]["read config"]["simpleplant"] = @benchmarkable ArchimedLight.read_config($(SIMPLEPLANT.paths.config))
