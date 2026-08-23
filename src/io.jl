@@ -504,7 +504,16 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
     mtg = if ext == ".ops"
         PlantGeom.read_ops(path; relaxed=true, assume_scale_column=false, opf_scale=1.0, gwa_scale=0.01,)
     elseif ext == ".opf"
-        PlantGeom.read_opf(path, attr_type=Dict, attribute_types=Dict("pos" => Float64))
+        # An assembled scene may contain several instances with the same
+        # historical source_topology_id. Allocate fresh runtime node ids before
+        # the dense relabel below, while retaining those source ids as
+        # provenance attributes.
+        PlantGeom.read_opf(
+            path;
+            attr_type=Dict,
+            attribute_types=Dict("pos" => Float64),
+            read_id=false,
+        )
     elseif ext == ".gwa"
         PlantGeom.read_gwa(path)
     else

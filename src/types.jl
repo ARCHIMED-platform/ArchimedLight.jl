@@ -890,6 +890,71 @@ struct LightNodeMetadata
     inherited_attributes::NamedTuple
 end
 
+"""Internal read-only view used for retained scene-identity columns."""
+struct _ReadOnlyVector{T,V<:AbstractVector{T}} <: AbstractVector{T}
+    values::V
+end
+
+Base.IndexStyle(::Type{<:_ReadOnlyVector{T,V}}) where {T,V} = Base.IndexStyle(V)
+Base.size(values::_ReadOnlyVector) = size(getfield(values, :values))
+Base.axes(values::_ReadOnlyVector) = axes(getfield(values, :values))
+Base.length(values::_ReadOnlyVector) = length(getfield(values, :values))
+Base.parent(values::_ReadOnlyVector) = getfield(values, :values)
+Base.@propagate_inbounds Base.getindex(values::_ReadOnlyVector, i::Int) =
+    getfield(values, :values)[i]
+
+"""
+    LightComponentMetadata
+
+Compact identity snapshot for the geometric components used by one prepared
+light scene.
+
+`node_id`, `source_owner`, and `radiative_area` are aligned columns. The owner
+is the durable [`PlantGeom.SourceOwnerKey`](@ref) assigned during scene
+assembly. `radiative_area` is the filtered mesh area used by ArchimedLight to
+normalize component fluxes; it is deliberately distinct from a generic
+botanical or projected area.
+
+When a scene exposes complete PlantGeom source ownership, every result produced
+from one light cache shares the same snapshot. Results therefore remain
+attributable after [`update_scene!`](@ref) replaces the live scene. Historical
+scenes without source ownership remain simulatable, but cannot be exported with
+[`component_values`](@ref).
+"""
+struct LightComponentMetadata
+    node_id::_ReadOnlyVector{Int,Vector{Int}}
+    source_owner::_ReadOnlyVector{PlantGeom.SourceOwnerKey,Vector{PlantGeom.SourceOwnerKey}}
+    radiative_area::_ReadOnlyVector{Float64,Vector{Float64}}
+
+    function LightComponentMetadata(
+        node_id::Vector{Int},
+        source_owner::Vector{PlantGeom.SourceOwnerKey},
+        radiative_area::Vector{Float64},
+    )
+        n = length(node_id)
+        length(source_owner) == n || throw(DimensionMismatch(
+            "source_owner has length $(length(source_owner)); expected $n.",
+        ))
+        length(radiative_area) == n || throw(DimensionMismatch(
+            "radiative_area has length $(length(radiative_area)); expected $n.",
+        ))
+        length(unique(node_id)) == n || throw(ArgumentError(
+            "Light component node ids must be unique within one prepared scene.",
+        ))
+        for (i, area) in pairs(radiative_area)
+            isfinite(area) && area > 0.0 || throw(ArgumentError(
+                "Light component $(node_id[i]) has non-positive or invalid " *
+                "radiative area $area.",
+            ))
+        end
+        new(
+            _ReadOnlyVector(copy(node_id)),
+            _ReadOnlyVector(copy(source_owner)),
+            _ReadOnlyVector(copy(radiative_area)),
+        )
+    end
+end
+
 function _scene_node_field(scene::PlantGeom.SceneGeometry, node_id::Integer, field::Symbol, default)
     node = PlantGeom.scene_node(scene, node_id)
     if node === nothing || !hasfield(typeof(node), field)
@@ -1265,8 +1330,12 @@ directional fluxes, first-order interception, optional scattering, and the
 integrated [`LightBudget`](@ref). When requested, the result can also store a
 per-node `sky_fraction` map. Results returned by `run_light_step` and
 `run_light_series` also carry the render geometry needed by `lightplot`.
-By default they retain a shared [`LightNodeMetadata`](@ref) snapshot for
-scene-aware queries across dynamic scene updates.
+When the scene exposes complete source ownership, they retain a shared
+[`LightComponentMetadata`](@ref) snapshot for stable source-owner attribution.
+Historical unattributed scenes keep this field as `nothing`. By default results
+also retain the broader
+[`LightNodeMetadata`](@ref) snapshot used by scene-aware queries across dynamic
+scene updates.
 """
 struct LightStepResult
     sky::SkyState
@@ -1279,6 +1348,7 @@ struct LightStepResult
     sky_fraction::Union{Nothing,Dict{Int,Float64}}
     render_geometry::Union{Nothing,LightRenderGeometry}
     node_metadata::Union{Nothing,LightNodeMetadata}
+    component_metadata::Union{Nothing,LightComponentMetadata}
 end
 
 LightStepResult(
@@ -1289,7 +1359,7 @@ LightStepResult(
     scattering::Union{Nothing,ScatteringResult},
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing, nothing, nothing)
 
 LightStepResult(
     sky::SkyState,
@@ -1300,7 +1370,7 @@ LightStepResult(
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
     sky_fraction::Union{Nothing,Dict{Int,Float64}},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing, nothing, nothing)
 
 LightStepResult(
     sky::SkyState,
@@ -1322,6 +1392,34 @@ LightStepResult(
     extra_band_irradiance,
     sky_fraction,
     render_geometry,
+    nothing,
+    nothing,
+)
+
+# Preserve the historical ten-argument constructor used by downstream code
+# that supplied optional node metadata explicitly.
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+    sky_fraction::Union{Nothing,Dict{Int,Float64}},
+    render_geometry::Union{Nothing,LightRenderGeometry},
+    node_metadata::Union{Nothing,LightNodeMetadata},
+) = LightStepResult(
+    sky,
+    turtle,
+    fluxes,
+    first_order,
+    scattering,
+    budget,
+    extra_band_irradiance,
+    sky_fraction,
+    render_geometry,
+    node_metadata,
     nothing,
 )
 

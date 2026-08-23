@@ -767,6 +767,8 @@ end
     @test isempty(step.first_order.emitter_escaped_power.nir)
     @test isempty(step.budget.emitter_escaped_energy_per_band["PAR"])
     @test isempty(step.budget.emitter_escaped_energy_per_band["NIR"])
+    @test step.component_metadata === nothing
+    @test_throws ArgumentError ArchimedLight.component_values(step)
 
     fallback_row = merge(
         row,
@@ -1177,6 +1179,8 @@ end
     summary0 = ArchimedLight.cache_summary(cache)
     @test summary0.mode == :full
     @test summary0.cached_turtle_count == 0
+    @test summary0.component_metadata_count == 0
+    @test summary0.component_metadata_bytes == 0
 
     series_cached = ArchimedLight.run_light_series(cache, meteo)
     series_uncached = ArchimedLight.run_light_series(scene, models, meteo, HelperModule._synthetic_options(sectors=6, all_in_turtle=true, scattering=true, pixel_size=0.01, cache_radiation=false))

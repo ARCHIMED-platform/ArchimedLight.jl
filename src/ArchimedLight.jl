@@ -28,6 +28,7 @@ include("query.jl")
 
 export LightRenderGeometry
 export LightNodeMetadata
+export LightComponentMetadata
 export LightModels
 export GroupModel
 export TypeModel
@@ -72,6 +73,9 @@ export attach_node_values!
 export attach_light_step!
 export attach_light_series!
 export write_component_values
+export CompiledComponentAggregation
+export component_values
+export component_values!
 export light_render_geometry
 export tile_light_geometry
 export light_node_ids

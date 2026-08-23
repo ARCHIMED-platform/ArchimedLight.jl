@@ -28,8 +28,7 @@
     @test length(meteo2) == length(fixture.meteo)
     @test collect(keys(models2.groups)) == collect(keys(fixture.models.groups))
     @test any(item -> item.group == "pavement", ArchimedLight.summarize_scene(scene2).group_types)
-    @test haskey(scene2.mtg, :geometry)
-    @test scene2.mtg[:geometry] === nothing
+    @test !PlantGeom.has_geometry(scene2.mtg)
 
     _, scene3, _, _ = ArchimedLight.read_config(
         joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "config.yml");
@@ -37,15 +36,14 @@
     )
     pavement = only(item for item in ArchimedLight.summarize_scene(scene3).group_types if item.group == "pavement")
     @test pavement.nodes == 25
-    @test scene3.mtg[:geometry] === nothing
+    @test !PlantGeom.has_geometry(scene3.mtg)
 
     raw_scene = ArchimedLight.read_scene(
         joinpath(@__DIR__, "fast_fixtures", "simpleplant_16_notoric", "input", "scene", "simple.ops"),
     )
-    @test haskey(raw_scene.mtg, :geometry)
-    @test raw_scene.mtg[:geometry] !== nothing
+    @test !PlantGeom.has_geometry(raw_scene.mtg)
     PlantGeom.add_ground!(raw_scene; nx=2, ny=2)
-    @test raw_scene.mtg[:geometry] === nothing
+    @test !PlantGeom.has_geometry(raw_scene.mtg)
 end
 
 @testitem "Sky fraction can be stored and attached" tags=[:core, :fast] begin
