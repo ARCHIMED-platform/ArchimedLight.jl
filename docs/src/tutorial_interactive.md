@@ -33,7 +33,7 @@ using OrderedCollections: OrderedDict
 using PlantGeom # For the growth and visualization API
 ```
 
-Then we build a simple plant with two phytomers, each with an internode and a leaf. The internodes are cylinders and the leaves are laminae with a midrib.
+Then we build a simple plant with two successive internode–leaf pairs. The internodes are cylinders and the leaves are laminae with a midrib.
 
 First, we define mesh prototypes for the internode and leaf shapes:
 
@@ -73,7 +73,7 @@ prototypes = Dict(
 )
 ```
 
-Then, we build the MTG with two phytomers and two leaves:
+Then, we add two internode–leaf pairs to the MTG. This low-level PlantGeom helper emits component nodes; it does not create botanical phytomere nodes:
 
 ```@example interactive_workflow
 scene_mtg = Node(NodeMTG(:/, :Scene, 1, 1))
@@ -81,14 +81,14 @@ small_plant = Node(scene_mtg, NodeMTG(:/, :Plant, 1, 1))
 small_plant[:functional_group] = "example_plant"
 small_plant[:object_id] = 1
 
-first_phy = emit_phytomer!(
+first_pair = emit_internode_leaf!(
     small_plant;
     internode=(link=:/, index=1, length=0.20, width=0.022),
     leaf=(index=1, offset=0.15, length=0.22, width=0.05, thickness=0.02, y_insertion_angle=52.0),
 )
 
-second_phy = emit_phytomer!(
-    first_phy.internode;
+second_pair = emit_internode_leaf!(
+    first_pair.internode;
     internode=(index=2, length=0.18, width=0.020),
     leaf=(index=2, offset=0.14, length=0.24, width=0.055, thickness=0.02, phyllotaxy=180.0, y_insertion_angle=54.0),
 )
