@@ -66,28 +66,99 @@ end
     @test series[1].sky_fraction !== nothing
     @test !isempty(series[1].sky_fraction)
 
-    ArchimedLight.attach_light_step!(fixture.scene, series[1]; fields=[:area])
+    @test_deprecated r"absorbed_nir_flux.*Ra_SW_f" ArchimedLight.attach_light_step!(
+        fixture.scene,
+        series[1];
+        fields=[:absorbed_nir_flux],
+        names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+    )
+    legacy_step_found = Ref(false)
+    MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
+        if haskey(node, :Ra_SW_f)
+            legacy_step_found[] = true
+            @test node[:Ra_SW_f] ≈
+                  series[1].budget.absorbed_flux.total.par[
+                      Int(MultiScaleTreeGraph.node_id(node))
+                  ] +
+                  series[1].budget.absorbed_flux.total.nir[
+                      Int(MultiScaleTreeGraph.node_id(node))
+                  ]
+        end
+        return true
+    end
+    @test legacy_step_found[]
+
+    @test_deprecated r"absorbed_nir_flux.*Ra_SW_f" ArchimedLight.attach_light_series!(
+        fixture.scene,
+        series;
+        fields=[:absorbed_nir_flux],
+        names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+    )
+    legacy_series_found = Ref(false)
+    MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
+        if haskey(node, :Ra_SW_f)
+            legacy_series_found[] = true
+            node_id = Int(MultiScaleTreeGraph.node_id(node))
+            @test node[:Ra_SW_f] ≈ [
+                step.budget.absorbed_flux.total.par[node_id] +
+                step.budget.absorbed_flux.total.nir[node_id]
+                for step in series
+            ]
+        end
+        return true
+    end
+    @test legacy_series_found[]
+
+    @test_throws ArgumentError ArchimedLight.attach_light_step!(
+        fixture.scene,
+        series[1];
+        fields=[:absorbed_par_flux],
+        names=Dict(:absorbed_par_flux => :Ra_SW_f),
+    )
+
+    ArchimedLight.attach_light_step!(
+        fixture.scene,
+        series[1];
+        fields=[
+            :area,
+            :absorbed_par_flux,
+            :absorbed_nir_flux,
+            :absorbed_shortwave_flux,
+        ],
+    )
 
     scalar_area_found = Ref(false)
+    scalar_shortwave_with_par_found = Ref(false)
     MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
         nid = Int(MultiScaleTreeGraph.node_id(node))
         if haskey(fixture.scene.nodes, nid) && haskey(node, :area)
             scalar_area_found[] = true
             @test node[:area] ≈ fixture.scene.nodes[nid].area
-            return false
+            @test node[:Ra_SW_f] ≈ node[:Ra_PAR_f] + node[:Ra_NIR_f]
+            if node[:Ra_PAR_f] > 0.0
+                scalar_shortwave_with_par_found[] = true
+                @test node[:Ra_SW_f] != node[:Ra_NIR_f]
+            end
         end
         return true
     end
     @test scalar_area_found[]
+    @test scalar_shortwave_with_par_found[]
 
     ArchimedLight.attach_light_series!(
         fixture.scene,
         series;
-        fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
-        names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+        fields=[
+            :area,
+            :absorbed_par_flux,
+            :absorbed_nir_flux,
+            :absorbed_shortwave_flux,
+            :sky_fraction,
+        ],
     )
 
     found = Ref(false)
+    series_shortwave_with_par_found = Ref(false)
     MultiScaleTreeGraph.traverse!(fixture.scene.mtg) do node
         if haskey(node, :sky_fraction)
             found[] = true
@@ -98,12 +169,18 @@ end
             expected_area = fixture.scene.nodes[Int(MultiScaleTreeGraph.node_id(node))].area
             @test all(v -> isapprox(v, expected_area), node[:area])
             @test haskey(node, :Ra_PAR_f)
+            @test haskey(node, :Ra_NIR_f)
             @test haskey(node, :Ra_SW_f)
-            return false
+            @test node[:Ra_SW_f] ≈ node[:Ra_PAR_f] .+ node[:Ra_NIR_f]
+            if any(>(0.0), node[:Ra_PAR_f])
+                series_shortwave_with_par_found[] = true
+                @test node[:Ra_SW_f] != node[:Ra_NIR_f]
+            end
         end
         return true
     end
     @test found[]
+    @test series_shortwave_with_par_found[]
 end
 
 @testitem "SmallHitStack handles dense pixels" tags=[:core, :fast] begin

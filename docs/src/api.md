@@ -275,6 +275,7 @@ field. The supported `fields` selectors are:
 | `:absorbed_nir_initial_flux` | `Ra_NIR_0_f` |
 | `:absorbed_par_flux` | `Ra_PAR_f` |
 | `:absorbed_nir_flux` | `Ra_NIR_f` |
+| `:absorbed_shortwave_flux` | `Ra_SW_f` (`Ra_PAR_f + Ra_NIR_f`) |
 | `:absorbed_par_initial_energy` | `Ra_PAR_0_q` |
 | `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
 | `:absorbed_par_energy` | `Ra_PAR_q` |
@@ -285,8 +286,11 @@ For `:area`, `attach_light_step!` attaches one scalar surface area per node,
 while `attach_light_series!` repeats that area once per step so the attached
 attribute has the same vector shape as the light fields.
 
-Use `names=Dict(selector => attr)` to override default attribute names, for
-example `Dict(:absorbed_nir_flux => :Ra_SW_f)`.
+Use `names=Dict(selector => attr)` to override a default attribute name.
+`Ra_SW_f` always contains absorbed PAR plus absorbed NIR. The historical
+`Dict(:absorbed_nir_flux => :Ra_SW_f)` mapping remains accepted and now
+produces that canonical sum, with a deprecation warning; request
+`:absorbed_shortwave_flux` in new code.
 
 ## Scene-Aware Light Queries
 

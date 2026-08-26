@@ -4,7 +4,8 @@ Use this integration when one scene-scale light calculation must provide
 irradiance to many physiological organs. `ArchimedLightModel` runs
 `ArchimedLight` once on a `Scene` object, maps geometric components back to
 stable botanical identities, and publishes the resulting variables directly
-to the selected organ statuses.
+to the selected organ statuses. These are raw radiative-mesh-area values, not
+leaf-area physiology inputs.
 
 This is an ordinary PlantSimEngine model coupling. The light results are model
 outputs owned by the scene application and stored on their destination
@@ -59,13 +60,16 @@ organ selector, and the cadence. The `output_group` keyword must match the name
 of the corresponding `outputs_to` entry; both are `:organs` above.
 
 When the physiological model is built from the exact MTG stored by the light
-scene, the shortest complete composition is conceptually:
+scene, include explicit radiative-to-botanical area adapters before leaf
+physiology. The adapters are provided by PlantBiophysics:
 
 ```julia
 model = CompositeModel(
     light_sim.scene.mtg;
     applications=(
         light_application,
+        radiative_mesh_to_leaf_ppfd_application,
+        radiative_mesh_to_leaf_shortwave_application,
         leaf_energy_balance_application,
         leaf_photosynthesis_application,
     ),
@@ -75,10 +79,54 @@ model = CompositeModel(
 simulation = run!(model; outputs=:all)
 ```
 
+Every destination leaf must carry a finite positive `botanical_leaf_area`.
+Map raw `aPPFD` and `radiative_mesh_area` to
+`PlantBiophysics.RadiativeMeshToLeafPPFD`, and map raw `Ra_SW_f` and the same
+area to `PlantBiophysics.RadiativeMeshToLeafShortwave`. Then map the distinct
+outputs `aPPFD_leaf_mean` and `Ra_SW_f_leaf_mean` to FvCB and Monteith. Do not
+connect ArchimedLight's same-named raw outputs directly to those leaf inputs.
+
+For example, the PPFD boundary is declared explicitly as:
+
+```julia
+using PlantBiophysics
+
+radiative_mesh_to_leaf_ppfd_application = ModelSpec(
+    RadiativeMeshToLeafPPFD();
+    name=:radiative_to_leaf_ppfd,
+    on=Many(scale=:Leaf),
+    inputs=(
+        :aPPFD_radiative => One(
+            within=Self(), application=:archimed_light, var=:aPPFD,
+            policy=HoldLast(),
+        ),
+        :radiative_mesh_area => One(
+            within=Self(), application=:archimed_light,
+            var=:radiative_mesh_area, policy=HoldLast(),
+        ),
+    ),
+)
+
+leaf_photosynthesis_application = ModelSpec(
+    Fvcb();
+    name=:photosynthesis,
+    on=Many(scale=:Leaf),
+    inputs=(
+        :aPPFD => One(
+            within=Self(), application=:radiative_to_leaf_ppfd,
+            var=:aPPFD_leaf_mean, policy=HoldLast(),
+        ),
+    ),
+)
+```
+
+Use `RadiativeMeshToLeafShortwave` in the same way for `Ra_SW_f`, and map its
+`Ra_SW_f_leaf_mean` output to Monteith.
+
 The leaf applications remain ordinary PlantSimEngine applications on
-`Many(scale=:Leaf)`. Their declared inputs are coupled by variable name, and
-the compiler schedules the scene writer before its consumers. Application
-tuple order and MTG traversal order do not define this coupling.
+`Many(scale=:Leaf)`. The compiler schedules the scene writer, then the area
+adapters, then their physiology consumers. Application tuple order and MTG
+traversal order do not define this coupling.
 
 Leaf-scale energy balance and photosynthesis should use the canonical
 `Many(scale=:Leaf)` destination above. If another radiative process genuinely
@@ -95,18 +143,33 @@ The default `:coupling` schema keeps the hot publication path compact:
 
 | Variable | Meaning | Unit |
 | --- | --- | --- |
-| `Ri_PAR_f` | total intercepted PAR irradiance | `W m^-2` |
-| `Ri_NIR_f` | total intercepted NIR irradiance | `W m^-2` |
-| `Ra_PAR_f` | total absorbed PAR irradiance | `W m^-2` |
-| `Ra_NIR_f` | total absorbed NIR irradiance | `W m^-2` |
-| `Ra_SW_f` | `Ra_PAR_f + Ra_NIR_f` | `W m^-2` |
-| `aPPFD` | absorbed photosynthetic photon flux density | `μmol m^-2 s^-1` |
-| `radiative_mesh_area` | area used by the light solver for normalization | `m^2` |
+| `Ri_PAR_f` | total intercepted PAR irradiance | `W m[radiative]^-2` |
+| `Ri_NIR_f` | total intercepted NIR irradiance | `W m[radiative]^-2` |
+| `Ra_PAR_f` | total absorbed PAR irradiance | `W m[radiative]^-2` |
+| `Ra_NIR_f` | total absorbed NIR irradiance | `W m[radiative]^-2` |
+| `Ra_SW_f` | `Ra_PAR_f + Ra_NIR_f` | `W m[radiative]^-2` |
+| `aPPFD` | absorbed photosynthetic photon flux density | `μmol m[radiative]^-2 s^-1` |
+| `radiative_mesh_area` | area used by the light solver for normalization | `m[radiative]^2` |
 
 `radiative_mesh_area` is a radiative discretization property. It is not a
 canonical botanical leaf area or a projected area. `aPPFD` is computed as
 `Ra_PAR_f * par_energy_to_photon`; `4.57` is the default broadband PAR
 conversion in `μmol J^-1`.
+
+The extension declares scientific contracts only for `aPPFD`, `Ra_SW_f`, and
+`radiative_mesh_area`. The `Ri_*` and component PAR/NIR diagnostics remain
+available but are deliberately not assigned contracts by analogy.
+
+For either contracted flux `F`, the PlantBiophysics boundary computes
+
+```math
+F_{leaf} = F_{radiative}
+\times \frac{A_{radiative}}{A_{botanical}},
+```
+
+so `F_radiative * radiative_mesh_area == F_leaf * botanical_leaf_area`. This
+equality is the conservation check for manual reference paths as well as the
+automatic distributed path.
 
 The `:full` schema adds all initial (`*_0_*`) and scattering-inclusive PAR/NIR
 incident and absorbed variables:
@@ -298,8 +361,8 @@ buffer. It obtains the current PlantSimEngine `OutputTargets` view on every
 invocation and never retains that lifecycle-scoped view across steps. Custom
 wrappers should follow the same rule.
 
-Use PlantSimEngine diagnostics to inspect the compiled writer and its inferred
-consumers:
+Use PlantSimEngine diagnostics to inspect the compiled writer, both area
+boundaries, and their consumers:
 
 ```julia
 Diagnostics.explain_applications(model)
@@ -308,13 +371,26 @@ Diagnostics.explain_bindings(model)
 Diagnostics.explain_schedule(model)
 ```
 
-Run with `outputs=:all` only when histories are needed. Current values remain
-available through `final_state`, for example:
+Run with `outputs=:all` when both the raw ArchimedLight history and the current
+converted physiology state are needed. The final `aPPFD` and `Ra_SW_f` fields
+on the leaf are the converted values; read the raw values from the
+`:archimed_light` output stream:
 
 ```julia
-simulation = run!(model; outputs=:none)
+simulation = run!(model; outputs=:all)
 leaf_state = final_state(simulation, :leaf_42)
-(leaf_state.Ra_SW_f, leaf_state.aPPFD)
+raw_ppfd = last(outputs(simulation)[
+    (:archimed_light, ObjectId(:leaf_42), :aPPFD)
+])[2]
+raw_shortwave = last(outputs(simulation)[
+    (:archimed_light, ObjectId(:leaf_42), :Ra_SW_f)
+])[2]
+(
+    raw_ppfd=raw_ppfd,
+    leaf_ppfd=leaf_state.aPPFD_leaf_mean,
+    raw_shortwave=raw_shortwave,
+    leaf_shortwave=leaf_state.Ra_SW_f_leaf_mean,
+)
 ```
 
 For large canopies, prefer the `:coupling` schema unless the full diagnostic

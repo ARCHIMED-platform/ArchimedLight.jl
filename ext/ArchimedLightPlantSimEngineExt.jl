@@ -6,6 +6,30 @@ import PlantSimEngine
 
 PlantSimEngine.@process "light_interception" verbose = false
 
+const _RADIATIVE_MESH_PAR_PHOTON_FLUX_CONTRACT = PlantSimEngine.VariableContract(
+    unit=:micromol_photon,
+    basis=:radiative_mesh_area,
+    temporal=:second,
+    aggregation=:rate,
+    extent=:intensive,
+)
+
+const _RADIATIVE_MESH_IRRADIANCE_CONTRACT = PlantSimEngine.VariableContract(
+    unit=:joule,
+    basis=:radiative_mesh_area,
+    temporal=:second,
+    aggregation=:rate,
+    extent=:intensive,
+)
+
+const _RADIATIVE_MESH_AREA_CONTRACT = PlantSimEngine.VariableContract(
+    unit=:square_metre_radiative,
+    basis=:organ,
+    temporal=nothing,
+    aggregation=:total,
+    extent=:extensive,
+)
+
 const _COUPLING_OUTPUT_NAMES = (
     :Ri_PAR_f,
     :Ri_NIR_f,
@@ -187,6 +211,15 @@ PlantSimEngine.environment_inputs_(::_ArchimedLightModel) = (
     Ri_PAR_f=0.0,
     Ri_NIR_f=0.0,
     direct_fraction=0.0,
+)
+
+# Only variables whose normalization boundary is unambiguous are contracted.
+# The remaining diagnostic fields stay available in both output schemas but do
+# not acquire a scientific contract by analogy.
+PlantSimEngine.variable_contracts_(::_ArchimedLightModel) = (
+    aPPFD=_RADIATIVE_MESH_PAR_PHOTON_FLUX_CONTRACT,
+    Ra_SW_f=_RADIATIVE_MESH_IRRADIANCE_CONTRACT,
+    radiative_mesh_area=_RADIATIVE_MESH_AREA_CONTRACT,
 )
 
 @inline function _require_finite(name::Symbol, value)

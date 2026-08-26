@@ -219,6 +219,7 @@ The default mappings are:
 | `:absorbed_nir_initial_flux` | `Ra_NIR_0_f` |
 | `:absorbed_par_flux` | `Ra_PAR_f` |
 | `:absorbed_nir_flux` | `Ra_NIR_f` |
+| `:absorbed_shortwave_flux` | `Ra_SW_f` (`Ra_PAR_f + Ra_NIR_f`) |
 | `:absorbed_par_initial_energy` | `Ra_PAR_0_q` |
 | `:absorbed_nir_initial_energy` | `Ra_NIR_0_q` |
 | `:absorbed_par_energy` | `Ra_PAR_q` |
@@ -255,8 +256,10 @@ all(isapprox.(
 ```
 
 If a downstream package reads attributes attached to the scene, attach the PAR
-and NIR values under distinct names and form their sum explicitly. Do not
-rename `:absorbed_nir_flux` to `:Ra_SW_f`.
+and NIR values under distinct names. Request `:absorbed_shortwave_flux` to
+attach their sum as `Ra_SW_f`. The historical
+`Dict(:absorbed_nir_flux => :Ra_SW_f)` mapping remains accepted and now
+produces the same PAR+NIR sum, with a deprecation warning.
 
 ## 4. Disk Outputs: Exported Scenes
 

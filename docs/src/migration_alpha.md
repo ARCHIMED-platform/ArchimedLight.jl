@@ -1,5 +1,21 @@
 # Alpha Tester Migration
 
+## PlantSimEngine radiation-area boundary
+
+The PlantSimEngine extension now distinguishes ArchimedLight flux densities
+per radiative mesh area from physiology flux densities per botanical leaf
+area. Raw fields keep their names, but `aPPFD`, `Ra_SW_f`, and
+`radiative_mesh_area` now carry explicit scientific contracts.
+
+Do not connect raw `aPPFD` directly to FvCB or raw `Ra_SW_f` directly to
+Monteith. Give every destination leaf a finite positive
+`botanical_leaf_area`, then use PlantBiophysics' `RadiativeMeshToLeafPPFD` and
+`RadiativeMeshToLeafShortwave` adapters. They preserve
+`raw_flux * radiative_mesh_area == leaf_flux * botanical_leaf_area`.
+
+The `Ri_*` and component PAR/NIR diagnostic fields remain uncontracted, and
+both output schemas retain their existing raw field names.
+
 `ArchimedLight.jl` now uses `LightSimulation` and `run_light` as the main API.
 The old staged API is still useful for debugging, but it is no longer the
 recommended first path.

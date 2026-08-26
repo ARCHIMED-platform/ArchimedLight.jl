@@ -11,6 +11,7 @@ const _DEFAULT_BUDGET_ATTRS = Dict{Symbol,Symbol}(
     :absorbed_nir_initial_flux => :Ra_NIR_0_f,
     :absorbed_par_flux => :Ra_PAR_f,
     :absorbed_nir_flux => :Ra_NIR_f,
+    :absorbed_shortwave_flux => :Ra_SW_f,
     :absorbed_par_initial_energy => :Ra_PAR_0_q,
     :absorbed_nir_initial_energy => :Ra_NIR_0_q,
     :absorbed_par_energy => :Ra_PAR_q,
@@ -58,6 +59,10 @@ function _budget_node_field(step::LightStepResult, field::Symbol)
     field == :absorbed_nir_initial_flux && return budget.absorbed_flux.initial.nir
     field == :absorbed_par_flux && return budget.absorbed_flux.total.par
     field == :absorbed_nir_flux && return budget.absorbed_flux.total.nir
+    field == :absorbed_shortwave_flux && return _sum_node_fields(
+        budget.absorbed_flux.total.par,
+        budget.absorbed_flux.total.nir,
+    )
     field == :absorbed_par_initial_energy && return budget.absorbed_energy.initial.par
     field == :absorbed_nir_initial_energy && return budget.absorbed_energy.initial.nir
     field == :absorbed_par_energy && return budget.absorbed_energy.total.par
@@ -70,11 +75,52 @@ function _budget_node_field(step::LightStepResult, field::Symbol)
     error("Unknown light field selector: $field")
 end
 
+function _sum_node_fields(par::AbstractDict, nir::AbstractDict)
+    result = Dict{Int,Float64}()
+    for (node_id, par_value) in par
+        haskey(nir, node_id) || continue
+        result[Int(node_id)] = Float64(par_value) + Float64(nir[node_id])
+    end
+    return result
+end
+
 function _budget_attr_name(field::Symbol, names::AbstractDict{Symbol,Symbol})
-    haskey(names, field) && return names[field]
+    if haskey(names, field)
+        attr = names[field]
+        if attr === :Ra_SW_f &&
+           field !== :absorbed_shortwave_flux &&
+           field !== :absorbed_nir_flux
+            throw(ArgumentError(
+                "Only `:absorbed_shortwave_flux` or the historical " *
+                "`:absorbed_nir_flux => :Ra_SW_f` compatibility mapping may " *
+                "attach the canonical `Ra_SW_f` attribute; got selector " *
+                "`$(field)`. Shortwave is absorbed PAR plus absorbed NIR.",
+            ))
+        end
+        return attr
+    end
     field == :area && return :area
     haskey(_DEFAULT_BUDGET_ATTRS, field) && return _DEFAULT_BUDGET_ATTRS[field]
     error("No default MTG attribute name for `$field`.")
+end
+
+function _attachment_data_field(
+    field::Symbol,
+    names::AbstractDict{Symbol,Symbol},
+    caller::Symbol,
+)
+    if field === :absorbed_nir_flux &&
+       get(names, field, nothing) === :Ra_SW_f
+        Base.depwarn(
+            "`names=Dict(:absorbed_nir_flux => :Ra_SW_f)` is retained as a " *
+            "compatibility mapping and now attaches the canonical absorbed " *
+            "PAR+NIR shortwave flux. Prefer " *
+            "`fields=[:absorbed_shortwave_flux]` for new code.",
+            caller,
+        )
+        return :absorbed_shortwave_flux
+    end
+    return field
 end
 
 """
@@ -140,6 +186,7 @@ attached as one scalar MTG attribute per geometry node. Supported selectors are:
 - `:absorbed_nir_initial_flux` => `Ra_NIR_0_f`
 - `:absorbed_par_flux` => `Ra_PAR_f`
 - `:absorbed_nir_flux` => `Ra_NIR_f`
+- `:absorbed_shortwave_flux` => `Ra_SW_f` (`Ra_PAR_f + Ra_NIR_f`)
 - `:absorbed_par_initial_energy` => `Ra_PAR_0_q`
 - `:absorbed_nir_initial_energy` => `Ra_NIR_0_q`
 - `:absorbed_par_energy` => `Ra_PAR_q`
@@ -175,6 +222,11 @@ attach_light_step!(
 With that override, the values are attached on `:my_par_flux` and
 `:my_par_energy` instead of the default ARCHIMED names.
 
+The canonical `Ra_SW_f` name always contains absorbed PAR plus absorbed NIR.
+The historical `names=Dict(:absorbed_nir_flux => :Ra_SW_f)` call remains
+accepted and is interpreted as that sum, with a deprecation warning. Prefer
+`:absorbed_shortwave_flux` in new code.
+
 To expose the sky-view fraction or PlantBiophysics-specific names, you can mix
 selectors and overrides:
 
@@ -182,8 +234,13 @@ selectors and overrides:
 attach_light_step!(
     scene,
     step;
-    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
-    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+    fields=[
+        :area,
+        :absorbed_par_flux,
+        :absorbed_nir_flux,
+        :absorbed_shortwave_flux,
+        :sky_fraction,
+    ],
 )
 ```
 
@@ -199,10 +256,11 @@ function attach_light_step!(
     fill_value=nothing,
 )
     for field in fields
+        data_field = _attachment_data_field(field, names, :attach_light_step!)
         attach_node_values!(
             scene,
             _budget_attr_name(field, names),
-            _node_field(scene, step, field);
+            _node_field(scene, step, data_field);
             fill_value=fill_value,
         )
     end
@@ -247,6 +305,7 @@ For example, with the default field, each geometry node gets
 - `:absorbed_nir_initial_flux` => `Ra_NIR_0_f`
 - `:absorbed_par_flux` => `Ra_PAR_f`
 - `:absorbed_nir_flux` => `Ra_NIR_f`
+- `:absorbed_shortwave_flux` => `Ra_SW_f` (`Ra_PAR_f + Ra_NIR_f`)
 - `:absorbed_par_initial_energy` => `Ra_PAR_0_q`
 - `:absorbed_nir_initial_energy` => `Ra_NIR_0_q`
 - `:absorbed_par_energy` => `Ra_PAR_q`
@@ -256,15 +315,24 @@ For example, with the default field, each geometry node gets
 For `:area`, series attachment stores the same area value repeated once per
 step so the result has the same vector shape as the light fields.
 
-Use `names` to override attached attribute names. This is useful for downstream
-packages that expect different names:
+Use `names` to override attached attribute names for downstream packages that
+expect different names. The canonical `Ra_SW_f` value is always the absorbed
+PAR+NIR sum. The historical
+`names=Dict(:absorbed_nir_flux => :Ra_SW_f)` call remains accepted and is
+interpreted as that sum, with a deprecation warning; prefer
+`:absorbed_shortwave_flux` in new code. For example:
 
 ```julia
 attach_light_series!(
     scene,
     steps;
-    fields=[:area, :absorbed_par_flux, :absorbed_nir_flux, :sky_fraction],
-    names=Dict(:absorbed_nir_flux => :Ra_SW_f),
+    fields=[
+        :area,
+        :absorbed_par_flux,
+        :absorbed_nir_flux,
+        :absorbed_shortwave_flux,
+        :sky_fraction,
+    ],
 )
 ```
 
@@ -285,9 +353,10 @@ function attach_light_series!(
 )
     node_ids = PlantGeom.scene_node_ids(scene)
     for field in fields
+        data_field = _attachment_data_field(field, names, :attach_light_series!)
         by_node = Dict{Int,Vector{Float64}}(nid => Float64[] for nid in node_ids)
         for step in steps
-            vals = _node_field(scene, step, field)
+            vals = _node_field(scene, step, data_field)
             for nid in node_ids
                 push!(by_node[nid], Float64(get(vals, nid, fill_value)))
             end

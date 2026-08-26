@@ -244,6 +244,33 @@ end
         LightSimulation(scene, models; options=options);
         object_resolver=_ -> :leaf,
     )
+    contracts = variable_contracts(trait_kernel)
+    @test keys(contracts) == (:aPPFD, :Ra_SW_f, :radiative_mesh_area)
+    @test contracts.aPPFD == VariableContract(
+        unit=:micromol_photon,
+        basis=:radiative_mesh_area,
+        temporal=:second,
+        aggregation=:rate,
+        extent=:intensive,
+    )
+    @test contracts.Ra_SW_f == VariableContract(
+        unit=:joule,
+        basis=:radiative_mesh_area,
+        temporal=:second,
+        aggregation=:rate,
+        extent=:intensive,
+    )
+    @test contracts.radiative_mesh_area == VariableContract(
+        unit=:square_metre_radiative,
+        basis=:organ,
+        temporal=nothing,
+        aggregation=:total,
+        extent=:extensive,
+    )
+    @test all(
+        name ∉ keys(contracts)
+        for name in (:Ri_PAR_f, :Ri_NIR_f, :Ra_PAR_f, :Ra_NIR_f)
+    )
     @test propertynames(PlantSimEngine.environment_inputs_(trait_kernel)) == (
         :sun_azimuth_deg,
         :sun_elevation_deg,
