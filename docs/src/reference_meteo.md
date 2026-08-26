@@ -61,9 +61,11 @@ used. `missing`, blank strings, `NaN`, and positive or negative `Inf` are treate
 unavailable sentinels. If two finite aliases for the same variable disagree,
 validation returns an error naming both columns and values.
 
-Historical `use` metadata remains accepted as a hint for file compatibility,
-but it does not suppress finite row values or force a broken input path. The
-resolver chooses the usable values actually present.
+Historical files may still contain `use` metadata. PlantMeteo preserves that
+value as source provenance, but ArchimedLight does not interpret it: it neither
+selects a radiation path nor suppresses finite inputs. The resolver chooses the
+usable values actually present and reports conflicting finite values. New files
+should omit `use`.
 
 Explicit `sun_azimuth`/`sun_azimut` and `sun_elevation` values are always in
 degrees. Small degree values are not reinterpreted as radians.
@@ -175,7 +177,6 @@ ARCHIMED-style meteo files often begin with metadata comments such as:
 #' name: Aquiares
 #' latitude: 15.0
 #' altitude: 100.0
-#' use: clearness
 ```
 
 ### Dynamically In Julia

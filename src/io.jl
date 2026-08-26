@@ -661,6 +661,14 @@ function _as_plantmeteo_table(data; metadata=_table_metadata_namedtuple(data))
     PlantMeteo.TimeStepTable(transformed, _meta_to_namedtuple(metadata))
 end
 
+function _is_incomplete_atmosphere_schema_error(err)
+    err isa ArgumentError || return false
+    startswith(
+        string(err.msg),
+        "Missing mandatory Atmosphere keyword argument(s):",
+    )
+end
+
 """
     read_meteo(path)::PlantMeteo.TimeStepTable
     read_meteo(data)::PlantMeteo.TimeStepTable
@@ -670,6 +678,11 @@ Read a meteorological forcing table from `path` and return it as a
 
 The resulting table keeps available metadata such as latitude, longitude,
 altitude, and source file path.
+
+Legacy radiation-only files that omit one or more mandatory `Atmosphere`
+columns (`T`, `Wind`, or `Rh`) remain readable as generic timestep tables.
+PlantMeteo date parsing, unit normalization, and scientific validation errors
+otherwise propagate unchanged.
 
 Arguments:
 
@@ -686,7 +699,8 @@ function read_meteo(path::AbstractString)
         )
         meta = merge((; file=path), _table_metadata_namedtuple(weather))
         return _with_meteo_metadata(weather, meta)
-    catch
+    catch err
+        _is_incomplete_atmosphere_schema_error(err) || rethrow()
         data, metadata_ = PlantMeteo.read_weather_(path)
         data = _normalize_raw_meteo_dates(data)
         meta = merge((; file=path), _meta_to_namedtuple(metadata_))
