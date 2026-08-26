@@ -503,6 +503,54 @@ function Base.show(io::IO, summary::MeteoSummary)
 end
 
 """
+    PixelHitStackPolicy
+
+Typed execution policy for the rasterizer's per-pixel hit-stack storage.
+
+- `AutoPixelHitStack` lets the rasterizer select the validated storage
+  for the current projection size.
+- `SmallPixelHitStack` forces compact inline storage.
+- `VectorPixelHitStack` forces the historical vector storage.
+
+ARCHIMED configuration files keep the portable text values `auto`, `small`,
+and `vector`; [`read_options`](@ref) converts those values to this type before
+the simulation reaches the raster runtime.
+"""
+@enum PixelHitStackPolicy::UInt8 begin
+    AutoPixelHitStack = 0
+    SmallPixelHitStack = 1
+    VectorPixelHitStack = 2
+end
+
+function _parse_pixel_hit_stack_policy(value)::PixelHitStackPolicy
+    value isa PixelHitStackPolicy && return value
+    normalized = lowercase(strip(string(value)))
+    normalized == "auto" && return AutoPixelHitStack
+    normalized == "small" && return SmallPixelHitStack
+    normalized == "vector" && return VectorPixelHitStack
+    throw(ArgumentError(
+        "pixel_hit_stack_mode must be auto, small, or vector, got $(repr(value))",
+    ))
+end
+
+function _coerce_pixel_hit_stack_policy(value)::PixelHitStackPolicy
+    value isa PixelHitStackPolicy && return value
+    if value isa AbstractString || value isa Symbol
+        Base.depwarn(
+            "Passing a string or symbol as LightOptions(pixel_hit_stack_mode=...) is deprecated; " *
+            "use AutoPixelHitStack, SmallPixelHitStack, or VectorPixelHitStack. " *
+            "Direct string/symbol construction will be removed in ArchimedLight 0.2; " *
+            "text values remain supported in ARCHIMED configuration files.",
+            :LightOptions,
+        )
+        return _parse_pixel_hit_stack_policy(value)
+    end
+    throw(ArgumentError(
+        "pixel_hit_stack_mode must be a PixelHitStackPolicy, got $(repr(value))",
+    ))
+end
+
+"""
     LightOptions
 
 Runtime controls for interception, scattering, and caching.
@@ -538,8 +586,8 @@ Fields:
   standard node metadata snapshot. Standard identity and group/type fields are
   always included when `store_node_metadata=true`.
 - `cache_pixel_table`: cache raster pixel tables for repeated projections.
-- `pixel_hit_stack_mode`: storage mode for per-pixel hit stacks. Supported
-  values are `"auto"`, `"small"`, and `"vector"`.
+- `pixel_hit_stack_mode`: typed [`PixelHitStackPolicy`](@ref) used for
+  per-pixel hit stacks. The default is `AutoPixelHitStack`.
 - `toricity`: enable horizontal periodic wrapping of the simulated plot.
 - `radiation_timestep_minutes`: internal radiative substep used when a meteo
   row covers a coarser interval.
@@ -572,6 +620,10 @@ Typical starting point for simple runs:
 
 `LightOptions(turtle_sectors=46, pixel_size=0.0025, scattering=true)`
 
+To force a raster storage policy from Julia, use for example
+`LightOptions(pixel_hit_stack_mode=SmallPixelHitStack)`. Configuration-file
+strings are parsed by [`read_options`](@ref) before runtime.
+
 Constructor keywords are the field names above. `LightOptions(old; kwargs...)`
 copies an existing options value and overrides only the supplied keywords.
 """
@@ -588,7 +640,7 @@ Base.@kwdef struct LightOptions
     cache_radiation::Bool = false
     include_sky_fraction::Bool = false
     cache_pixel_table::Bool = false
-    pixel_hit_stack_mode::String = "auto"
+    pixel_hit_stack_mode::PixelHitStackPolicy = AutoPixelHitStack
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
     radiation_input_semantics::Symbol = :interval_mean
@@ -658,7 +710,7 @@ Base.@kwdef struct LightOptions
             Bool(cache_radiation),
             Bool(include_sky_fraction),
             Bool(cache_pixel_table),
-            String(pixel_hit_stack_mode),
+            _coerce_pixel_hit_stack_policy(pixel_hit_stack_mode),
             Bool(toricity),
             Float64(radiation_timestep_minutes),
             semantics,

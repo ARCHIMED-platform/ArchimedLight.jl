@@ -293,7 +293,7 @@ function read_options(path::AbstractString)
             get(raw, "node_metadata_attributes", ()),
         ),
         cache_pixel_table=_as_bool(get(raw, "cache_pixel_table", false), false),
-        pixel_hit_stack_mode=_as_string(get(raw, "pixel_hit_stack_mode", "auto"), "auto"),
+        pixel_hit_stack_mode=_parse_pixel_hit_stack_policy(get(raw, "pixel_hit_stack_mode", "auto")),
         toricity=_as_bool(get(raw, "toricity", true), true),
         radiation_timestep_minutes=_as_float(get(raw, "radiation_timestep", 15.0), 15.0),
         radiation_input_semantics=_as_radiation_input_semantics(get(raw, "radiation_input_semantics", nothing)),

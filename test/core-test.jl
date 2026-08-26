@@ -119,3 +119,29 @@ end
     @test dense.stacks isa Vector{Union{Nothing,ArchimedLight.SmallHitStack}}
     @test all(isnothing, dense.stacks)
 end
+
+@testitem "Pixel-hit storage policy is typed at runtime" tags=[:core, :fast] begin
+    default = ArchimedLight.LightOptions()
+    @test default.pixel_hit_stack_mode isa ArchimedLight.PixelHitStackPolicy
+    @test default.pixel_hit_stack_mode == ArchimedLight.AutoPixelHitStack
+
+    small = ArchimedLight.LightOptions(pixel_hit_stack_mode=ArchimedLight.SmallPixelHitStack)
+    vector = ArchimedLight.LightOptions(pixel_hit_stack_mode=ArchimedLight.VectorPixelHitStack)
+    @test ArchimedLight._pixel_hit_stack_type(small) == ArchimedLight.SmallHitStack
+    @test ArchimedLight._pixel_hit_stack_type(vector) == Vector{ArchimedLight.HitRecord}
+    @test ArchimedLight.LightOptions(vector; pixel_size=0.01).pixel_hit_stack_mode ==
+          ArchimedLight.VectorPixelHitStack
+
+    legacy = @test_deprecated ArchimedLight.LightOptions(pixel_hit_stack_mode="vector")
+    @test legacy.pixel_hit_stack_mode == ArchimedLight.VectorPixelHitStack
+
+    mktempdir() do dir
+        config = joinpath(dir, "config.yml")
+        write(config, "pixel_hit_stack_mode: SMALL\n")
+        parsed = ArchimedLight.read_options(config)
+        @test parsed.pixel_hit_stack_mode == ArchimedLight.SmallPixelHitStack
+
+        write(config, "pixel_hit_stack_mode: linked-list\n")
+        @test_throws ArgumentError ArchimedLight.read_options(config)
+    end
+end

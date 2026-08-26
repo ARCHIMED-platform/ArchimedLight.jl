@@ -378,7 +378,7 @@ When this flag is `true`, that validation is skipped and the rows are kept in th
 ### `pixel_hit_stack_mode`
 
 Internal raster-storage option controlling how per-pixel hit stacks are stored.
-Supported values are:
+ARCHIMED configuration files use these portable text values:
 
 - `auto`
 - `small`
@@ -387,6 +387,21 @@ Supported values are:
 This option is purely about implementation strategy inside the raster code. It selects how per-pixel hit stacks are stored in memory, which can matter for performance or for low-level debugging, but it is not intended to represent any physical assumption.
 
 For most users, `auto` is the correct setting and should be left alone. The other modes are mainly there when you are investigating performance behavior or trying to isolate an implementation-level discrepancy in the interception code. They are not meant to change the semantics of the model.
+
+`read_options` parses the text once into the typed `PixelHitStackPolicy`; the
+raster runtime never branches on strings. When constructing options directly in
+Julia, use the typed values instead:
+
+```julia
+LightOptions(pixel_hit_stack_mode=AutoPixelHitStack)   # default
+LightOptions(pixel_hit_stack_mode=SmallPixelHitStack)  # compact inline stacks
+LightOptions(pixel_hit_stack_mode=VectorPixelHitStack) # historical vectors
+```
+
+Passing `"auto"`, `"small"`, or `"vector"` directly to `LightOptions` remains
+available through the `0.1.x` line and is scheduled for removal in `0.2`.
+Configuration files will continue to use these strings as their stable
+serialized representation.
 
 ### `debug`, `log_debug`, `debug_drop_leading_hit`
 

@@ -37,6 +37,10 @@ export InterceptionModel
 export EmitterModel
 export OpticalProperties
 export LightOptions
+export PixelHitStackPolicy
+export AutoPixelHitStack
+export SmallPixelHitStack
+export VectorPixelHitStack
 export RasterCPUBackend
 export RaycastScatteringBackend
 export SkyState
