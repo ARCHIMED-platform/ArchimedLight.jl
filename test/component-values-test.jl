@@ -129,6 +129,41 @@
     end
 end
 
+@testitem "Zero-area scene facets stay outside component coupling metadata" tags = [:component_values, :fast] begin
+    using ArchimedLight
+
+    config = joinpath(@__DIR__, "..", "example_2", "config.yml")
+    sim, meteo = read_simulation(config; plot_paving_override=0)
+    update_options!(
+        sim,
+        LightOptions(
+            sim.options;
+            turtle_sectors=1,
+            pixel_size=0.1,
+            scattering=false,
+            cache_pixel_table=false,
+        ),
+    )
+
+    raw_area = ArchimedLight._interception_area_per_node_local(
+        sim.scene,
+        sim.models,
+        sim.options,
+    )
+    zero_area_ids = sort!(Int[id for (id, area) in raw_area if iszero(area)])
+    positive_area_ids = sort!(Int[id for (id, area) in raw_area if area > 0.0])
+    @test !isempty(zero_area_ids)
+    @test !isempty(positive_area_ids)
+
+    step = run_light(sim, first(meteo))
+    metadata = step.component_metadata
+    @test metadata !== nothing
+    @test collect(metadata.node_id) == positive_area_ids
+    @test collect(metadata.radiative_area) == [raw_area[id] for id in positive_area_ids]
+    @test isempty(intersect(zero_area_ids, collect(metadata.node_id)))
+    @test all(>(0.0), metadata.radiative_area)
+end
+
 @testitem "Typed component light values follow LightBudget" tags = [:component_values, :fast] setup = [ComponentValuesHelper] begin
     using ArchimedLight
     import PlantGeom

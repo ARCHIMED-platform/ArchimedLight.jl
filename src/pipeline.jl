@@ -1404,28 +1404,38 @@ function _build_light_component_metadata(
 )
     scene.mtg === nothing && return nothing
 
-    node_ids = sort!(copy(geometry.node_ids))
+    candidate_ids = sort!(copy(geometry.node_ids))
     area_by_node = component_area_per_node === nothing ?
                    _interception_area_per_node_local(scene, models, options) :
                    component_area_per_node
-    owners = Vector{PlantGeom.SourceOwnerKey}(undef, length(node_ids))
-    areas = Vector{Float64}(undef, length(node_ids))
+    node_ids = Int[]
+    owners = PlantGeom.SourceOwnerKey[]
+    areas = Float64[]
+    sizehint!(node_ids, length(candidate_ids))
+    sizehint!(owners, length(candidate_ids))
+    sizehint!(areas, length(candidate_ids))
 
-    for (i, node_id) in pairs(node_ids)
+    for node_id in candidate_ids
+        haskey(area_by_node, node_id) || throw(ArgumentError(
+            "Scene component node $node_id has no radiative area in the filtered interception scene.",
+        ))
+        area = Float64(area_by_node[node_id])
+        isfinite(area) && area >= 0.0 || throw(ArgumentError(
+            "Scene component node $node_id has invalid radiative area $area.",
+        ))
+        # Degenerate faces have no radiative support. They remain part of the
+        # source scene, but are not light-coupling components and therefore
+        # must not create zero denominators in owner-level flux aggregation.
+        iszero(area) && continue
+
         owner = PlantGeom.source_owner(scene, node_id)
         # Source ownership was added after the original SceneGeometry API.
         # Keep those historical scenes simulatable; only identity-keyed output
         # publication requires a complete attribution snapshot.
         owner === nothing && return nothing
-        haskey(area_by_node, node_id) || throw(ArgumentError(
-            "Scene component node $node_id has no radiative area in the filtered interception scene.",
-        ))
-        area = Float64(area_by_node[node_id])
-        isfinite(area) && area > 0.0 || throw(ArgumentError(
-            "Scene component node $node_id has invalid radiative area $area.",
-        ))
-        @inbounds owners[i] = owner
-        @inbounds areas[i] = area
+        push!(node_ids, node_id)
+        push!(owners, owner)
+        push!(areas, area)
     end
 
     return LightComponentMetadata(node_ids, owners, areas)
