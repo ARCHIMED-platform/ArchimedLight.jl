@@ -510,7 +510,6 @@ function read_scene(path::AbstractString; plantgeom_backend=:auto)
         # provenance attributes.
         PlantGeom.read_opf(
             path;
-            attr_type=Dict,
             attribute_types=Dict("pos" => Float64),
             read_id=false,
         )
