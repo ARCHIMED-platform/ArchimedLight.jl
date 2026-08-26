@@ -3,7 +3,7 @@
 
 Precompute the stable component-to-owner mapping used to aggregate one
 [`LightStepResult`](@ref) from radiative scene components to botanical
-[`PlantGeom.SourceOwnerKey`](@ref)s.
+`PlantGeom.SourceOwnerKey`s.
 
 Component energy quantities (`*_q`) are summed. Component flux densities
 (`*_f`) are averaged with `radiative_area` as weight. The mapping is valid only

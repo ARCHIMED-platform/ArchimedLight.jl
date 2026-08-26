@@ -962,7 +962,7 @@ Compact identity snapshot for the geometric components used by one prepared
 light scene.
 
 `node_id`, `source_owner`, and `radiative_area` are aligned columns. The owner
-is the durable [`PlantGeom.SourceOwnerKey`](@ref) assigned during scene
+is the durable `PlantGeom.SourceOwnerKey` assigned during scene
 assembly. `radiative_area` is the filtered mesh area used by ArchimedLight to
 normalize component fluxes; it is deliberately distinct from a generic
 botanical or projected area.
