@@ -284,6 +284,10 @@ end
     using ArchimedLight
     import PlantGeom
 
+    @noinline function refill_component_values!(table, step, aggregation)
+        return component_values!(table, step, aggregation)
+    end
+
     step = ComponentValuesHelper.controlled_step()
     aggregation = CompiledComponentAggregation(step)
     @test_throws Base.CanonicalIndexError setindex!(aggregation.owner_keys, ComponentValuesHelper.OWNER_B, 1)
@@ -316,6 +320,10 @@ end
         getproperty(table, name) == 2.0 .* getproperty(baseline, name)
         for name in column_names
     )
+
+    refill_component_values!(table, scaled_step, aggregation)
+    refill_component_values!(table, scaled_step, aggregation)
+    @test @allocated(refill_component_values!(table, scaled_step, aggregation)) == 0
 
     same_values_new_generation = ArchimedLight.LightComponentMetadata(
         copy(step.component_metadata.node_id),
