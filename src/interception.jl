@@ -21,8 +21,8 @@ This is a tradeoff:
   every stack heavier even when it only contains one or two hits
 
 The current inline capacity of 2 is a conservative default, not a universal
-optimum. Users can override the storage mode with
-`LightOptions(pixel_hit_stack_mode=...)`.
+optimum. Execution-policy experiments can override it with, for example,
+`LightOptions(pixel_hit_stack_mode=SmallPixelHitStack)`.
 """
 mutable struct SmallHitStack <: AbstractVector{HitRecord}
     len::Int32
@@ -697,45 +697,38 @@ Base.values(pixel_hits::FlatPixelHits) =
 @inline _use_dense_pixel_hits(plotbox) = (plotbox.nx * plotbox.ny) <= _DENSE_PIXEL_HITS_MAX_CELLS
 
 """
-    _pixel_hit_stack_mode(options)
+    _pixel_hit_stack_policy(options)
 
-Normalize the user-facing pixel-hit stack storage selector.
+Return the typed pixel-hit stack storage policy.
 
-Accepted values are:
-- `"auto"`: current validated optimized default
-- `"small"`: force `SmallHitStack`
-- `"vector"`: force the legacy `Vector{HitRecord}` representation
+Text from an ARCHIMED configuration file is converted to
+[`PixelHitStackPolicy`](@ref) by [`read_options`](@ref). The raster runtime does
+not interpret strings.
 
-`"auto"` keeps `SmallHitStack` for the validated sparse and mid-density cases,
-but switches to the legacy `Vector{HitRecord}` storage when the plot raster is
-large enough that dense canopies are likely to spill `SmallHitStack` constantly.
-This favors large toric canopies like the bundled coffee example without
-changing the behavior for the smaller regression fixtures.
+`AutoPixelHitStack` keeps `SmallHitStack` for the validated sparse and
+mid-density cases, but switches to the legacy `Vector{HitRecord}` storage when
+the plot raster is large enough that dense canopies are likely to spill
+`SmallHitStack` constantly. This favors large toric canopies like the bundled
+coffee example without changing the behavior for the smaller regression
+fixtures.
 """
-function _pixel_hit_stack_mode(options::LightOptions)
-    mode = lowercase(strip(options.pixel_hit_stack_mode))
-    mode in ("auto", "small", "vector") || error(
-        "Unsupported pixel_hit_stack_mode=$(repr(options.pixel_hit_stack_mode)); " *
-        "supported values are \"auto\", \"small\", \"vector\".",
-    )
-    return mode
-end
+@inline _pixel_hit_stack_policy(options::LightOptions) = options.pixel_hit_stack_mode
 
 @inline function _pixel_hit_stack_type(options::LightOptions)
-    mode = _pixel_hit_stack_mode(options)
-    return mode == "vector" ? Vector{HitRecord} : SmallHitStack
+    policy = _pixel_hit_stack_policy(options)
+    return policy == VectorPixelHitStack ? Vector{HitRecord} : SmallHitStack
 end
 
 @inline function _pixel_hit_stack_type(options::LightOptions, plotbox)
-    mode = _pixel_hit_stack_mode(options)
-    if mode == "auto"
+    policy = _pixel_hit_stack_policy(options)
+    if policy == AutoPixelHitStack
         n_cells = plotbox.nx * plotbox.ny
         if n_cells >= _AUTO_VECTOR_PIXEL_HITS_MIN_CELLS && _use_dense_pixel_hits(plotbox)
             return Vector{HitRecord}
         end
         return SmallHitStack
     end
-    return mode == "vector" ? Vector{HitRecord} : SmallHitStack
+    return policy == VectorPixelHitStack ? Vector{HitRecord} : SmallHitStack
 end
 
 @inline _new_hit_stack(::Type{SmallHitStack}) = SmallHitStack()

@@ -95,6 +95,8 @@ end
     @test old_step.budget.incident_energy.total.par == new_step.budget.incident_energy.total.par
 
     cached = LightSimulation(scene, models; options=LightOptions(options; cache_radiation=true))
+    @test cache_summary(cached).component_metadata_count == 0
+    @test cache_summary(cached).component_metadata_bytes == 0
     series = run_light(cached, meteo)
     @test length(series) == length(prepare_meteo(meteo, options))
     @test cache_summary(cached).cached_turtle_count >= 1

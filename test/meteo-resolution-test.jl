@@ -67,7 +67,6 @@ end
         sun_azimuth=180.0,
         sun_elevation=45.0,
         direct_fraction=1.0,
-        use="clearness",
     )
     options = ArchimedLight.LightOptions(turtle_sectors=6, all_in_turtle=false)
     report = ArchimedLight.check_meteo(explicit; options=options)
@@ -195,6 +194,112 @@ end
     @test result.step.ri_sw_f == 200.0
     @test result.step.ri_par_f == 96.0
     @test result.step.sources[:ri_sw_f] == :Ri_SW_f
+end
+
+@testitem "Historical meteo use metadata is provenance only" tags=[:meteo, :fast] begin
+    mktempdir() do dir
+        path = joinpath(dir, "meteo.csv")
+        write(
+            path,
+            """
+            #' latitude: 15.0
+            #' use: clearness, obsolete_source
+            date;hour_start;hour_end;T;Wind;Rh;Ri_PAR_f;Ri_NIR_f
+            2020/06/21;12:00:00;13:00:00;25.0;1.0;0.6;120.0;80.0
+            """,
+        )
+
+        meteo = ArchimedLight.read_meteo(path)
+        row = first(meteo)
+
+        @test ArchimedLight.PlantMeteo.metadata(meteo, :use) ==
+              "clearness, obsolete_source"
+        @test isempty(ArchimedLight.check_meteo(meteo).errors)
+
+        summary = ArchimedLight.summarize_meteo(meteo)
+        @test Set(summary.radiation_inputs) == Set(["RI_PAR_f", "RI_NIR_f"])
+
+        resolved = ArchimedLight._resolved_meteo_step_or_error(
+            row,
+            ArchimedLight.LightOptions(),
+        )
+        @test resolved.radiation_source == :spectral_sum
+        @test resolved.ri_sw_f == 200.0
+        @test resolved.ri_par_f == 120.0
+        @test resolved.ri_nir_f == 80.0
+    end
+end
+
+@testitem "Meteo file fallback is limited to incomplete Atmosphere schemas" tags=[:meteo, :fast] begin
+    mktempdir() do dir
+        radiation_only_path = joinpath(dir, "radiation-only.csv")
+        write(
+            radiation_only_path,
+            """
+            #' latitude: 15.0
+            date;hour_start;hour_end;Ri_PAR_f;Ri_NIR_f
+            2020/06/21;12:00:00;13:00:00;120.0;80.0
+            """,
+        )
+
+        radiation_only = ArchimedLight.read_meteo(radiation_only_path)
+        @test length(radiation_only) == 1
+        @test first(radiation_only).Ri_PAR_f == 120.0
+        @test first(radiation_only).Ri_NIR_f == 80.0
+
+        invalid_humidity_path = joinpath(dir, "invalid-humidity.csv")
+        write(
+            invalid_humidity_path,
+            """
+            date;hour_start;hour_end;T;Wind;Rh;Ri_SW_f
+            2020/06/21;12:00:00;13:00:00;25.0;1.0;60.0;200.0
+            """,
+        )
+        humidity_error = try
+            ArchimedLight.read_meteo(invalid_humidity_path)
+            nothing
+        catch err
+            err
+        end
+        @test humidity_error isa ArgumentError
+        @test occursin("Relative humidity", sprint(showerror, humidity_error))
+
+        invalid_radiation_path = joinpath(dir, "invalid-radiation.csv")
+        write(
+            invalid_radiation_path,
+            """
+            date;hour_start;hour_end;T;Wind;Rh;Ri_SW_f
+            2020/06/21;12:00:00;13:00:00;25.0;1.0;0.6;-1.0
+            """,
+        )
+        radiation_error = try
+            ArchimedLight.read_meteo(invalid_radiation_path)
+            nothing
+        catch err
+            err
+        end
+        @test radiation_error isa ArgumentError
+        @test occursin("Ri_SW_f", sprint(showerror, radiation_error))
+        @test occursin("non-negative", sprint(showerror, radiation_error))
+
+        invalid_date_path = joinpath(dir, "invalid-date.csv")
+        write(
+            invalid_date_path,
+            """
+            date;hour_start;hour_end;T;Wind;Rh;Ri_SW_f
+            not-a-date;12:00:00;13:00:00;25.0;1.0;0.6;200.0
+            """,
+        )
+        date_error = try
+            ArchimedLight.read_meteo(invalid_date_path)
+            nothing
+        catch err
+            err
+        end
+        @test date_error isa Exception
+        @test occursin("date", lowercase(sprint(showerror, date_error)))
+        @test occursin("cannot be parsed", sprint(showerror, date_error))
+    end
 end
 
 @testitem "Meteo boundaries are configurable but conflicts remain mandatory" tags=[:meteo, :fast] begin

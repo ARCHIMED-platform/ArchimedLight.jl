@@ -503,6 +503,54 @@ function Base.show(io::IO, summary::MeteoSummary)
 end
 
 """
+    PixelHitStackPolicy
+
+Typed execution policy for the rasterizer's per-pixel hit-stack storage.
+
+- `AutoPixelHitStack` lets the rasterizer select the validated storage
+  for the current projection size.
+- `SmallPixelHitStack` forces compact inline storage.
+- `VectorPixelHitStack` forces the historical vector storage.
+
+ARCHIMED configuration files keep the portable text values `auto`, `small`,
+and `vector`; [`read_options`](@ref) converts those values to this type before
+the simulation reaches the raster runtime.
+"""
+@enum PixelHitStackPolicy::UInt8 begin
+    AutoPixelHitStack = 0
+    SmallPixelHitStack = 1
+    VectorPixelHitStack = 2
+end
+
+function _parse_pixel_hit_stack_policy(value)::PixelHitStackPolicy
+    value isa PixelHitStackPolicy && return value
+    normalized = lowercase(strip(string(value)))
+    normalized == "auto" && return AutoPixelHitStack
+    normalized == "small" && return SmallPixelHitStack
+    normalized == "vector" && return VectorPixelHitStack
+    throw(ArgumentError(
+        "pixel_hit_stack_mode must be auto, small, or vector, got $(repr(value))",
+    ))
+end
+
+function _coerce_pixel_hit_stack_policy(value)::PixelHitStackPolicy
+    value isa PixelHitStackPolicy && return value
+    if value isa AbstractString || value isa Symbol
+        Base.depwarn(
+            "Passing a string or symbol as LightOptions(pixel_hit_stack_mode=...) is deprecated; " *
+            "use AutoPixelHitStack, SmallPixelHitStack, or VectorPixelHitStack. " *
+            "Direct string/symbol construction will be removed in ArchimedLight 0.2; " *
+            "text values remain supported in ARCHIMED configuration files.",
+            :LightOptions,
+        )
+        return _parse_pixel_hit_stack_policy(value)
+    end
+    throw(ArgumentError(
+        "pixel_hit_stack_mode must be a PixelHitStackPolicy, got $(repr(value))",
+    ))
+end
+
+"""
     LightOptions
 
 Runtime controls for interception, scattering, and caching.
@@ -538,8 +586,8 @@ Fields:
   standard node metadata snapshot. Standard identity and group/type fields are
   always included when `store_node_metadata=true`.
 - `cache_pixel_table`: cache raster pixel tables for repeated projections.
-- `pixel_hit_stack_mode`: storage mode for per-pixel hit stacks. Supported
-  values are `"auto"`, `"small"`, and `"vector"`.
+- `pixel_hit_stack_mode`: typed [`PixelHitStackPolicy`](@ref) used for
+  per-pixel hit stacks. The default is `AutoPixelHitStack`.
 - `toricity`: enable horizontal periodic wrapping of the simulated plot.
 - `radiation_timestep_minutes`: internal radiative substep used when a meteo
   row covers a coarser interval.
@@ -572,6 +620,10 @@ Typical starting point for simple runs:
 
 `LightOptions(turtle_sectors=46, pixel_size=0.0025, scattering=true)`
 
+To force a raster storage policy from Julia, use for example
+`LightOptions(pixel_hit_stack_mode=SmallPixelHitStack)`. Configuration-file
+strings are parsed by [`read_options`](@ref) before runtime.
+
 Constructor keywords are the field names above. `LightOptions(old; kwargs...)`
 copies an existing options value and overrides only the supplied keywords.
 """
@@ -588,7 +640,7 @@ Base.@kwdef struct LightOptions
     cache_radiation::Bool = false
     include_sky_fraction::Bool = false
     cache_pixel_table::Bool = false
-    pixel_hit_stack_mode::String = "auto"
+    pixel_hit_stack_mode::PixelHitStackPolicy = AutoPixelHitStack
     toricity::Bool = true
     radiation_timestep_minutes::Float64 = 15.0
     radiation_input_semantics::Symbol = :interval_mean
@@ -658,7 +710,7 @@ Base.@kwdef struct LightOptions
             Bool(cache_radiation),
             Bool(include_sky_fraction),
             Bool(cache_pixel_table),
-            String(pixel_hit_stack_mode),
+            _coerce_pixel_hit_stack_policy(pixel_hit_stack_mode),
             Bool(toricity),
             Float64(radiation_timestep_minutes),
             semantics,
@@ -888,6 +940,70 @@ struct LightNodeMetadata
     scale::Vector{Int}
     attributes::NamedTuple
     inherited_attributes::NamedTuple
+end
+
+"""Internal read-only view used for retained scene-identity columns."""
+struct _ReadOnlyVector{T,V<:AbstractVector{T}} <: AbstractVector{T}
+    values::V
+end
+
+Base.IndexStyle(::Type{<:_ReadOnlyVector{T,V}}) where {T,V} = Base.IndexStyle(V)
+Base.size(values::_ReadOnlyVector) = size(getfield(values, :values))
+Base.axes(values::_ReadOnlyVector) = axes(getfield(values, :values))
+Base.length(values::_ReadOnlyVector) = length(getfield(values, :values))
+Base.@propagate_inbounds Base.getindex(values::_ReadOnlyVector, i::Int) =
+    getfield(values, :values)[i]
+
+"""
+    LightComponentMetadata
+
+Compact identity snapshot for the geometric components used by one prepared
+light scene.
+
+`node_id`, `source_owner`, and `radiative_area` are aligned columns. The owner
+is the durable `PlantGeom.SourceOwnerKey` assigned during scene
+assembly. `radiative_area` is the filtered mesh area used by ArchimedLight to
+normalize component fluxes; it is deliberately distinct from a generic
+botanical or projected area.
+
+When a scene exposes complete PlantGeom source ownership, every result produced
+from one light cache shares the same snapshot. Results therefore remain
+attributable after [`update_scene!`](@ref) replaces the live scene. Historical
+scenes without source ownership remain simulatable, but cannot be exported with
+[`component_values`](@ref).
+"""
+struct LightComponentMetadata
+    node_id::_ReadOnlyVector{Int,Vector{Int}}
+    source_owner::_ReadOnlyVector{PlantGeom.SourceOwnerKey,Vector{PlantGeom.SourceOwnerKey}}
+    radiative_area::_ReadOnlyVector{Float64,Vector{Float64}}
+
+    function LightComponentMetadata(
+        node_id::Vector{Int},
+        source_owner::Vector{PlantGeom.SourceOwnerKey},
+        radiative_area::Vector{Float64},
+    )
+        n = length(node_id)
+        length(source_owner) == n || throw(DimensionMismatch(
+            "source_owner has length $(length(source_owner)); expected $n.",
+        ))
+        length(radiative_area) == n || throw(DimensionMismatch(
+            "radiative_area has length $(length(radiative_area)); expected $n.",
+        ))
+        length(unique(node_id)) == n || throw(ArgumentError(
+            "Light component node ids must be unique within one prepared scene.",
+        ))
+        for (i, area) in pairs(radiative_area)
+            isfinite(area) && area > 0.0 || throw(ArgumentError(
+                "Light component $(node_id[i]) has non-positive or invalid " *
+                "radiative area $area.",
+            ))
+        end
+        new(
+            _ReadOnlyVector(copy(node_id)),
+            _ReadOnlyVector(copy(source_owner)),
+            _ReadOnlyVector(copy(radiative_area)),
+        )
+    end
 end
 
 function _scene_node_field(scene::PlantGeom.SceneGeometry, node_id::Integer, field::Symbol, default)
@@ -1265,8 +1381,12 @@ directional fluxes, first-order interception, optional scattering, and the
 integrated [`LightBudget`](@ref). When requested, the result can also store a
 per-node `sky_fraction` map. Results returned by `run_light_step` and
 `run_light_series` also carry the render geometry needed by `lightplot`.
-By default they retain a shared [`LightNodeMetadata`](@ref) snapshot for
-scene-aware queries across dynamic scene updates.
+When the scene exposes complete source ownership, they retain a shared
+[`LightComponentMetadata`](@ref) snapshot for stable source-owner attribution.
+Historical unattributed scenes keep this field as `nothing`. By default results
+also retain the broader
+[`LightNodeMetadata`](@ref) snapshot used by scene-aware queries across dynamic
+scene updates.
 """
 struct LightStepResult
     sky::SkyState
@@ -1279,6 +1399,7 @@ struct LightStepResult
     sky_fraction::Union{Nothing,Dict{Int,Float64}}
     render_geometry::Union{Nothing,LightRenderGeometry}
     node_metadata::Union{Nothing,LightNodeMetadata}
+    component_metadata::Union{Nothing,LightComponentMetadata}
 end
 
 LightStepResult(
@@ -1289,7 +1410,7 @@ LightStepResult(
     scattering::Union{Nothing,ScatteringResult},
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, nothing, nothing, nothing, nothing)
 
 LightStepResult(
     sky::SkyState,
@@ -1300,7 +1421,7 @@ LightStepResult(
     budget::LightBudget,
     extra_band_irradiance::Dict{String,Float64},
     sky_fraction::Union{Nothing,Dict{Int,Float64}},
-) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing, nothing)
+) = LightStepResult(sky, turtle, fluxes, first_order, scattering, budget, extra_band_irradiance, sky_fraction, nothing, nothing, nothing)
 
 LightStepResult(
     sky::SkyState,
@@ -1322,6 +1443,34 @@ LightStepResult(
     extra_band_irradiance,
     sky_fraction,
     render_geometry,
+    nothing,
+    nothing,
+)
+
+# Preserve the historical ten-argument constructor used by downstream code
+# that supplied optional node metadata explicitly.
+LightStepResult(
+    sky::SkyState,
+    turtle::TurtleGrid,
+    fluxes::DirectionalFluxes,
+    first_order::FirstOrderResult,
+    scattering::Union{Nothing,ScatteringResult},
+    budget::LightBudget,
+    extra_band_irradiance::Dict{String,Float64},
+    sky_fraction::Union{Nothing,Dict{Int,Float64}},
+    render_geometry::Union{Nothing,LightRenderGeometry},
+    node_metadata::Union{Nothing,LightNodeMetadata},
+) = LightStepResult(
+    sky,
+    turtle,
+    fluxes,
+    first_order,
+    scattering,
+    budget,
+    extra_band_irradiance,
+    sky_fraction,
+    render_geometry,
+    node_metadata,
     nothing,
 )
 

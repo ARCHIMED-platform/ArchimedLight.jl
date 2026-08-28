@@ -75,6 +75,7 @@ function _synthetic_quad_scene(specs::AbstractVector{<:NamedTuple})
     face2node = Int[]
     nodes = Dict{Int,PlantGeom.SceneNodeData{Float64}}()
     mtg = MultiScaleTreeGraph.Node(
+        length(specs) + 1,
         MultiScaleTreeGraph.MutableNodeMTG(:/, :Scene, 0, 0),
         Dict{Symbol,Any}(),
     )
