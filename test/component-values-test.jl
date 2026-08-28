@@ -186,6 +186,18 @@ end
     @test_throws Base.CanonicalIndexError setindex!(table.source_owner, ComponentValuesHelper.OWNER_B, 1)
     @test_throws Base.CanonicalIndexError setindex!(table.radiative_mesh_area, 99.0, 1)
 
+    identity_columns = (
+        (table.node_id, 99),
+        (table.source_owner, ComponentValuesHelper.OWNER_B),
+        (table.radiative_mesh_area, 99.0),
+    )
+    for (column, replacement) in identity_columns
+        before = copy(column)
+        @test parent(column) === column
+        @test_throws Base.CanonicalIndexError setindex!(parent(column), replacement, 1)
+        @test column == before
+    end
+
     for name in keys(expected)
         @test getproperty(table, name) == getproperty(expected, name)
         @test eltype(getproperty(table, name)) === Float64

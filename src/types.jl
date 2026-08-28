@@ -951,7 +951,6 @@ Base.IndexStyle(::Type{<:_ReadOnlyVector{T,V}}) where {T,V} = Base.IndexStyle(V)
 Base.size(values::_ReadOnlyVector) = size(getfield(values, :values))
 Base.axes(values::_ReadOnlyVector) = axes(getfield(values, :values))
 Base.length(values::_ReadOnlyVector) = length(getfield(values, :values))
-Base.parent(values::_ReadOnlyVector) = getfield(values, :values)
 Base.@propagate_inbounds Base.getindex(values::_ReadOnlyVector, i::Int) =
     getfield(values, :values)[i]
 
